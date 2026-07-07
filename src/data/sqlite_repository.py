@@ -31,17 +31,25 @@ class SQLiteImageRepository(IImageRepository):
 
     def _row_to_entity(self, row: sqlite3.Row) -> TileImage:
         """Helper to convert a sqlite3.Row to a TileImage model."""
-        # Handle datetime conversion safely
-        date_added = None
-        if row["date_added"]:
+        created_time = None
+        if row["created_time"]:
             try:
-                date_added = datetime.fromisoformat(row["date_added"])
+                created_time = datetime.fromisoformat(row["created_time"])
             except ValueError:
-                # Fallback if string is formatted differently
                 try:
-                    date_added = datetime.strptime(row["date_added"], "%Y-%m-%d %H:%M:%S")
+                    created_time = datetime.strptime(row["created_time"], "%Y-%m-%d %H:%M:%S")
                 except ValueError:
-                    logger.warning(f"Could not parse date_added timestamp: {row['date_added']}")
+                    logger.warning(f"Could not parse created_time timestamp: {row['created_time']}")
+
+        updated_time = None
+        if row["updated_time"]:
+            try:
+                updated_time = datetime.fromisoformat(row["updated_time"])
+            except ValueError:
+                try:
+                    updated_time = datetime.strptime(row["updated_time"], "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    logger.warning(f"Could not parse updated_time timestamp: {row['updated_time']}")
 
         return TileImage(
             id=row["id"],
@@ -49,7 +57,18 @@ class SQLiteImageRepository(IImageRepository):
             file_name=row["file_name"],
             file_size=row["file_size"],
             dimensions=row["dimensions"],
-            date_added=date_added,
+            brand=row["brand"],
+            category=row["category"],
+            color=row["color"],
+            size=row["size"],
+            product_code=row["product_code"],
+            width=row["width"],
+            height=row["height"],
+            sha256_hash=row["sha256_hash"],
+            perceptual_hash=row["perceptual_hash"],
+            embedding_id=row["embedding_id"],
+            created_time=created_time,
+            updated_time=updated_time,
             is_indexed=bool(row["is_indexed"]),
         )
 
@@ -64,13 +83,28 @@ class SQLiteImageRepository(IImageRepository):
             The primary key of the inserted/updated record.
         """
         query = """
-        INSERT INTO tiles (file_path, file_name, file_size, dimensions, is_indexed)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO tiles (
+            file_path, file_name, file_size, dimensions,
+            brand, category, color, size, product_code,
+            width, height, sha256_hash, perceptual_hash, embedding_id, is_indexed, updated_time
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
         ON CONFLICT(file_path) DO UPDATE SET
             file_name=excluded.file_name,
             file_size=excluded.file_size,
             dimensions=excluded.dimensions,
-            is_indexed=excluded.is_indexed
+            brand=excluded.brand,
+            category=excluded.category,
+            color=excluded.color,
+            size=excluded.size,
+            product_code=excluded.product_code,
+            width=excluded.width,
+            height=excluded.height,
+            sha256_hash=excluded.sha256_hash,
+            perceptual_hash=excluded.perceptual_hash,
+            embedding_id=excluded.embedding_id,
+            is_indexed=excluded.is_indexed,
+            updated_time=CURRENT_TIMESTAMP
         RETURNING id;
         """
         try:
@@ -83,6 +117,16 @@ class SQLiteImageRepository(IImageRepository):
                         tile.file_name,
                         tile.file_size,
                         tile.dimensions,
+                        tile.brand,
+                        tile.category,
+                        tile.color,
+                        tile.size,
+                        tile.product_code,
+                        tile.width,
+                        tile.height,
+                        tile.sha256_hash,
+                        tile.perceptual_hash,
+                        tile.embedding_id,
                         int(tile.is_indexed),
                     ),
                 )
@@ -173,7 +217,7 @@ class SQLiteImageRepository(IImageRepository):
         Returns:
             A list of TileImage models.
         """
-        query = "SELECT * FROM tiles ORDER BY date_added DESC;"
+        query = "SELECT * FROM tiles ORDER BY created_time DESC;"
         try:
             with self._db.session() as conn:
                 cursor = conn.cursor()

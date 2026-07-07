@@ -14,13 +14,31 @@ from typing import Optional
 class TileImage:
     """
     Represents an indexed tile image entity in the catalog.
+    Includes retail metadata for showrooms and visual search tracking.
     """
     file_path: str
     file_name: str
     file_size: int
     dimensions: str
+    
+    # Showroom Retail Metadata
+    brand: str = "Unknown"
+    category: str = "Unknown"
+    color: str = "Unknown"
+    size: str = "Unknown"
+    product_code: str = "Unknown"
+    
+    # Image Details & Hashes
+    width: int = 0
+    height: int = 0
+    sha256_hash: str = ""
+    perceptual_hash: str = ""
+    embedding_id: Optional[int] = None
+    
+    # DB Management
     id: Optional[int] = None
-    date_added: Optional[datetime] = None
+    created_time: Optional[datetime] = None
+    updated_time: Optional[datetime] = None
     is_indexed: bool = False
 
 

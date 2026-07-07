@@ -110,3 +110,65 @@ def generate_thumbnail(
         return image_path
 
     return thumb_path
+
+
+def compute_sha256(file_path: Path) -> str:
+    """
+    Compute the SHA-256 cryptographic hash of a file.
+
+    Args:
+        file_path: Path to the target file.
+
+    Returns:
+        Hexadecimal SHA-256 hash string.
+    """
+    sha256 = hashlib.sha256()
+    try:
+        with open(file_path, "rb") as f:
+            while chunk := f.read(8192):
+                sha256.update(chunk)
+        return sha256.hexdigest()
+    except OSError as e:
+        logger.error(f"Failed to read file for SHA-256 hashing at {file_path}: {e}")
+        return ""
+
+
+def compute_dhash(image_path: Path) -> str:
+    """
+    Compute a 64-bit difference hash (dHash) for an image.
+    
+    Resizes image to 9x8, converts to grayscale, and compares adjacent pixels.
+    Returns a 16-character hexadecimal string representing the hash.
+
+    Args:
+        image_path: Path to the target image file.
+
+    Returns:
+        A 16-character hexadecimal string dHash.
+    """
+    try:
+        with Image.open(image_path) as img:
+            # Resize to 9x8, converting to grayscale
+            img_gray = img.convert("L").resize((9, 8), Image.Resampling.BILINEAR)
+            pixels = list(img_gray.getdata())
+            
+            # Difference calculation
+            diff = []
+            for row in range(8):
+                for col in range(8):
+                    pixel_left = pixels[row * 9 + col]
+                    pixel_right = pixels[row * 9 + col + 1]
+                    diff.append(pixel_left > pixel_right)
+                    
+            # Convert binary list to hex string
+            decimal_value = 0
+            for index, value in enumerate(diff):
+                if value:
+                    decimal_value += 1 << index
+                    
+            # Format as 16-character hex padded with leading zeros
+            return f"{decimal_value:016x}"
+    except Exception as e:
+        logger.error(f"Failed to compute dHash for {image_path}: {e}")
+        return ""
+
