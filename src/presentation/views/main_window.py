@@ -38,6 +38,8 @@ from PySide6.QtWidgets import (
 
 from src.presentation.views.indexing_view import IndexingView
 from src.presentation.viewmodels.indexing_viewmodel import IndexingViewModel, IndexingState
+from src.presentation.views.search_view import SearchView
+from src.presentation.viewmodels.search_viewmodel import SearchViewModel
 
 logger = logging.getLogger("tilevision.presentation.views.main_window")
 
@@ -101,6 +103,7 @@ class MainWindow(QMainWindow):
     def __init__(
         self,
         indexing_viewmodel: IndexingViewModel,
+        search_viewmodel: Optional[SearchViewModel] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         """
@@ -108,10 +111,15 @@ class MainWindow(QMainWindow):
 
         Args:
             indexing_viewmodel: Pre-configured IndexingViewModel instance.
+            search_viewmodel: Pre-configured SearchViewModel instance. If
+                omitted, the Search nav item stays disabled (e.g. if the
+                catalog has no images indexed yet is still a valid reason
+                to show Search — only a missing viewmodel disables it).
             parent: Optional Qt parent widget.
         """
         super().__init__(parent)
         self._indexing_viewmodel = indexing_viewmodel
+        self._search_viewmodel = search_viewmodel
 
         self.setWindowTitle("TileVision AI — Visual Tile Search")
         self.setMinimumSize(1100, 760)
@@ -155,6 +163,16 @@ class MainWindow(QMainWindow):
         self._indexing_view = IndexingView(self._indexing_viewmodel)
         self._content_stack.addWidget(self._indexing_view)  # index 0
 
+        if self._search_viewmodel is not None:
+            self._search_view = SearchView(self._search_viewmodel)
+            self._content_stack.addWidget(self._search_view)  # index 1
+            self._nav_search_button.setEnabled(True)
+            self._nav_search_button.setToolTip("Visual Search")
+        else:
+            # Placeholder page so the stack index still lines up with the
+            # nav button map even when Search hasn't been wired up.
+            self._content_stack.addWidget(QWidget())  # index 1
+
         # Activate the first nav button by default
         self._nav_index_button.setChecked(True)
         self._content_stack.setCurrentIndex(0)
@@ -195,6 +213,7 @@ class MainWindow(QMainWindow):
         self._nav_search_button = NavButton("🔍", "Search")
         self._nav_search_button.setEnabled(False)
         self._nav_search_button.setToolTip("Visual Search — Coming in Feature 2")
+        self._nav_search_button.clicked.connect(lambda: self._navigate(1))
         layout.addWidget(self._nav_search_button)
 
         self._nav_catalog_button = NavButton("🗂", "Catalog")
@@ -238,6 +257,9 @@ class MainWindow(QMainWindow):
         """Connect ViewModel signals to the status bar and other global UI elements."""
         self._indexing_viewmodel.status_message.connect(self._update_status_bar)
         self._indexing_viewmodel.state_changed.connect(self._on_indexing_state_changed)
+
+        if self._search_viewmodel is not None:
+            self._search_viewmodel.status_message.connect(self._update_status_bar)
 
     # ── Navigation ────────────────────────────────────────────────────────────
 

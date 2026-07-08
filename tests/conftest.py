@@ -49,3 +49,8 @@ _install_fake_module(
     "open_clip",
     {"create_model_and_transforms": lambda *a, **k: (None, None, None)},
 )
+
+
+def pytest_configure():
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

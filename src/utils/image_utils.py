@@ -66,6 +66,29 @@ def get_image_metadata(image_path: Path) -> Tuple[int, str]:
     return file_size, dimensions
 
 
+def get_thumbnail_path(image_path: Path, thumbnail_dir: Path) -> Path:
+    """
+    Compute the deterministic cached-thumbnail file path for a given source
+    image, WITHOUT touching the filesystem (pure path calculation).
+
+    Uses SHA-256 of the resolved absolute image path as the filename, so the
+    same source image always maps to the same thumbnail path. Shared by
+    generate_thumbnail() (which creates the file) and the search use case
+    (which looks it up) so the hashing logic can never drift out of sync
+    between the two call sites.
+
+    Args:
+        image_path: Absolute (or resolvable) path to the source image file.
+        thumbnail_dir: Folder where thumbnails are cached.
+
+    Returns:
+        The deterministic absolute path where this image's thumbnail is
+        (or would be) stored. Does not guarantee the file exists.
+    """
+    path_hash = hashlib.sha256(str(Path(image_path).resolve()).encode("utf-8")).hexdigest()
+    return Path(thumbnail_dir) / f"{path_hash}.jpg"
+
+
 def generate_thumbnail(
     image_path: Path, thumbnail_dir: Path, size: Tuple[int, int] = (200, 200)
 ) -> Path:
@@ -85,9 +108,7 @@ def generate_thumbnail(
     """
     thumbnail_dir.mkdir(parents=True, exist_ok=True)
 
-    # Compute a unique hash of the path to avoid collision in cache directory
-    path_hash = hashlib.sha256(str(image_path.resolve()).encode("utf-8")).hexdigest()
-    thumb_path = thumbnail_dir / f"{path_hash}.jpg"
+    thumb_path = get_thumbnail_path(image_path, thumbnail_dir)
 
     # Cache hit check: Return existing thumbnail if it is valid
     if thumb_path.exists():

@@ -30,9 +30,11 @@ from src.data.sqlite_repository import SQLiteImageRepository, SQLiteLicenseRepos
 from src.ai.embedder import OpenCLIPEmbedder
 from src.ai.vector_index import FaissIndexManager
 from src.core.use_cases.index_images import IndexImagesUseCase
+from src.core.use_cases.search_tiles import SearchTilesUseCase
 from src.core.use_cases.validate_license import ValidateLicenseUseCase
 from src.licensing.validator import LicenseValidator
 from src.presentation.viewmodels.indexing_viewmodel import IndexingViewModel
+from src.presentation.viewmodels.search_viewmodel import SearchViewModel
 from src.presentation.views.main_window import MainWindow
 from src.presentation.views.license_view import LicenseView
 
@@ -128,14 +130,39 @@ def build_application() -> int:
         vector_index=vector_index,
         thumbnail_dir=settings.thumbnail_dir,
     )
+    search_tiles_use_case = SearchTilesUseCase(
+        image_repository=image_repository,
+        embedder=embedder,
+        vector_index=vector_index,
+        thumbnail_dir=settings.thumbnail_dir,
+    )
+
+    # ── 8b. Warm up the CLIP model and FAISS index now, synchronously, so the
+    #        *first* search a user runs is fast rather than paying model-load
+    #        cost on that click. Loading is a one-time, ~1-3s startup cost;
+    #        after this, both index_images and search_tiles reuse the same
+    #        in-memory model/index instances for the lifetime of the process.
+    try:
+        logger.info("Warming up CLIP model and FAISS index...")
+        embedder.load_model()
+        vector_index.load_index()
+        logger.info("AI engine warm-up complete.")
+    except Exception as e:
+        # Non-fatal: indexing/search will lazily retry loading on first use
+        # and surface a clear error there if the AI engine truly can't load.
+        logger.error(f"AI engine warm-up failed (will retry on first use): {e}")
 
     # ── 9. Construct ViewModels ───────────────────────────────────────────────
     logger.info("Constructing view models...")
     indexing_viewmodel = IndexingViewModel(use_case=index_images_use_case)
+    search_viewmodel = SearchViewModel(use_case=search_tiles_use_case, default_top_k=settings.top_k)
 
     # ── 10. Launch Main Window ────────────────────────────────────────────────
     logger.info("Launching main application window...")
-    main_window = MainWindow(indexing_viewmodel=indexing_viewmodel)
+    main_window = MainWindow(
+        indexing_viewmodel=indexing_viewmodel,
+        search_viewmodel=search_viewmodel,
+    )
     main_window.show()
 
     logger.info("TileVision AI is running.")

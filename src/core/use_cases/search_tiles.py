@@ -5,7 +5,6 @@ Given a query image, extracts features, performs FAISS vector search, and merges
 matching items with SQLite database metadata and cached thumbnail paths.
 """
 
-import hashlib
 import logging
 from pathlib import Path
 from typing import List
@@ -14,6 +13,7 @@ from src.core.models import TileImage, SearchResult
 from src.data.repository_interface import IImageRepository
 from src.ai.embedder import OpenCLIPEmbedder
 from src.ai.vector_index import FaissIndexManager
+from src.utils.image_utils import get_thumbnail_path, validate_image
 
 logger = logging.getLogger("tilevision.core.use_cases.search_tiles")
 
@@ -59,6 +59,11 @@ class SearchTilesUseCase:
         if not query_path.exists() or not query_path.is_file():
             raise FileNotFoundError(f"Query image does not exist: {query_image_path}")
 
+        if not validate_image(query_path):
+            raise ValueError(f"Selected file is not a valid, readable image: {query_path.name}")
+
+        top_k = max(1, int(top_k))
+
         logger.info(f"Initiating similarity search query for: {query_path.name} (top_k={top_k})")
         
         try:
@@ -87,11 +92,11 @@ class SearchTilesUseCase:
                 if record_id in tile_map:
                     tile = tile_map[record_id]
                     
-                    # Compute path-hash thumbnail filename (consistent with indexing creation)
-                    path_hash = hashlib.sha256(tile.file_path.encode("utf-8")).hexdigest()
-                    thumbnail_path = self._thumbnail_dir / f"{path_hash}.jpg"
-                    
-                    # Fallback to absolute file path if cached thumbnail doesn't exist
+                    # Resolve cached thumbnail path (same hashing logic used at index time)
+                    thumbnail_path = get_thumbnail_path(Path(tile.file_path), self._thumbnail_dir)
+
+                    # Fallback to the full-size source image if no cached thumbnail exists
+                    # (e.g. thumbnail generation previously failed for this file)
                     thumb_str = str(thumbnail_path) if thumbnail_path.exists() else tile.file_path
 
                     # Map score (cosine similarity range -1.0 to 1.0) to 0-100 percentage
