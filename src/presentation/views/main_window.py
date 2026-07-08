@@ -295,6 +295,7 @@ class MainWindow(QMainWindow):
             IndexingState.IDLE: "",
             IndexingState.RUNNING: " — Indexing...",
             IndexingState.PAUSED: " — Paused",
+            IndexingState.CANCELLING: " — Cancelling...",
             IndexingState.FINISHED: " — Indexing Complete",
             IndexingState.CANCELLED: " — Cancelled",
             IndexingState.ERROR: " — Error",
@@ -316,7 +317,7 @@ class MainWindow(QMainWindow):
         """
         vm = self._indexing_viewmodel
 
-        if vm.state in (IndexingState.RUNNING, IndexingState.PAUSED):
+        if vm.state in (IndexingState.RUNNING, IndexingState.PAUSED, IndexingState.CANCELLING):
             reply = QMessageBox.question(
                 self,
                 "Indexing in Progress",
