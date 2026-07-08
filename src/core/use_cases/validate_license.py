@@ -92,3 +92,32 @@ class ValidateLicenseUseCase:
             
         logger.info("New license key successfully installed and activated.")
         return license_details
+
+    def get_hardware_fingerprint(self) -> str:
+        """
+        Return the hardware fingerprint for this machine.
+
+        This value must be shared with the license vendor to generate
+        a hardware-locked offline license key.
+
+        Returns:
+            A 64-character hexadecimal SHA-256 hardware fingerprint string.
+        """
+        return get_machine_fingerprint()
+
+    def validate_and_save(self, license_key: str) -> bool:
+        """
+        Convenience wrapper: validate a license key and save it if valid.
+
+        Args:
+            license_key: Raw license key string entered by the user.
+
+        Returns:
+            True if the key is valid and was saved, False otherwise.
+        """
+        try:
+            self.activate_new_license(license_key)
+            return True
+        except Exception as e:
+            logger.warning(f"validate_and_save failed: {e}")
+            return False

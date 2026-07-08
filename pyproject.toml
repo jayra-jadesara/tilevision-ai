@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "tilevision-ai"
+version = "1.0.0"
+description = "Offline AI-powered visual tile search for showrooms"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+authors = [{ name = "TileVision AI Team" }]
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[project.scripts]
+tilevision = "main:main"

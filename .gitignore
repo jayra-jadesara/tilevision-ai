@@ -64,6 +64,13 @@ thumbnails/
 *.index
 *.log
 
+# TileVision AI user data (AppData)
+~/.tilevision_ai/
+
+# Vendor secrets — NEVER commit these
+dev_tools/private_key.pem
+dev_tools/test_license.txt
+
 # VS Code / IDEs
 .vscode/
 .idea/
