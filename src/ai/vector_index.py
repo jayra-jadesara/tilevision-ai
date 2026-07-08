@@ -70,13 +70,19 @@ class FaissIndexManager:
         self._index = faiss.IndexIDMap(flat_index)
         logger.info(f"New empty FAISS ID-mapped index initialized (dimension={self._dimension}).")
 
-    def add_vectors(self, ids: List[int], vectors: List[List[float]]) -> None:
+    def add_vectors(self, ids: List[int], vectors: List[List[float]], persist: bool = True) -> None:
         """
         Add normalized vectors to the index, mapped to database record IDs.
 
         Args:
             ids: List of database primary key IDs.
             vectors: List of embedding vectors (list of floats).
+            persist: If True (default), immediately writes the index to disk.
+                Callers doing many small additions in a loop (e.g. a folder
+                scan indexing hundreds/thousands of files) should pass False
+                and call save_index() themselves periodically/at the end —
+                writing the whole index to disk after every single file is
+                extremely slow on large catalogs.
         """
         if self._index is None:
             self.load_index()
@@ -102,10 +108,46 @@ class FaissIndexManager:
             # Add to index
             self._index.add_with_ids(vectors_np, ids_np)
             logger.info(f"Added {len(ids)} vectors to FAISS index. Total now: {self._index.ntotal}")
-            self.save_index()
+            if persist:
+                self.save_index()
         except Exception as e:
             logger.error(f"Failed to add vectors to FAISS index: {e}")
             raise RuntimeError(f"FAISS index write error: {e}") from e
+
+    def update_vectors(self, ids: List[int], vectors: List[List[float]], persist: bool = True) -> None:
+        """
+        Replace vectors for ids that may already exist in the index.
+
+        FAISS's IndexIDMap does NOT enforce unique ids: calling add_with_ids()
+        with an id that is already present simply appends a second vector
+        under that same id, rather than replacing it. Left unchecked, this
+        means re-indexing a tile whose file content changed leaves the index
+        with two entries for that tile (the stale embedding and the fresh
+        one) — search results start returning the same tile twice, and
+        remove_vectors() for that id removes both at once. This method
+        removes any existing vector(s) for the given ids first, so the
+        index always holds exactly one vector per id.
+
+        Safe to call for brand-new ids too (remove_ids is a no-op if the id
+        isn't present yet).
+
+        Args:
+            ids: List of database primary key IDs.
+            vectors: List of embedding vectors (list of floats).
+            persist: If True (default), writes the index to disk immediately.
+        """
+        if self._index is None:
+            self.load_index()
+
+        if not ids:
+            return
+
+        try:
+            self._index.remove_ids(np.array(ids, dtype=np.int64))
+        except Exception as e:
+            logger.debug(f"No pre-existing vector(s) to remove for ids {ids} (or removal failed): {e}")
+
+        self.add_vectors(ids, vectors, persist=persist)
 
     def remove_vectors(self, ids: List[int]) -> bool:
         """

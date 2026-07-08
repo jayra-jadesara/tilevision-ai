@@ -384,6 +384,15 @@ class IndexingView(QWidget):
         elif state == IndexingState.PAUSED:
             self._pause_resume_button.setText("▶  Resume")
 
+        elif state == IndexingState.CANCELLING:
+            # Background thread is still finishing its current file — keep
+            # everything locked so a second job can't start underneath it.
+            self._start_button.setEnabled(False)
+            self._pause_resume_button.setEnabled(False)
+            self._cancel_button.setEnabled(False)
+            self._browse_button.setEnabled(False)
+            self._current_file_label.setText("⏳ Cancelling — finishing current file...")
+
         elif state in (IndexingState.IDLE, IndexingState.FINISHED, IndexingState.CANCELLED):
             self._start_button.setEnabled(True)
             self._pause_resume_button.setEnabled(False)

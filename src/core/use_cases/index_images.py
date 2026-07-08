@@ -26,6 +26,11 @@ from src.utils.image_utils import (
 
 logger = logging.getLogger("tilevision.core.use_cases.index_images")
 
+# Persist the FAISS index to disk every N processed files during a folder
+# scan (rather than after every single file, which is a heavy full-index
+# disk write and would dominate indexing time on large catalogs).
+_CHECKPOINT_INTERVAL = 25
+
 
 def parse_filename_metadata(stem: str) -> Tuple[str, str, str, str, str]:
     """
@@ -81,7 +86,7 @@ class IndexImagesUseCase:
         # Ensure thumbnail directory exists
         self._thumbnail_dir.mkdir(parents=True, exist_ok=True)
 
-    def index_single_file(self, file_path: Path) -> int:
+    def index_single_file(self, file_path: Path, persist: bool = True) -> int:
         """
         Index a single tile image.
         
@@ -90,6 +95,10 @@ class IndexImagesUseCase:
 
         Args:
             file_path: Absolute path to the tile image file.
+            persist: If True (default), writes the FAISS index to disk
+                immediately after indexing this file. Folder scans process
+                many files in a loop and pass False, checkpointing the index
+                to disk periodically instead (see scan_and_index_directory).
 
         Returns:
             The database primary key ID of the indexed tile.
@@ -154,9 +163,11 @@ class IndexImagesUseCase:
             logger.info(f"Extracting embedding features for tile ID {db_id}: {file_name}")
             embedding = self._embedder.get_embedding(str(resolved_path))
 
-            # 4. Insert embedding into FAISS index
+            # 4. Insert/replace embedding into FAISS index. update_vectors()
+            #    removes any existing vector for this id first, so a changed
+            #    file's stale embedding never lingers alongside the fresh one.
             logger.info(f"Indexing vector into FAISS for ID {db_id}")
-            self._index.add_vectors([db_id], [embedding])
+            self._index.update_vectors([db_id], [embedding], persist=persist)
 
             # 5. Update SQLite record with embedding_id and mark as successfully indexed
             tile.is_indexed = True
@@ -262,14 +273,24 @@ class IndexImagesUseCase:
                         skipped_count += 1
                         continue
 
-                # Run indexing pipeline
-                self.index_single_file(resolved_path)
+                # Run indexing pipeline. persist=False: avoid a full FAISS
+                # index disk write after every single file — see checkpoint
+                # flush below instead.
+                self.index_single_file(resolved_path, persist=False)
                 indexed_count += 1
             except Exception as e:
                 logger.error(f"Error indexing file during folder scan: {resolved_path}. Error: {e}")
                 # Continue scanning other files in case of a single corrupt image
 
-        # Commit final index state back to disk
+            # Checkpoint: flush FAISS to disk periodically so a crash, power
+            # loss, or long-running scan never loses more than one batch of
+            # progress (also matters if the user leaves it running overnight).
+            if indexed_count > 0 and processed_count % _CHECKPOINT_INTERVAL == 0:
+                self._index.save_index()
+
+        # Always flush any pending vector additions before returning,
+        # whether the scan completed, was cancelled, or hit errors along the
+        # way — partial progress must never be lost.
         if indexed_count > 0:
             self._index.save_index()
             logger.info(f"Index directory complete. Indexed: {indexed_count}, Skipped: {skipped_count}")

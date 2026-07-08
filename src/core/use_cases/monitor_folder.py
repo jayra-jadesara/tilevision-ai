@@ -9,7 +9,7 @@ import logging
 import os
 from pathlib import Path
 import time
-from typing import Callable, List, Set
+from typing import Callable, List, Optional, Set
 
 try:
     from watchdog.observers import Observer
@@ -99,11 +99,10 @@ class TileImageEventHandler(FileSystemEventHandler):
         # Trigger indexing usecase
         try:
             logger.info(f"Indexing new file: {file_path.name}")
+            # index_single_file() persists the FAISS index to disk itself
+            # (persist=True by default), so no extra save call is needed here.
             db_id = self._use_case.index_single_file(file_path)
-            
-            # Save the FAISS index updates immediately for background monitoring
-            self._use_case._index.save_index()
-            
+
             logger.info(f"Successfully indexed background file. ID: {db_id}")
             if self._on_indexed:
                 self._on_indexed(str(file_path), True, "")

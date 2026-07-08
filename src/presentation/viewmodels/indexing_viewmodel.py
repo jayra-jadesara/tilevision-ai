@@ -28,6 +28,7 @@ class IndexingState:
     IDLE = "idle"
     RUNNING = "running"
     PAUSED = "paused"
+    CANCELLING = "cancelling"
     FINISHED = "finished"
     CANCELLED = "cancelled"
     ERROR = "error"
@@ -91,7 +92,15 @@ class IndexingViewModel(QObject):
 
     @property
     def is_idle(self) -> bool:
-        """True if no indexing job is active."""
+        """
+        True if no indexing job is active and a new one can safely be started.
+
+        CANCELLING is deliberately NOT included here: the background thread
+        is still cooperatively finishing its current file at that point, and
+        allowing a new job to start before it truly stops would let the old
+        worker's delayed completion signal wipe out the reference to the new
+        one (see cancel_indexing()).
+        """
         return self._state in (IndexingState.IDLE, IndexingState.FINISHED, IndexingState.CANCELLED)
 
     @property
@@ -193,11 +202,19 @@ class IndexingViewModel(QObject):
         """
         Cooperatively cancel the running or paused indexing operation.
         The worker will stop after the current file completes.
+
+        Transitions to CANCELLING (not CANCELLED) immediately: the background
+        thread is still cooperatively finishing its current file and hasn't
+        actually stopped yet. CANCELLING is intentionally excluded from
+        is_idle so Start/Browse stay disabled and no second worker can be
+        started until the real indexing_finished signal arrives — starting
+        one earlier would let the still-running old worker's completion
+        signal null out the reference to the new worker.
         """
         if self._worker and self._state in (IndexingState.RUNNING, IndexingState.PAUSED):
             logger.warning("Cancelling indexing worker by user request.")
             self._worker.cancel()
-            self._set_state(IndexingState.CANCELLED)
+            self._set_state(IndexingState.CANCELLING)
             self.status_message.emit("Cancelling indexing... Please wait.")
         else:
             logger.warning(f"Cancel called in invalid state: {self._state}")
@@ -246,9 +263,10 @@ class IndexingViewModel(QObject):
             self.status_message.emit(summary)
             logger.info(summary)
         else:
-            # Worker stopped due to cancellation
-            if self._state != IndexingState.CANCELLED:
-                self._set_state(IndexingState.CANCELLED)
+            # Worker stopped due to cancellation (covers both a user-initiated
+            # cancel, now arriving from CANCELLING, and any other early-exit
+            # path that reports completed=False).
+            self._set_state(IndexingState.CANCELLED)
             self.status_message.emit(
                 f"Indexing cancelled. Indexed {indexed:,} tiles before stopping."
             )
