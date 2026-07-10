@@ -17,7 +17,7 @@ Design Decision:
 """
 
 import logging
-from typing import Optional
+from typing import Callable, Optional
 
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QFont, QIcon, QAction, QCloseEvent
@@ -34,12 +34,17 @@ from PySide6.QtWidgets import (
     QStatusBar,
     QMessageBox,
     QSpacerItem,
+    QApplication,
 )
 
 from src.presentation.views.indexing_view import IndexingView
 from src.presentation.viewmodels.indexing_viewmodel import IndexingViewModel, IndexingState
 from src.presentation.views.search_view import SearchView
 from src.presentation.viewmodels.search_viewmodel import SearchViewModel
+from src.presentation.views.duplicates_view import DuplicatesView
+from src.presentation.views.settings_view import SettingsView
+from src.presentation.views.dashboard_view import DashboardView
+from src.theme.theme_manager import get_app_stylesheet
 
 logger = logging.getLogger("tilevision.presentation.views.main_window")
 
@@ -104,6 +109,10 @@ class MainWindow(QMainWindow):
         self,
         indexing_viewmodel: IndexingViewModel,
         search_viewmodel: Optional[SearchViewModel] = None,
+        license_details: Optional[dict] = None,
+        find_duplicates_use_case=None,
+        settings=None,
+        catalog_count_provider: Optional[Callable[[], int]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         """
@@ -115,11 +124,25 @@ class MainWindow(QMainWindow):
                 omitted, the Search nav item stays disabled (e.g. if the
                 catalog has no images indexed yet is still a valid reason
                 to show Search — only a missing viewmodel disables it).
+            license_details: The dict returned by
+                ValidateLicenseUseCase.verify_existing_license() at startup
+                (customer_name/license_type/is_trial/days_remaining), used
+                to populate the status bar's license indicator.
+            find_duplicates_use_case: Pre-configured FindDuplicatesUseCase.
+                If omitted, the Duplicates nav item stays disabled.
+            settings: The shared AppSettings instance. If omitted, the
+                Settings nav item stays disabled.
+            catalog_count_provider: Callable returning the current number
+                of indexed tiles, for the Settings page's Overview stat.
             parent: Optional Qt parent widget.
         """
         super().__init__(parent)
         self._indexing_viewmodel = indexing_viewmodel
         self._search_viewmodel = search_viewmodel
+        self._license_details = license_details or {}
+        self._find_duplicates_use_case = find_duplicates_use_case
+        self._settings = settings
+        self._catalog_count_provider = catalog_count_provider
 
         self.setWindowTitle("TileVision AI — Visual Tile Search")
         self.setMinimumSize(1100, 760)
@@ -129,6 +152,9 @@ class MainWindow(QMainWindow):
         self._apply_styles()
         self._setup_status_bar()
         self._connect_signals()
+
+        if self._settings is not None:
+            self._on_theme_changed_request(getattr(self._settings, "theme", "dark"))
 
         logger.info("MainWindow initialized and displayed.")
 
@@ -173,6 +199,42 @@ class MainWindow(QMainWindow):
             # nav button map even when Search hasn't been wired up.
             self._content_stack.addWidget(QWidget())  # index 1
 
+        if self._find_duplicates_use_case is not None:
+            self._nav_duplicates_button.setEnabled(True)
+            self._nav_duplicates_button.setToolTip("Duplicate Detection")
+
+        # index 2: Dashboard (repurposes the "Catalog" nav slot)
+        if self._catalog_count_provider is not None:
+            self._dashboard_view = DashboardView(
+                catalog_count_provider=self._catalog_count_provider,
+                watched_folder_count_provider=(
+                    lambda: len(self._settings.watch_folders) if self._settings else 0
+                ),
+                license_details=self._license_details,
+                on_go_to_index=lambda: self._navigate(0),
+                on_go_to_search=lambda: self._navigate(1),
+            )
+            self._content_stack.addWidget(self._dashboard_view)  # index 2
+            self._nav_catalog_button.setEnabled(True)
+            self._nav_catalog_button.setToolTip("Dashboard")
+            self._nav_catalog_button.clicked.connect(lambda: self._navigate(2))
+        else:
+            self._content_stack.addWidget(QWidget())  # index 2
+
+        if self._settings is not None:
+            self._settings_view = SettingsView(
+                settings=self._settings,
+                license_details=self._license_details,
+                catalog_count_provider=self._catalog_count_provider,
+                on_theme_changed=self._on_theme_changed_request,
+            )
+            self._content_stack.addWidget(self._settings_view)  # index 3
+            self._nav_settings_button.setEnabled(True)
+            self._nav_settings_button.setToolTip("Settings")
+            self._nav_settings_button.clicked.connect(lambda: self._navigate(3))
+        else:
+            self._content_stack.addWidget(QWidget())  # index 3
+
         # Activate the first nav button by default
         self._nav_index_button.setChecked(True)
         self._content_stack.setCurrentIndex(0)
@@ -216,9 +278,15 @@ class MainWindow(QMainWindow):
         self._nav_search_button.clicked.connect(lambda: self._navigate(1))
         layout.addWidget(self._nav_search_button)
 
-        self._nav_catalog_button = NavButton("🗂", "Catalog")
+        self._nav_duplicates_button = NavButton("🧬", "Duplicates")
+        self._nav_duplicates_button.setEnabled(False)
+        self._nav_duplicates_button.setToolTip("Duplicate Detection")
+        self._nav_duplicates_button.clicked.connect(self._on_duplicates_clicked)
+        layout.addWidget(self._nav_duplicates_button)
+
+        self._nav_catalog_button = NavButton("🏠", "Dashboard")
         self._nav_catalog_button.setEnabled(False)
-        self._nav_catalog_button.setToolTip("Tile Catalog — Coming in Feature 3")
+        self._nav_catalog_button.setToolTip("Dashboard")
         layout.addWidget(self._nav_catalog_button)
 
         self._nav_settings_button = NavButton("⚙️", "Settings")
@@ -247,9 +315,23 @@ class MainWindow(QMainWindow):
         status_bar.addWidget(self._status_label)
 
         # Right-side permanent label showing licensing info
-        self._license_status_label = QLabel("🔐 Licensed")
+        self._license_status_label = QLabel(self._format_license_status())
         self._license_status_label.setObjectName("LicenseStatusLabel")
         status_bar.addPermanentWidget(self._license_status_label)
+
+    def _format_license_status(self) -> str:
+        """Build the status bar license indicator text from license_details."""
+        if not self._license_details:
+            return "🔓 Unlicensed"
+
+        if self._license_details.get("is_trial"):
+            days = self._license_details.get("days_remaining", 0)
+            if days <= 3:
+                return f"⏳ Trial: {days} day(s) left"
+            return f"🕐 Trial: {days} days left"
+
+        license_type = self._license_details.get("license_type", "Licensed")
+        return f"🔐 {license_type}"
 
     # ── Signals ───────────────────────────────────────────────────────────────
 
@@ -292,6 +374,23 @@ class MainWindow(QMainWindow):
 
         self._content_stack.setCurrentIndex(index)
         logger.debug(f"Navigated to content stack index: {index}")
+
+    def _on_duplicates_clicked(self) -> None:
+        """Open the Duplicate Detection dialog (modal, like License activation)."""
+        if self._find_duplicates_use_case is None:
+            return
+        dialog = DuplicatesView(self._find_duplicates_use_case, parent=self)
+        dialog.exec()
+
+    def _on_theme_changed_request(self, theme: str) -> None:
+        """
+        Apply the app-level theme (MainWindow chrome). See theme_manager.py
+        for a note on the current scope of what does/doesn't re-skin.
+        """
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(get_app_stylesheet(theme))
+            logger.info(f"Applied '{theme}' theme.")
 
     # ── Slots ─────────────────────────────────────────────────────────────────
 

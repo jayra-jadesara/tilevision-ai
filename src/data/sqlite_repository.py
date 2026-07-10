@@ -287,6 +287,50 @@ class SQLiteImageRepository(IImageRepository):
             logger.error(f"Failed to fetch pending index tiles: {e}")
             return []
 
+    # Allow-list of columns that may be queried via get_distinct_values().
+    # Never interpolate the caller-supplied field name directly into SQL —
+    # even though it's an internal API today, validating against a fixed
+    # set here means a future caller (e.g. a filter UI wired to raw user
+    # input) can't turn this into a SQL injection vector.
+    _DISTINCT_VALUE_ALLOWED_FIELDS = frozenset({"brand", "category", "color", "size"})
+
+    def get_distinct_values(self, field: str) -> List[str]:
+        """
+        Retrieve the sorted set of distinct non-empty values for a metadata
+        column, for populating filter dropdowns.
+
+        Args:
+            field: One of "brand", "category", "color", "size".
+
+        Returns:
+            Sorted list of distinct non-empty values.
+
+        Raises:
+            ValueError: If field is not an allowed column name.
+        """
+        if field not in self._DISTINCT_VALUE_ALLOWED_FIELDS:
+            raise ValueError(
+                f"Invalid field '{field}' for get_distinct_values(). "
+                f"Must be one of: {sorted(self._DISTINCT_VALUE_ALLOWED_FIELDS)}"
+            )
+
+        # Safe to f-string the column name here ONLY because it was just
+        # validated against the fixed allow-list above, never from raw input.
+        query = (
+            f"SELECT DISTINCT {field} FROM tiles "
+            f"WHERE {field} IS NOT NULL AND TRIM({field}) != '' "
+            f"ORDER BY {field} COLLATE NOCASE;"
+        )
+        try:
+            with self._db.session() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query)
+                rows = cursor.fetchall()
+                return [row[field] for row in rows]
+        except sqlite3.Error as e:
+            logger.error(f"Failed to fetch distinct values for field '{field}': {e}")
+            return []
+
     def mark_as_indexed(self, image_id: int, is_indexed: bool) -> bool:
         """
         Update the is_indexed status for a tile.

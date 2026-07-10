@@ -22,6 +22,7 @@ from src.utils.image_utils import (
     generate_thumbnail,
     compute_sha256,
     compute_dhash,
+    SUPPORTED_IMAGE_EXTENSIONS,
 )
 
 logger = logging.getLogger("tilevision.core.use_cases.index_images")
@@ -81,7 +82,7 @@ class IndexImagesUseCase:
         self._embedder = embedder
         self._index = vector_index
         self._thumbnail_dir = Path(thumbnail_dir)
-        self._supported_extensions = {".png", ".jpg", ".jpeg", ".webp"}
+        self._supported_extensions = set(SUPPORTED_IMAGE_EXTENSIONS)
 
         # Ensure thumbnail directory exists
         self._thumbnail_dir.mkdir(parents=True, exist_ok=True)

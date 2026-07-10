@@ -2,7 +2,8 @@
 License validation use case module for TileVision AI.
 
 Orchestrates checking local licenses on startup and validating/installing new activation
-keys provided by the user.
+keys provided by the user. Falls back to the offline 15-day trial (see
+TrialManager) when no paid license is installed.
 """
 
 from datetime import datetime
@@ -13,17 +14,22 @@ from src.core.models import LicenseInfo
 from src.data.repository_interface import ILicenseRepository
 from src.licensing.validator import LicenseValidator, LicenseError
 from src.licensing.hardware import get_machine_fingerprint
+from src.licensing.trial_manager import TrialManager, TrialStatus
 
 logger = logging.getLogger("tilevision.core.use_cases.validate_license")
 
 
 class ValidateLicenseUseCase:
     """
-    Use case to check and register software licenses offline.
+    Use case to check and register software licenses offline, with an
+    automatic 15-day trial fallback when no paid license is present.
     """
 
     def __init__(
-        self, license_repository: ILicenseRepository, validator: LicenseValidator
+        self,
+        license_repository: ILicenseRepository,
+        validator: LicenseValidator,
+        trial_manager: Optional[TrialManager] = None,
     ) -> None:
         """
         Initialize the use case.
@@ -31,31 +37,69 @@ class ValidateLicenseUseCase:
         Args:
             license_repository: Repository interface for database license access.
             validator: Cryptographic LicenseValidator service.
+            trial_manager: Optional TrialManager for the offline trial
+                fallback. Defaults to a standard TrialManager instance.
         """
         self._repo = license_repository
         self._validator = validator
+        self._trial_manager = trial_manager or TrialManager()
 
     def verify_existing_license(self) -> Optional[Dict[str, Any]]:
         """
-        Check if a valid, unexpired, hardware-locked license is currently installed.
+        Check if a valid, unexpired, hardware-locked license is currently
+        installed. If not, falls back to the offline trial: if a trial is
+        active, this still returns access details (with is_trial=True) so
+        the app can proceed without forcing the activation dialog.
 
         Returns:
-            A dictionary containing license details (customer_name, expires_at) if valid,
-            None otherwise.
+            A dict with license/trial details (customer_name, expires_at,
+            is_trial, days_remaining if trial) if access is currently
+            granted, None if the user must activate a license (no paid
+            license AND no active/valid trial).
         """
         logger.info("Verifying installed offline license key...")
         license_entity = self._repo.get_license()
-        if not license_entity:
-            logger.warning("No license key found in database.")
+
+        if license_entity:
+            try:
+                license_details = self._validator.validate_license(license_entity.license_key)
+                license_details["is_trial"] = False
+                return license_details
+            except LicenseError as e:
+                logger.error(f"Installed license verification failed: {e}")
+                # Fall through to trial check rather than immediately
+                # locking the user out — an expired/invalid paid license
+                # shouldn't be worse than having no license at all.
+
+        logger.info("No valid paid license installed — checking trial status.")
+        trial_status = self._trial_manager.get_or_start_trial()
+
+        if trial_status.is_tampered:
+            logger.warning("Trial data appears invalid (tampered or copied from another machine).")
             return None
 
-        try:
-            # Re-verify the license string cryptographically and verify hardware locking
-            license_details = self._validator.validate_license(license_entity.license_key)
-            return license_details
-        except LicenseError as e:
-            logger.error(f"Installed license verification failed: {e}")
+        if not trial_status.is_active:
+            logger.info("Trial has expired.")
             return None
+
+        return {
+            "customer_name": "Trial User",
+            "expires_at": None,
+            "hardware_hash": get_machine_fingerprint(),
+            "license_type": "15-Day Trial",
+            "is_trial": True,
+            "days_remaining": trial_status.days_remaining,
+        }
+
+    def get_trial_status(self) -> TrialStatus:
+        """
+        Read-only trial status check (does not start a trial as a side
+        effect), for display purposes (e.g. a "X days left" banner).
+
+        Returns:
+            The current TrialStatus.
+        """
+        return self._trial_manager.get_status()
 
     def activate_new_license(self, license_string: str) -> Dict[str, Any]:
         """

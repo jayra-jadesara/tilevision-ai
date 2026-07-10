@@ -1,0 +1,82 @@
+feat: close remaining MVP gaps - licensing security, monitoring, filters, duplicates, crop search, settings/dashboard, packaging
+
+Addresses every item flagged Partial/Missing/Dormant/Scaffold in the last
+coverage audit. Summary by feature:
+
+SECURITY FIX - Licensing (Feature 10):
+- _DEVELOPER_MODE was hardcoded True, unconditionally bypassing all
+  signature verification. Now defaults OFF, gated behind an explicit
+  TILEVISION_DEV_MODE=1 env var, with a loud startup warning if ever set.
+- The wildcard hardware_hash="*" bypass (a de facto master key) is now
+  only honored in dev mode - rejected outright in production.
+- New: AES-256-GCM encrypted local license/trial storage
+  (licensing/crypto_store.py), key-derived from this machine's hardware
+  fingerprint so a copied state file is unreadable elsewhere.
+- New: TrialManager - auto-starts a 15-day trial on first run, detects
+  system clock rollback (backdating the clock to un-expire a trial) and
+  hardware-mismatch (copying the trial file to another machine), both
+  verified with dedicated tests.
+- New: license types (30-Day/90-Day/1-Year/Lifetime) with
+  compute_expiry_date(), signed into the key alongside expires_at.
+- New: admin_tool/ - a standalone PySide6 GUI for generating/extending
+  license keys offline, with an honest README on what "deactivate" and
+  "reset hardware binding" actually mean without a phone-home mechanism.
+- ValidateLicenseUseCase now falls back to trial status when no paid
+  license is installed, and MainWindow's status bar shows real license/
+  trial info instead of a hardcoded licensed label.
+
+Feature 7 (Auto Folder Monitoring) - wired up:
+- FolderMonitorController existed but was never instantiated. app.py now
+  starts it for settings.watch_folders at launch and stops it cleanly on
+  exit. Also fixed a NameError (Optional used but not imported) and a bug
+  where it watched .bmp files despite the spec only listing jpg/jpeg/png/
+  webp - both now share image_utils.SUPPORTED_IMAGE_EXTENSIONS with the
+  folder-scan indexer so the two can't drift out of sync again.
+
+Feature 8 (Filters) - implemented:
+- SearchTilesUseCase.execute() accepts a filters dict (brand/category/
+  color/size); widens the FAISS candidate pool when filtering so results
+  aren't short-changed. get_filter_options() + a new
+  get_distinct_values() repository method (SQL-injection-safe via a
+  column allow-list) populate dropdowns in SearchView.
+
+Feature 5 (Duplicate Detection) - implemented:
+- FindDuplicatesUseCase: exact duplicates via SHA-256 grouping, near-
+  duplicates via perceptual-hash Hamming distance with union-find
+  clustering (so A~B~C transitively merges into one group even if A~C
+  alone exceeds the threshold). New DuplicatesView dialog with Open
+  Image/Open Folder actions, run on a background QThread.
+
+Feature 4 (Partial Image Search / crop) - implemented:
+- New CropDialog: drag a rectangle over the query image, search using
+  only that region. Wired into SearchView as a "Crop & Search" button.
+
+Feature 3 (Customer Photo Search) - UI treatment added:
+- Top search result is now visually distinguished ("Best Match", bold,
+  highlighted row) from the remaining "Similar Alternatives".
+
+New UI pages:
+- Settings: manage watched folders (add/remove, persisted), search
+  result count, theme selection, license/catalog overview.
+- Dashboard: catalog size, watched folder count, license status, quick
+  actions into Index/Search (repurposes the previously-dead "Catalog"
+  nav slot).
+- Theme: app-level dark/light QSS toggle for the MainWindow chrome.
+  Documented scope limitation: several already-built dialogs (Search,
+  Duplicates, Crop) keep their own hardcoded dark styling for now - full
+  re-skinning of every view is a follow-up, not silently claimed as done
+  here.
+
+Packaging:
+- packaging/tilevision.spec (PyInstaller) + packaging/README.md covering
+  the offline model-weight pre-download requirement, license keypair
+  setup, and a known-gaps list (no code signing, no installer script yet)
+  rather than overclaiming a turnkey release pipeline.
+
+Tests: 29 new tests across crypto_store, trial_manager, license_validator
+(real ECDSA signature verification with a fresh test keypair, not just
+mocks), validate_license trial integration, find_duplicates (including
+transitive near-duplicate clustering), and search filters. Fixed 2
+pre-existing test regressions caused by the filters-parameter signature
+change. 68/68 tests passing. All source files verified with py_compile;
+every new UI surface smoke-tested headless (QT_QPA_PLATFORM=offscreen).

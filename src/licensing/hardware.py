@@ -8,8 +8,16 @@ and system hardware parameters.
 import hashlib
 import logging
 import subprocess
-import winreg
 from typing import Optional
+
+try:
+    import winreg
+except ImportError:
+    # winreg is Windows-only. TileVision AI ships exclusively for Windows,
+    # but guarding this import lets the module still be imported (with the
+    # registry-based lookup simply unavailable) in non-Windows dev/CI
+    # environments, e.g. for running the test suite.
+    winreg = None
 
 logger = logging.getLogger("tilevision.licensing.hardware")
 
@@ -21,6 +29,8 @@ def get_registry_machine_guid() -> Optional[str]:
     Returns:
         The MachineGuid string if found, otherwise None.
     """
+    if winreg is None:
+        return None
     try:
         key = winreg.OpenKey(
             winreg.HKEY_LOCAL_MACHINE,

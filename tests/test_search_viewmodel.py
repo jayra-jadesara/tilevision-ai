@@ -50,8 +50,8 @@ class FakeSearchUseCase:
         self._delay = delay
         self.calls = []
 
-    def execute(self, query_image_path, top_k=20):
-        self.calls.append((query_image_path, top_k))
+    def execute(self, query_image_path, top_k=20, filters=None):
+        self.calls.append((query_image_path, top_k, filters))
         if self._delay:
             time.sleep(self._delay)
         if self._error:
@@ -80,7 +80,7 @@ def test_successful_search_transitions_to_results(qapp, tmp_path):
     assert _pump_until(lambda: vm.state == SearchState.RESULTS)
     assert states == [SearchState.SEARCHING, SearchState.RESULTS]
     assert len(vm.last_results) == 1
-    assert use_case.calls == [(str(query_file), 20)]
+    assert use_case.calls == [(str(query_file), 20, {})]
 
 
 def test_empty_results_transitions_to_no_results_state(qapp, tmp_path):

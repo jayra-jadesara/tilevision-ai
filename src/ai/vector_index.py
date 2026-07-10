@@ -177,6 +177,17 @@ class FaissIndexManager:
             logger.error(f"Failed to remove IDs {ids} from FAISS index: {e}")
         return False
 
+    def get_total_count(self) -> int:
+        """
+        Get the total number of vectors currently stored in the index.
+
+        Returns:
+            The vector count (0 if the index hasn't been loaded/created yet).
+        """
+        if self._index is None:
+            self.load_index()
+        return int(self._index.ntotal) if self._index is not None else 0
+
     def search_vectors(self, query_vector: List[float], top_k: int) -> Tuple[List[int], List[float]]:
         """
         Search for the top_k closest vectors.

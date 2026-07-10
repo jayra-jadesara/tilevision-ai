@@ -15,9 +15,10 @@ Design Decision:
 """
 
 import base64
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import logging
+import os
 from typing import Dict, Any, Optional
 
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -50,10 +51,34 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 -----END PUBLIC KEY-----"""
 
-# Flag: when True, the validator skips cryptographic verification and
-# accepts any license whose JSON payload is structurally valid.
-# NEVER set this True in a production build!
-_DEVELOPER_MODE: bool = True
+def _resolve_developer_mode() -> bool:
+    """
+    Resolve whether developer mode is enabled from the environment.
+
+    Exposed as a standalone function (rather than only inlining the check at
+    module scope) so tests can exercise the env-var parsing logic directly
+    without reloading this module — reloading would create new class
+    objects for LicenseValidationError etc., breaking isinstance checks
+    against references imported before the reload.
+    """
+    return os.environ.get("TILEVISION_DEV_MODE") == "1"
+
+
+# SECURITY: Developer mode disables cryptographic signature verification so
+# the app can be run/tested without a real signed license. This is gated
+# behind an explicit environment variable and defaults OFF (secure), unlike
+# a hardcoded flag which would silently ship with verification disabled if
+# anyone forgot to flip it back before building a release. Production
+# builds must never set TILEVISION_DEV_MODE, and CI/packaging should assert
+# it is unset before producing a release artifact.
+_DEVELOPER_MODE: bool = _resolve_developer_mode()
+
+if _DEVELOPER_MODE:
+    logger.warning(
+        "⚠️⚠️⚠️  TILEVISION_DEV_MODE=1 is set — license signature verification "
+        "and hardware-lock bypass ('*') are ENABLED. This must NEVER be set "
+        "in a production build or shipped installer. ⚠️⚠️⚠️"
+    )
 
 
 class LicenseError(Exception):
@@ -74,6 +99,21 @@ class LicenseExpiredError(LicenseError):
 class LicenseHardwareMismatchError(LicenseError):
     """Raised when the license is locked to a different machine."""
     pass
+
+
+# License types supported per the product spec, mapped to their duration in
+# days from the activation/generation date. "Lifetime" is represented as a
+# far-future sentinel expiry date rather than a special-cased "never expires"
+# branch, so the same date-comparison code path in validate_license() handles
+# every license type uniformly.
+LICENSE_TYPE_DURATIONS_DAYS: Dict[str, Optional[int]] = {
+    "15-Day Trial": 15,
+    "30-Day": 30,
+    "90-Day": 90,
+    "1-Year": 365,
+    "Lifetime": None,  # sentinel: no duration, use LIFETIME_EXPIRY_SENTINEL
+}
+LIFETIME_EXPIRY_SENTINEL = "9999-12-31"
 
 
 class LicenseValidator:
@@ -136,6 +176,7 @@ class LicenseValidator:
                 raise LicenseValidationError(
                     f"License payload is missing required fields: {missing}"
                 )
+            license_data.setdefault("license_type", "Custom")
             return license_data
         except LicenseValidationError:
             raise
@@ -192,7 +233,20 @@ class LicenseValidator:
             logger.debug("Developer mode: skipping ECDSA signature verification.")
 
         # ── Step 3: Hardware Lock Verification ────────────────────────────────
-        # A wildcard hardware_hash of '*' allows the license to run on any machine
+        # A wildcard hardware_hash of '*' is a development/testing convenience
+        # only (lets a license run on any machine without regenerating it for
+        # every test VM). It must NEVER be honored outside dev mode — an
+        # unconditional wildcard bypass would be a universal master key that
+        # unlocks the product on any customer's machine.
+        if hardware_hash == "*" and not _DEVELOPER_MODE:
+            logger.error(
+                "License uses wildcard hardware_hash='*' but the app is not "
+                "running in developer mode. Rejecting as invalid."
+            )
+            raise LicenseValidationError(
+                "This license key is not valid for production use."
+            )
+
         if hardware_hash != "*":
             current_hw = get_machine_fingerprint()
             if current_hw != hardware_hash:
@@ -226,7 +280,39 @@ class LicenseValidator:
             "customer_name": customer_name,
             "expires_at": expires_at_str,
             "hardware_hash": hardware_hash,
+            "license_type": license_data.get("license_type", "Custom"),
         }
+
+
+def compute_expiry_date(license_type: str, from_date: Optional[datetime] = None) -> str:
+    """
+    Compute the expiry date string for a given license type.
+
+    Args:
+        license_type: One of LICENSE_TYPE_DURATIONS_DAYS's keys
+            ("15-Day Trial", "30-Day", "90-Day", "1-Year", "Lifetime").
+        from_date: The activation/generation date to count from. Defaults
+            to now.
+
+    Returns:
+        A 'YYYY-MM-DD' expiry date string.
+
+    Raises:
+        ValueError: If license_type is not recognized.
+    """
+    if license_type not in LICENSE_TYPE_DURATIONS_DAYS:
+        raise ValueError(
+            f"Unknown license type '{license_type}'. "
+            f"Must be one of: {sorted(LICENSE_TYPE_DURATIONS_DAYS.keys())}"
+        )
+
+    duration_days = LICENSE_TYPE_DURATIONS_DAYS[license_type]
+    if duration_days is None:  # Lifetime
+        return LIFETIME_EXPIRY_SENTINEL
+
+    base = from_date or datetime.now()
+    expiry = base + timedelta(days=duration_days)
+    return expiry.strftime("%Y-%m-%d")
 
 
 def generate_license_key(
@@ -234,18 +320,28 @@ def generate_license_key(
     customer_name: str,
     expires_at: str,
     hardware_hash: str,
+    license_type: str = "Custom",
 ) -> str:
     """
     Generate a signed base64 license key.
 
     This is a vendor-side utility only — the private key must never be
-    distributed with the application.
+    distributed with the application. Used by the standalone Admin License
+    Manager tool (admin_tool/), never by the end-user application itself.
 
     Args:
         private_key_pem: PEM bytes of the ECDSA private key.
         customer_name: Customer or company name to embed in the license.
-        expires_at: Expiry date string in 'YYYY-MM-DD' format.
-        hardware_hash: Machine fingerprint to lock the license to (or '*' for any).
+        expires_at: Expiry date string in 'YYYY-MM-DD' format. Use
+            compute_expiry_date() to derive this from a license_type.
+        hardware_hash: Machine fingerprint to lock the license to. Using
+            '*' (any machine) is only honored by the validator when
+            TILEVISION_DEV_MODE=1 — never use it for a real customer key.
+        license_type: One of LICENSE_TYPE_DURATIONS_DAYS's keys, embedded
+            for display/audit purposes. NOTE: the actual enforcement is
+            driven entirely by expires_at, not this label — mismatching
+            the two (e.g. "Lifetime" with a 30-day expires_at) won't
+            confer any extra access.
 
     Returns:
         A base64-encoded license key string ready to paste into the activation dialog.
@@ -261,6 +357,7 @@ def generate_license_key(
         "customer_name": customer_name,
         "expires_at": expires_at,
         "hardware_hash": hardware_hash,
+        "license_type": license_type,
         "signature": base64.b64encode(signature).decode("utf-8"),
     }
 

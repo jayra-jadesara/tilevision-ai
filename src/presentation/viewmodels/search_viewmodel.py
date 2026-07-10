@@ -46,6 +46,8 @@ class SearchViewModel(QObject):
     search_error = Signal(str)
     query_image_selected = Signal(str)  # absolute path of the chosen query image
 
+    filters_available = Signal(dict)  # Dict[str, List[str]] — for populating dropdowns
+
     def __init__(self, use_case: SearchTilesUseCase, default_top_k: int = 20) -> None:
         """
         Initialize the SearchViewModel.
@@ -61,6 +63,7 @@ class SearchViewModel(QObject):
         self._worker: Optional[SearchWorker] = None
         self._last_results: List[SearchResult] = []
         self._last_query_path: Optional[str] = None
+        self._active_filters: dict = {}
 
     # ── Properties ────────────────────────────────────────────────────────
 
@@ -85,6 +88,43 @@ class SearchViewModel(QObject):
         self._top_k = max(1, int(value))
 
     # ── Public Slots (invoked from the View) ────────────────────────────────
+
+    @Slot()
+    def load_filter_options(self) -> None:
+        """
+        Fetch the available filter values (brand/category/color/size) from
+        the catalog and emit them via filters_available for the View to
+        populate its dropdowns. Safe to call even on an empty catalog
+        (returns empty lists per field rather than erroring).
+        """
+        try:
+            options = self._use_case.get_filter_options()
+            self.filters_available.emit(options)
+        except Exception as e:
+            logger.error(f"Failed to load filter options: {e}")
+            self.filters_available.emit({})
+
+    @Slot(str, str)
+    def set_filter(self, field: str, value: str) -> None:
+        """
+        Update a single filter and, if a query image is already active,
+        automatically re-run the search with the new filter applied.
+
+        Args:
+            field: One of "brand", "category", "color", "size".
+            value: The required value, or "" / "Any" to clear that filter.
+        """
+        if not value or value.lower() == "any":
+            self._active_filters.pop(field, None)
+        else:
+            self._active_filters[field] = value
+
+        if self._last_query_path and self._state != SearchState.SEARCHING:
+            self.search_by_image(self._last_query_path)
+
+    @property
+    def active_filters(self) -> dict:
+        return dict(self._active_filters)
 
     @Slot(str)
     def search_by_image(self, image_path: str) -> None:
@@ -115,7 +155,7 @@ class SearchViewModel(QObject):
         self._set_state(SearchState.SEARCHING)
         self.status_message.emit(f"Searching for tiles similar to '{path.name}'...")
 
-        self._worker = SearchWorker(self._use_case, str(path), self._top_k)
+        self._worker = SearchWorker(self._use_case, str(path), self._top_k, self._active_filters)
         self._worker.search_completed.connect(self._on_search_completed)
         self._worker.search_failed.connect(self._on_search_failed)
         self._worker.search_timed.connect(self._on_search_timed)

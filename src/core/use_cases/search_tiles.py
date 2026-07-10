@@ -7,7 +7,7 @@ matching items with SQLite database metadata and cached thumbnail paths.
 
 import logging
 from pathlib import Path
-from typing import List
+from typing import Dict, List, Optional
 
 from src.core.models import TileImage, SearchResult
 from src.data.repository_interface import IImageRepository
@@ -16,6 +16,19 @@ from src.ai.vector_index import FaissIndexManager
 from src.utils.image_utils import get_thumbnail_path, validate_image
 
 logger = logging.getLogger("tilevision.core.use_cases.search_tiles")
+
+# Filter fields supported by execute()'s `filters` parameter (Feature 8).
+# Matches SQLiteImageRepository._DISTINCT_VALUE_ALLOWED_FIELDS — kept as a
+# separate allow-list here since this is the boundary that receives
+# caller/UI-supplied filter keys directly.
+_ALLOWED_FILTER_FIELDS = frozenset({"brand", "category", "color", "size"})
+
+# When filters are active, FAISS is queried for a wider candidate pool than
+# top_k (since some candidates will get filtered out), then narrowed back
+# down to top_k after matching metadata. Capped to avoid a pathological
+# widen-forever cost on a catalog with a very restrictive filter.
+_FILTER_CANDIDATE_MULTIPLIER = 10
+_FILTER_CANDIDATE_CAP = 2000
 
 
 class SearchTilesUseCase:
@@ -44,13 +57,38 @@ class SearchTilesUseCase:
         self._index = vector_index
         self._thumbnail_dir = Path(thumbnail_dir)
 
-    def execute(self, query_image_path: str, top_k: int = 20) -> List[SearchResult]:
+    def get_filter_options(self) -> Dict[str, List[str]]:
+        """
+        Retrieve the available values for each filterable metadata field,
+        for populating filter dropdowns in the Search view.
+
+        Returns:
+            Dict mapping field name -> sorted list of distinct values
+            currently present in the catalog (e.g. {"brand": ["Kajaria", ...]}).
+        """
+        return {
+            field: self._repo.get_distinct_values(field)
+            for field in sorted(_ALLOWED_FILTER_FIELDS)
+        }
+
+    def execute(
+        self,
+        query_image_path: str,
+        top_k: int = 20,
+        filters: Optional[Dict[str, str]] = None,
+    ) -> List[SearchResult]:
         """
         Execute visual similarity search for a query tile image.
 
         Args:
             query_image_path: Absolute path to the user's target search image.
             top_k: Maximum number of closest matches to return.
+            filters: Optional dict of metadata field -> required value
+                (e.g. {"brand": "Kajaria", "category": "Floor"}). Only
+                results matching ALL provided filters are returned. Keys
+                must be in _ALLOWED_FILTER_FIELDS; unknown keys are ignored
+                (not treated as an error, since a UI might pass a superset
+                of possible filter widgets where some are left at "Any").
 
         Returns:
             A list of SearchResult objects sorted by similarity score descending.
@@ -63,18 +101,38 @@ class SearchTilesUseCase:
             raise ValueError(f"Selected file is not a valid, readable image: {query_path.name}")
 
         top_k = max(1, int(top_k))
+        active_filters = {
+            k: v for k, v in (filters or {}).items()
+            if k in _ALLOWED_FILTER_FIELDS and v
+        }
 
-        logger.info(f"Initiating similarity search query for: {query_path.name} (top_k={top_k})")
-        
+        logger.info(
+            f"Initiating similarity search query for: {query_path.name} "
+            f"(top_k={top_k}, filters={active_filters or 'none'})"
+        )
+
         try:
             # 1. Generate query embedding from CLIP model
             logger.info("Computing embedding for query image...")
             query_embedding = self._embedder.get_embedding(str(query_path))
 
-            # 2. Search FAISS index for top K matching IDs
-            logger.info("Querying FAISS vector index...")
-            matching_ids, similarity_scores = self._index.search_vectors(query_embedding, top_k)
-            
+            # 2. Search FAISS index. If filters are active, widen the
+            #    candidate pool since some matches will be filtered out
+            #    downstream — otherwise a filtered search could return
+            #    fewer than top_k results even when more matches exist
+            #    further down the similarity ranking.
+            search_k = top_k
+            if active_filters:
+                total_vectors = self._index.get_total_count()
+                search_k = min(
+                    max(top_k * _FILTER_CANDIDATE_MULTIPLIER, top_k),
+                    _FILTER_CANDIDATE_CAP,
+                    total_vectors or top_k,
+                )
+
+            logger.info(f"Querying FAISS vector index (search_k={search_k})...")
+            matching_ids, similarity_scores = self._index.search_vectors(query_embedding, search_k)
+
             if not matching_ids:
                 logger.info("No matching records found in vector index.")
                 return []
@@ -86,33 +144,51 @@ class SearchTilesUseCase:
             # Create a lookup map of Tile ID -> TileImage
             tile_map = {t.id: t for t in matched_tiles if t.id is not None}
 
-            # 4. Construct SearchResult list mapping matches and cached thumbnail paths
+            # 4. Construct SearchResult list mapping matches and cached thumbnail paths,
+            #    applying metadata filters, stopping once top_k results are collected.
             results: List[SearchResult] = []
             for record_id, score in zip(matching_ids, similarity_scores):
-                if record_id in tile_map:
-                    tile = tile_map[record_id]
-                    
-                    # Resolve cached thumbnail path (same hashing logic used at index time)
-                    thumbnail_path = get_thumbnail_path(Path(tile.file_path), self._thumbnail_dir)
+                if len(results) >= top_k:
+                    break
 
-                    # Fallback to the full-size source image if no cached thumbnail exists
-                    # (e.g. thumbnail generation previously failed for this file)
-                    thumb_str = str(thumbnail_path) if thumbnail_path.exists() else tile.file_path
+                if record_id not in tile_map:
+                    continue
 
-                    # Map score (cosine similarity range -1.0 to 1.0) to 0-100 percentage
-                    # For CLIP cosine similarity, negative scores are extremely rare.
-                    similarity_percentage = max(0.0, min(100.0, score * 100.0))
+                tile = tile_map[record_id]
 
-                    results.append(
-                        SearchResult(
-                            tile=tile,
-                            similarity_score=similarity_percentage,
-                            thumbnail_path=thumb_str,
-                        )
+                if not self._matches_filters(tile, active_filters):
+                    continue
+
+                # Resolve cached thumbnail path (same hashing logic used at index time)
+                thumbnail_path = get_thumbnail_path(Path(tile.file_path), self._thumbnail_dir)
+
+                # Fallback to the full-size source image if no cached thumbnail exists
+                # (e.g. thumbnail generation previously failed for this file)
+                thumb_str = str(thumbnail_path) if thumbnail_path.exists() else tile.file_path
+
+                # Map score (cosine similarity range -1.0 to 1.0) to 0-100 percentage
+                # For CLIP cosine similarity, negative scores are extremely rare.
+                similarity_percentage = max(0.0, min(100.0, score * 100.0))
+
+                results.append(
+                    SearchResult(
+                        tile=tile,
+                        similarity_score=similarity_percentage,
+                        thumbnail_path=thumb_str,
                     )
+                )
 
             logger.info(f"Search query completed. Found {len(results)} matches.")
             return results
         except Exception as e:
             logger.error(f"Failed to execute tile search query: {e}")
             raise RuntimeError(f"Visual similarity search execution error: {e}") from e
+
+    @staticmethod
+    def _matches_filters(tile: TileImage, filters: Dict[str, str]) -> bool:
+        """Check whether a tile's metadata satisfies every active filter."""
+        for field, required_value in filters.items():
+            tile_value = getattr(tile, field, None)
+            if not tile_value or tile_value.strip().lower() != required_value.strip().lower():
+                return False
+        return True

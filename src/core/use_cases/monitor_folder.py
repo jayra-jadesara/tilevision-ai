@@ -21,7 +21,7 @@ except ImportError:
     FileSystemEvent = object
 
 from src.core.use_cases.index_images import IndexImagesUseCase
-from src.utils.image_utils import validate_image
+from src.utils.image_utils import validate_image, SUPPORTED_IMAGE_EXTENSIONS
 
 logger = logging.getLogger("tilevision.core.use_cases.monitor_folder")
 
@@ -49,13 +49,7 @@ class TileImageEventHandler(FileSystemEventHandler):
         self._use_case = indexing_use_case
         self._on_indexed = on_file_indexed_callback
         self._settle_delay = settle_delay_seconds
-        self._supported_extensions: Set[str] = {
-            ".png",
-            ".jpg",
-            ".jpeg",
-            ".bmp",
-            ".webp",
-        }
+        self._supported_extensions: Set[str] = set(SUPPORTED_IMAGE_EXTENSIONS)
 
     def _is_supported(self, file_path: Path) -> bool:
         """Check if file extension is supported."""

@@ -100,6 +100,26 @@ class IImageRepository(ABC):
         pass
 
     @abstractmethod
+    def get_distinct_values(self, field: str) -> List[str]:
+        """
+        Retrieve the sorted set of distinct non-empty values present for a
+        given metadata column across all indexed tiles — used to populate
+        filter dropdowns (Brand/Category/Color/Size) in the Search view.
+
+        Args:
+            field: Column name. Must be one of "brand", "category",
+                "color", "size" (validated against an allow-list to avoid
+                any possibility of SQL injection via this parameter).
+
+        Returns:
+            Sorted list of distinct non-empty values for that field.
+
+        Raises:
+            ValueError: If field is not an allowed column name.
+        """
+        pass
+
+    @abstractmethod
     def mark_as_indexed(self, image_id: int, is_indexed: bool) -> bool:
         """
         Update the FAISS indexing status flag of a tile record.

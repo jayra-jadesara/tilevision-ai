@@ -14,6 +14,12 @@ from PIL import Image
 # Initialize module logger
 logger = logging.getLogger("tilevision.image_utils")
 
+# Feature 1 (Folder Indexing) supported formats, per product requirements.
+# Shared by both the folder-scan indexer and the real-time folder watcher
+# (monitor_folder.py) so the two can never drift out of sync on which
+# formats are supported.
+SUPPORTED_IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp"})
+
 
 def validate_image(image_path: Path) -> bool:
     """
@@ -193,3 +199,24 @@ def compute_dhash(image_path: Path) -> str:
         logger.error(f"Failed to compute dHash for {image_path}: {e}")
         return ""
 
+
+def hamming_distance(hash_a: str, hash_b: str) -> int:
+    """
+    Compute the Hamming distance between two hex-encoded perceptual hashes
+    (e.g. two compute_dhash() outputs). Lower values mean more visually
+    similar images (0 = identical hash). Used by Feature 5 (Duplicate
+    Detection) to cluster near-duplicate tiles.
+
+    Args:
+        hash_a: First 16-char hex hash string.
+        hash_b: Second 16-char hex hash string.
+
+    Returns:
+        The number of differing bits, or -1 if either hash is invalid/empty.
+    """
+    if not hash_a or not hash_b:
+        return -1
+    try:
+        return bin(int(hash_a, 16) ^ int(hash_b, 16)).count("1")
+    except ValueError:
+        return -1

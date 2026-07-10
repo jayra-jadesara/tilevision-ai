@@ -8,6 +8,7 @@ keeping the UI thread fully responsive while the CLIP model runs inference.
 
 import logging
 import time
+from typing import Optional
 
 from PySide6.QtCore import QThread, Signal
 
@@ -36,7 +37,13 @@ class SearchWorker(QThread):
     # so the UI/logs can track against the <2s performance target.
     search_timed = Signal(float)
 
-    def __init__(self, use_case: SearchTilesUseCase, query_image_path: str, top_k: int) -> None:
+    def __init__(
+        self,
+        use_case: SearchTilesUseCase,
+        query_image_path: str,
+        top_k: int,
+        filters: Optional[dict] = None,
+    ) -> None:
         """
         Initialize the search background worker.
 
@@ -44,11 +51,14 @@ class SearchWorker(QThread):
             use_case: Fully configured SearchTilesUseCase.
             query_image_path: Absolute path to the query image file.
             top_k: Maximum number of results to return.
+            filters: Optional dict of metadata field -> required value
+                (Feature 8), e.g. {"brand": "Kajaria"}.
         """
         super().__init__()
         self._use_case = use_case
         self._query_image_path = query_image_path
         self._top_k = top_k
+        self._filters = filters or {}
 
     def run(self) -> None:
         """Execute the search in the background thread."""
@@ -56,7 +66,9 @@ class SearchWorker(QThread):
         start_time = time.monotonic()
 
         try:
-            results = self._use_case.execute(self._query_image_path, top_k=self._top_k)
+            results = self._use_case.execute(
+                self._query_image_path, top_k=self._top_k, filters=self._filters
+            )
             elapsed = time.monotonic() - start_time
 
             logger.info(f"Search QThread finished in {elapsed:.3f}s. Results: {len(results)}")

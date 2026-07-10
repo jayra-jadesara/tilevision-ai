@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from PySide6.QtCore import Qt, Slot, QUrl, QSize
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QDesktopServices, QPixmap, QIcon
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QDesktopServices, QPixmap, QIcon, QColor
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -40,10 +40,12 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QProgressBar,
+    QComboBox,
 )
 
 from src.core.models import SearchResult
 from src.presentation.viewmodels.search_viewmodel import SearchViewModel, SearchState
+from src.presentation.views.crop_dialog import CropDialog
 
 logger = logging.getLogger("tilevision.presentation.views.search_view")
 
@@ -195,6 +197,7 @@ class SearchView(QWidget):
         super().__init__(parent)
         self._viewmodel = viewmodel
         self._current_results: List[SearchResult] = []
+        self._current_query_image_path: Optional[str] = None
         self._setup_ui()
         self._connect_signals()
         self._apply_styles()
@@ -211,6 +214,7 @@ class SearchView(QWidget):
 
         root_layout.addWidget(self._build_header())
         root_layout.addWidget(self._build_query_panel())
+        root_layout.addWidget(self._build_filter_bar())
         root_layout.addWidget(self._build_progress_bar())
         root_layout.addWidget(self._build_results_table(), stretch=1)
         root_layout.addWidget(self._build_status_line())
@@ -244,6 +248,12 @@ class SearchView(QWidget):
         button_col.setSpacing(8)
         button_col.addStretch()
 
+        self._crop_button = QPushButton("✂️  Crop & Search")
+        self._crop_button.setObjectName("SecondaryButton")
+        self._crop_button.clicked.connect(self._on_crop_clicked)
+        self._crop_button.setEnabled(False)
+        button_col.addWidget(self._crop_button)
+
         self._clear_button = QPushButton("✕  Clear")
         self._clear_button.setObjectName("SecondaryButton")
         self._clear_button.clicked.connect(self._on_clear_clicked)
@@ -254,6 +264,52 @@ class SearchView(QWidget):
         layout.addLayout(button_col)
 
         return panel
+
+    def _build_filter_bar(self) -> QWidget:
+        bar = QWidget()
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        filter_label = QLabel("Filters:")
+        filter_label.setObjectName("FilterLabel")
+        layout.addWidget(filter_label)
+
+        self._filter_combos: dict = {}
+        for field, display_name in [
+            ("brand", "Brand"), ("category", "Category"), ("color", "Color"), ("size", "Size")
+        ]:
+            combo = QComboBox()
+            combo.setObjectName("FilterCombo")
+            combo.addItem(f"Any {display_name}")
+            combo.currentTextChanged.connect(
+                lambda value, f=field: self._on_filter_changed(f, value)
+            )
+            self._filter_combos[field] = combo
+            layout.addWidget(combo)
+
+        layout.addStretch()
+        return bar
+
+    def _on_filter_changed(self, field: str, value: str) -> None:
+        # Ignore the placeholder "Any X" item text as a real filter value.
+        is_placeholder = value.startswith("Any ")
+        self._viewmodel.set_filter(field, "" if is_placeholder else value)
+
+    @Slot(dict)
+    def _on_filters_available(self, options: dict) -> None:
+        for field, combo in self._filter_combos.items():
+            values = options.get(field, [])
+            current = combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            placeholder = f"Any {field.capitalize()}"
+            combo.addItem(placeholder)
+            combo.addItems(values)
+            # Restore previous selection if it's still a valid option
+            idx = combo.findText(current)
+            combo.setCurrentIndex(idx if idx >= 0 else 0)
+            combo.blockSignals(False)
 
     def _build_progress_bar(self) -> QWidget:
         self._progress_bar = QProgressBar()
@@ -317,15 +373,29 @@ class SearchView(QWidget):
         self._viewmodel.status_message.connect(self._status_label.setText)
         self._viewmodel.search_error.connect(self._on_search_error)
         self._viewmodel.query_image_selected.connect(self._drop_zone.show_preview)
+        self._viewmodel.filters_available.connect(self._on_filters_available)
+        self._viewmodel.load_filter_options()
 
     # ── Event Handlers ───────────────────────────────────────────────────
 
     def _on_image_chosen(self, image_path: str) -> None:
         logger.info(f"Query image selected: {image_path}")
+        self._current_query_image_path = image_path
+        self._crop_button.setEnabled(True)
         self._viewmodel.search_by_image(image_path)
+
+    def _on_crop_clicked(self) -> None:
+        if not self._current_query_image_path:
+            return
+        dialog = CropDialog(self._current_query_image_path, parent=self)
+        if dialog.exec() == dialog.DialogCode.Accepted and dialog.cropped_image_path:
+            logger.info(f"Searching with cropped region: {dialog.cropped_image_path}")
+            self._viewmodel.search_by_image(dialog.cropped_image_path)
 
     def _on_clear_clicked(self) -> None:
         self._drop_zone.reset()
+        self._current_query_image_path = None
+        self._crop_button.setEnabled(False)
         self._viewmodel.clear_results()
 
     @Slot(str)
@@ -334,6 +404,9 @@ class SearchView(QWidget):
         self._drop_zone.set_busy(is_searching)
         self._progress_bar.setVisible(is_searching)
         self._clear_button.setEnabled(state != SearchState.IDLE)
+        self._crop_button.setEnabled(not is_searching and self._current_query_image_path is not None)
+        for combo in self._filter_combos.values():
+            combo.setEnabled(not is_searching)
 
     @Slot(list)
     def _on_results_ready(self, results: List[SearchResult]) -> None:
@@ -356,8 +429,17 @@ class SearchView(QWidget):
         self._results_table.setVisible(True)
         self._results_table.setRowCount(len(results))
 
+        # Feature 3: distinguish the single top match ("Best Match") from
+        # the rest ("Similar Alternatives") rather than presenting all
+        # top-K results identically — matters most for the customer-photo
+        # search scenario (WhatsApp photo, phone snapshot) where the user
+        # usually wants "which exact tile is this" first, with the rest as
+        # fallback options if the best match isn't quite right.
+        best_match_brush = QColor("#3B4270")
+
         for row, result in enumerate(results):
             tile = result.tile
+            is_best_match = row == 0
 
             thumb_item = QTableWidgetItem()
             pixmap = QPixmap(result.thumbnail_path)
@@ -366,8 +448,14 @@ class SearchView(QWidget):
             thumb_item.setFlags(thumb_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self._results_table.setItem(row, 0, thumb_item)
 
-            similarity_item = QTableWidgetItem(f"{result.similarity_score:.1f}%")
+            similarity_text = f"⭐ {result.similarity_score:.1f}%" if is_best_match else f"{result.similarity_score:.1f}%"
+            similarity_item = QTableWidgetItem(similarity_text)
             similarity_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            if is_best_match:
+                similarity_item.setToolTip("Best Match")
+                bold_font = similarity_item.font()
+                bold_font.setBold(True)
+                similarity_item.setFont(bold_font)
             self._results_table.setItem(row, 1, similarity_item)
 
             self._results_table.setItem(row, 2, QTableWidgetItem(tile.product_code or "—"))
@@ -377,6 +465,12 @@ class SearchView(QWidget):
             path_item = QTableWidgetItem(tile.file_path)
             path_item.setToolTip(tile.file_path)
             self._results_table.setItem(row, 5, path_item)
+
+            if is_best_match:
+                for col in range(self._results_table.columnCount()):
+                    item = self._results_table.item(row, col)
+                    if item is not None:
+                        item.setBackground(best_match_brush)
 
     def _on_row_double_clicked(self, row: int, _column: int) -> None:
         self._open_image_at_row(row)
@@ -422,6 +516,18 @@ class SearchView(QWidget):
             """
             #PageTitle { font-size: 20px; font-weight: 700; color: #E8EAF6; }
             #PageSubtitle { font-size: 12px; color: #8A8FA3; }
+
+            #FilterLabel { color: #8A8FA3; font-size: 12px; font-weight: 600; }
+            #FilterCombo {
+                background-color: #232634;
+                color: #D6D9E8;
+                border: 1px solid #3A3F52;
+                border-radius: 6px;
+                padding: 4px 8px;
+                min-width: 110px;
+                font-size: 12px;
+            }
+            #FilterCombo:hover { border-color: #5C6BC0; }
 
             #DropZone {
                 background-color: #232634;
