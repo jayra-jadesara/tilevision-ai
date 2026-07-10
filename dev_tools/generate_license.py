@@ -51,6 +51,22 @@ def generate_keypair() -> tuple:
     return private_key, public_key
 
 
+def load_keypair(private_key_path: Path):
+    """
+    Load an existing ECDSA private key from a PEM file.
+
+    Args:
+        private_key_path: Path to an existing private key PEM file.
+
+    Returns:
+        (private_key, public_key) cryptography key objects.
+    """
+    from cryptography.hazmat.primitives.serialization import load_pem_private_key
+
+    private_key = load_pem_private_key(private_key_path.read_bytes(), password=None)
+    return private_key, private_key.public_key()
+
+
 def sign_license(
     private_key,
     customer_name: str,
@@ -115,8 +131,22 @@ Examples:
         help="Create a wildcard license that works on any machine (overrides --hardware-hash)."
     )
     parser.add_argument(
-        "--private-key", default="dev_tools/private_key.pem",
-        help="Output path for the generated private key PEM file."
+        "--private-key", default="dev_tools/dev_private_key.pem",
+        help=(
+            "Path to the private key PEM to sign with. Defaults to the committed "
+            "dev key (dev_tools/dev_private_key.pem), whose matching public key is "
+            "already embedded in src/licensing/validator.py — so a license "
+            "generated with the default settings validates immediately, no "
+            "copy-pasting a new public key required."
+        )
+    )
+    parser.add_argument(
+        "--new-keypair", action="store_true",
+        help=(
+            "Generate a brand-new keypair instead of reusing --private-key. "
+            "You'll need to copy the printed public key into validator.py's "
+            "EMBEDDED_PUBLIC_KEY_PEM for the resulting license to validate."
+        )
     )
     args = parser.parse_args()
 
@@ -124,27 +154,36 @@ Examples:
     print("  TileVision AI — License Key Generator")
     print("=" * 60)
 
-    # 1. Generate keypair
-    print("\n[1/4] Generating ECDSA P-256 keypair...")
-    private_key, public_key = generate_keypair()
-
-    # 2. Export keys
-    private_pem = private_key.private_bytes(
-        encoding=Encoding.PEM,
-        format=PrivateFormat.PKCS8,
-        encryption_algorithm=NoEncryption(),
-    )
-    public_pem = public_key.public_bytes(
-        encoding=Encoding.PEM,
-        format=PublicFormat.SubjectPublicKeyInfo,
-    )
-
-    # 3. Save private key
     private_key_path = Path(args.private_key)
-    private_key_path.parent.mkdir(parents=True, exist_ok=True)
-    private_key_path.write_bytes(private_pem)
-    print(f"[2/4] Private key saved to: {private_key_path.resolve()}")
-    print("      ⚠️  KEEP THIS FILE SECURE AND OFFLINE — NEVER COMMIT IT!")
+
+    if args.new_keypair or not private_key_path.exists():
+        print("\n[1/4] Generating a NEW ECDSA P-256 keypair...")
+        private_key, public_key = generate_keypair()
+
+        private_pem = private_key.private_bytes(
+            encoding=Encoding.PEM,
+            format=PrivateFormat.PKCS8,
+            encryption_algorithm=NoEncryption(),
+        )
+        public_pem = public_key.public_bytes(
+            encoding=Encoding.PEM,
+            format=PublicFormat.SubjectPublicKeyInfo,
+        )
+
+        private_key_path.parent.mkdir(parents=True, exist_ok=True)
+        private_key_path.write_bytes(private_pem)
+        print(f"[2/4] Private key saved to: {private_key_path.resolve()}")
+        print("      ⚠️  KEEP THIS FILE SECURE AND OFFLINE — NEVER COMMIT IT!")
+        print("      ⚠️  You must copy the public key below into validator.py")
+        print("          for licenses signed with this new key to validate.")
+    else:
+        print(f"\n[1/4] Reusing existing private key: {private_key_path.resolve()}")
+        private_key, public_key = load_keypair(private_key_path)
+        public_pem = public_key.public_bytes(
+            encoding=Encoding.PEM,
+            format=PublicFormat.SubjectPublicKeyInfo,
+        )
+        print("[2/4] (Skipped saving — reused the key above instead of generating one.)")
 
     # 4. Determine hardware hash
     if args.wildcard:
@@ -167,7 +206,11 @@ Examples:
 
     # 6. Output
     print("\n" + "=" * 60)
-    print("  PUBLIC KEY PEM (embed in src/licensing/validator.py):")
+    if args.new_keypair:
+        print("  PUBLIC KEY PEM (copy this into src/licensing/validator.py):")
+    else:
+        print("  PUBLIC KEY PEM (already embedded in src/licensing/validator.py,")
+        print("  shown here for reference — no copy-paste needed):")
     print("=" * 60)
     print(public_pem.decode("utf-8"))
 
@@ -183,9 +226,14 @@ Examples:
     print(f"  License key also saved to: {license_file.resolve()}")
     print("=" * 60)
     print("\nDone. Remember:")
-    print("  1. Embed the public key PEM into src/licensing/validator.py")
-    print("  2. Delete or secure private_key.pem from the build machine")
-    print("  3. Set _DEVELOPER_MODE = False in validator.py for production builds")
+    if args.new_keypair:
+        print("  1. Embed the public key PEM above into src/licensing/validator.py")
+        print(f"  2. Delete or secure {private_key_path} from the build machine")
+    else:
+        print(f"  This license was signed with {private_key_path}, whose public")
+        print("  key already matches what's embedded in validator.py — nothing to copy.")
+    print("  3. Set TILEVISION_DEV_MODE unset (not '1') in production builds")
+    print("     so signature verification and the wildcard bypass stay enforced.")
 
 
 if __name__ == "__main__":

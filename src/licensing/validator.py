@@ -38,17 +38,23 @@ logger = logging.getLogger("tilevision.licensing.validator")
 # Embedded ECDSA (SECP256R1 / P-256) Public Key
 #
 # INSTRUCTIONS FOR PRODUCTION:
-#   1. Run dev_tools/generate_license.py once to generate a real keypair.
+#   1. Run admin_tool/main.py -> "Generate New Keypair" to create a real
+#      keypair for YOUR business (never reuse this dev one for real sales).
 #   2. Copy the printed public key PEM into EMBEDDED_PUBLIC_KEY_PEM below.
 #   3. Keep the private key (.pem file) securely offline — never commit it.
 #   4. Build the application: the public key is baked in; private key stays out.
 #
-# The placeholder value below is a real, valid P-256 public key generated
-# from a known private key for development use only.
+# The key below IS a real, valid P-256 public key (unlike an earlier
+# placeholder that used dummy all-zero bytes and crashed on load) — its
+# matching private key is dev_tools/dev_private_key.pem, committed
+# intentionally so the app runs and generates test/trial licenses
+# out of the box for development. It is NOT secure for production: anyone
+# with this repo can mint licenses that validate against it. Replace both
+# halves before shipping to real customers.
 # ─────────────────────────────────────────────────────────────────────────────
 EMBEDDED_PUBLIC_KEY_PEM = b"""-----BEGIN PUBLIC KEY-----
-MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE8oV3FXs5Mzc25mxzta6K9Snbtxaa
+7iXvMu4Srxuht3u0B7qFavlLuoYhrmqD8zV9sBY5QyJj5Yir8iZhTBGwrA==
 -----END PUBLIC KEY-----"""
 
 def _resolve_developer_mode() -> bool:

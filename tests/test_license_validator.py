@@ -182,7 +182,28 @@ def test_expired_license_is_rejected(keypair, monkeypatch):
         validator.validate_license(key)
 
 
-# ── License type / expiry computation ────────────────────────────────────
+# ── Regression: embedded public key must always be valid ────────────────
+
+
+def test_embedded_public_key_is_valid_and_loadable():
+    """
+    Regression test for a real bug: EMBEDDED_PUBLIC_KEY_PEM was once a
+    dummy all-zero-bytes placeholder that crashed LicenseValidator() on
+    construction (ASN.1 parse error) — meaning the app couldn't even start,
+    let alone check a license or fall back to the trial. This test fails
+    loudly if that placeholder value (or any other invalid PEM) ever ends
+    up embedded again.
+    """
+    # Must not raise — this is exactly what crashed at app startup before.
+    validator = LicenseValidator()
+    assert validator is not None
+
+
+def test_embedded_public_key_is_not_the_old_dummy_placeholder():
+    """The original broken placeholder was all-zero key bytes encoded as
+    base64 'AAAA...'. Guard against that exact regression specifically,
+    in addition to the general load-must-not-crash check above."""
+    assert b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" not in validator_module.EMBEDDED_PUBLIC_KEY_PEM
 
 
 def test_compute_expiry_date_for_each_type():
