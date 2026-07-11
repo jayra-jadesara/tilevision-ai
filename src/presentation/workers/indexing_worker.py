@@ -27,8 +27,9 @@ class IndexingWorker(QThread):
     # Signal payload: (processed_count, total_count, current_filename, eta_seconds)
     progress_updated = Signal(int, int, str, float)
     
-    # Signal payload: (indexed_count, skipped_count, is_completed_successfully)
-    indexing_finished = Signal(int, int, bool)
+    # Signal payload: ScanResult — the full new/modified/deleted/skipped
+    # breakdown (Task 2: Smart Re-index), not just a flat total.
+    indexing_finished = Signal(object)
     
     # Signal payload: (error_message)
     indexing_error = Signal(str)
@@ -58,7 +59,7 @@ class IndexingWorker(QThread):
             self.progress_updated.emit(processed, total, filename, eta)
 
         try:
-            indexed, skipped, completed = self._use_case.scan_and_index_directory(
+            result = self._use_case.scan_and_index_directory(
                 directory_path=self._directory_path,
                 progress_callback=_qt_progress_callback,
                 cancel_event=self._cancel_event,
@@ -66,9 +67,11 @@ class IndexingWorker(QThread):
             )
             
             logger.info(
-                f"Indexing QThread finished. Indexed: {indexed}, Skipped: {skipped}, Completed: {completed}"
+                f"Indexing QThread finished. New: {result.new_count}, Modified: {result.modified_count}, "
+                f"Deleted: {result.deleted_count}, Skipped: {result.skipped_count}, "
+                f"Completed: {result.is_completed}"
             )
-            self.indexing_finished.emit(indexed, skipped, completed)
+            self.indexing_finished.emit(result)
         except Exception as e:
             logger.error(f"Unexpected error in indexing background worker thread: {e}")
             self.indexing_error.emit(str(e))

@@ -8,7 +8,7 @@ decoupling of the business logic from data storage implementations.
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
-from src.core.models import TileImage, LicenseInfo
+from src.core.models import TileImage, LicenseInfo, IndexedFolderState
 
 
 class IImageRepository(ABC):
@@ -168,4 +168,50 @@ class ILicenseRepository(ABC):
     @abstractmethod
     def clear_license(self) -> None:
         """Remove all license activation keys from storage."""
+        pass
+
+
+class IIndexedFolderRepository(ABC):
+    """
+    Abstract interface for tracking which folders have been indexed
+    (Task 1: Persistent Indexed Folder / Task 2: Smart Re-index).
+    """
+
+    @abstractmethod
+    def record_folder_indexed(self, folder_path: str) -> None:
+        """
+        Record (insert or update) that a folder was just (re-)indexed,
+        stamping last_indexed_at with the current time.
+
+        Args:
+            folder_path: Absolute path of the folder that was scanned.
+        """
+        pass
+
+    @abstractmethod
+    def get_last_indexed_folder(self) -> Optional[IndexedFolderState]:
+        """
+        Retrieve the most recently indexed folder, for restoring the Index
+        page's state on application startup.
+
+        Returns:
+            An IndexedFolderState (with indexed_image_count left at its
+            default — callers should hydrate that separately via the tile
+            repository's live count) if any folder has ever been indexed,
+            otherwise None.
+        """
+        pass
+
+    @abstractmethod
+    def get_folder_state(self, folder_path: str) -> Optional[IndexedFolderState]:
+        """
+        Retrieve the indexed-folder record for a specific folder path.
+
+        Args:
+            folder_path: Absolute folder path.
+
+        Returns:
+            An IndexedFolderState if this folder has been indexed before,
+            otherwise None.
+        """
         pass

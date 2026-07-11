@@ -67,6 +67,14 @@ class DatabaseContext:
                 hardware_hash TEXT NOT NULL
             );
             """,
+            """
+            CREATE TABLE IF NOT EXISTS indexed_folders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                folder_path TEXT NOT NULL UNIQUE,
+                last_indexed_at TIMESTAMP,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            """,
             "CREATE INDEX IF NOT EXISTS idx_tiles_file_name ON tiles(file_name);"
         ]
 

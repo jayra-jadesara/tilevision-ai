@@ -63,3 +63,53 @@ class SearchResult:
     tile: TileImage
     similarity_score: float
     thumbnail_path: str
+
+
+@dataclass
+class IndexedFolderState:
+    """
+    Persisted record of a folder that has been indexed at least once.
+
+    Backs Task 1 (Persistent Indexed Folder): lets the Index page restore
+    "Folder: X, Indexed Images: N, Status: Ready, Last Indexed: ..." on
+    app startup without requiring the user to re-select and re-scan a
+    folder they already indexed in a previous session.
+    """
+    folder_path: str
+    last_indexed_at: Optional[datetime] = None
+    id: Optional[int] = None
+    # Live count of currently-indexed tiles under this folder, populated by
+    # the repository/use case query rather than cached in this table — a
+    # cached count would drift out of sync if tiles are deleted/added by
+    # other means (e.g. auto folder monitoring) between explicit scans.
+    indexed_image_count: int = 0
+
+
+@dataclass
+class ScanResult:
+    """
+    Structured outcome of a folder scan (Task 2: Smart Re-index).
+
+    Distinguishes new vs. modified vs. deleted vs. unchanged files, rather
+    than the previous flat (indexed_count, skipped_count) pair, so the UI
+    can show a real "what changed" summary instead of just a total.
+    """
+    new_count: int = 0
+    modified_count: int = 0
+    deleted_count: int = 0
+    skipped_count: int = 0
+    failed_count: int = 0
+    total_files_scanned: int = 0
+    is_completed: bool = True
+    elapsed_seconds: float = 0.0
+    time_saved_seconds: float = 0.0
+
+    @property
+    def indexed_count(self) -> int:
+        """Total files actually (re-)embedded this scan (new + modified)."""
+        return self.new_count + self.modified_count
+
+    @property
+    def has_any_changes(self) -> bool:
+        """True if this scan found anything to do at all."""
+        return self.new_count > 0 or self.modified_count > 0 or self.deleted_count > 0

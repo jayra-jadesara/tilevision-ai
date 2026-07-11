@@ -27,7 +27,7 @@ from PySide6.QtGui import QFont
 from src.utils.logger import setup_logger
 from src.config.settings import AppSettings
 from src.data.db_context import DatabaseContext
-from src.data.sqlite_repository import SQLiteImageRepository, SQLiteLicenseRepository
+from src.data.sqlite_repository import SQLiteImageRepository, SQLiteLicenseRepository, SQLiteIndexedFolderRepository
 from src.ai.embedder import OpenCLIPEmbedder
 from src.ai.vector_index import FaissIndexManager
 from src.core.use_cases.index_images import IndexImagesUseCase
@@ -99,6 +99,7 @@ def build_application() -> int:
 
     image_repository = SQLiteImageRepository(db_context=db_context)
     license_repository = SQLiteLicenseRepository(db_context=db_context)
+    indexed_folder_repository = SQLiteIndexedFolderRepository(db_context=db_context)
 
     # ── 5. Construct Licensing Layer ──────────────────────────────────────────
     logger.info("Initializing license validator...")
@@ -163,6 +164,7 @@ def build_application() -> int:
         embedder=embedder,
         vector_index=vector_index,
         thumbnail_dir=settings.thumbnail_dir,
+        folder_repository=indexed_folder_repository,
     )
     search_tiles_use_case = SearchTilesUseCase(
         image_repository=image_repository,

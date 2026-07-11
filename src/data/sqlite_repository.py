@@ -10,11 +10,31 @@ import logging
 import sqlite3
 from typing import List, Optional
 
-from src.core.models import TileImage, LicenseInfo
+from src.core.models import TileImage, LicenseInfo, IndexedFolderState
 from src.data.db_context import DatabaseContext
-from src.data.repository_interface import IImageRepository, ILicenseRepository
+from src.data.repository_interface import IImageRepository, ILicenseRepository, IIndexedFolderRepository
 
 logger = logging.getLogger("tilevision.data.sqlite_repository")
+
+
+def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
+    """
+    Best-effort parser for SQLite CURRENT_TIMESTAMP / ISO-format strings.
+    Shared across all repositories in this module so the same fallback
+    parsing logic doesn't get duplicated (and drift out of sync) in each
+    _row_to_entity() method.
+    """
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        pass
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        logger.warning(f"Could not parse timestamp value: {value}")
+        return None
 
 
 class SQLiteImageRepository(IImageRepository):
@@ -31,25 +51,8 @@ class SQLiteImageRepository(IImageRepository):
 
     def _row_to_entity(self, row: sqlite3.Row) -> TileImage:
         """Helper to convert a sqlite3.Row to a TileImage model."""
-        created_time = None
-        if row["created_time"]:
-            try:
-                created_time = datetime.fromisoformat(row["created_time"])
-            except ValueError:
-                try:
-                    created_time = datetime.strptime(row["created_time"], "%Y-%m-%d %H:%M:%S")
-                except ValueError:
-                    logger.warning(f"Could not parse created_time timestamp: {row['created_time']}")
-
-        updated_time = None
-        if row["updated_time"]:
-            try:
-                updated_time = datetime.fromisoformat(row["updated_time"])
-            except ValueError:
-                try:
-                    updated_time = datetime.strptime(row["updated_time"], "%Y-%m-%d %H:%M:%S")
-                except ValueError:
-                    logger.warning(f"Could not parse updated_time timestamp: {row['updated_time']}")
+        created_time = _parse_timestamp(row["created_time"])
+        updated_time = _parse_timestamp(row["updated_time"])
 
         return TileImage(
             id=row["id"],
@@ -383,15 +386,7 @@ class SQLiteLicenseRepository(ILicenseRepository):
 
     def _row_to_entity(self, row: sqlite3.Row) -> LicenseInfo:
         """Helper to convert a sqlite3.Row to a LicenseInfo model."""
-        activated_date = None
-        if row["activated_date"]:
-            try:
-                activated_date = datetime.fromisoformat(row["activated_date"])
-            except ValueError:
-                try:
-                    activated_date = datetime.strptime(row["activated_date"], "%Y-%m-%d %H:%M:%S")
-                except ValueError:
-                    logger.warning(f"Could not parse activated_date timestamp: {row['activated_date']}")
+        activated_date = _parse_timestamp(row["activated_date"])
 
         return LicenseInfo(
             id=row["id"],
@@ -469,3 +464,94 @@ class SQLiteLicenseRepository(ILicenseRepository):
         except sqlite3.Error as e:
             logger.error(f"Failed to clear license: {e}")
             raise RuntimeError(f"Database error during license clear: {e}") from e
+
+
+class SQLiteIndexedFolderRepository(IIndexedFolderRepository):
+    """
+    SQLite-backed repository for tracking indexed folders (Task 1: Persistent
+    Indexed Folder / Task 2: Smart Re-index).
+    """
+
+    def __init__(self, db_context: DatabaseContext) -> None:
+        """
+        Args:
+            db_context: Shared DatabaseContext.
+        """
+        self._db = db_context
+
+    def record_folder_indexed(self, folder_path: str) -> None:
+        """
+        Insert or update the last_indexed_at timestamp for a folder.
+
+        Args:
+            folder_path: Absolute path of the folder that was scanned.
+        """
+        # NOTE: uses strftime(..., 'now') for millisecond-resolution
+        # timestamps rather than CURRENT_TIMESTAMP, which only has
+        # second-resolution — two folders indexed within the same second
+        # would otherwise tie and sort unpredictably in
+        # get_last_indexed_folder()'s ORDER BY.
+        query = """
+        INSERT INTO indexed_folders (folder_path, last_indexed_at)
+        VALUES (?, strftime('%Y-%m-%d %H:%M:%f', 'now'))
+        ON CONFLICT(folder_path) DO UPDATE SET
+            last_indexed_at = strftime('%Y-%m-%d %H:%M:%f', 'now');
+        """
+        try:
+            with self._db.session() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, (folder_path,))
+                conn.commit()
+            logger.info(f"Recorded folder as indexed: {folder_path}")
+        except sqlite3.Error as e:
+            logger.error(f"Failed to record indexed folder '{folder_path}': {e}")
+            raise RuntimeError(f"Database error recording indexed folder: {e}") from e
+
+    def get_last_indexed_folder(self) -> Optional[IndexedFolderState]:
+        """
+        Retrieve the most recently indexed folder (by last_indexed_at).
+
+        Returns:
+            An IndexedFolderState if any folder has been indexed, else None.
+        """
+        query = "SELECT * FROM indexed_folders ORDER BY last_indexed_at DESC LIMIT 1;"
+        try:
+            with self._db.session() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query)
+                row = cursor.fetchone()
+                if row:
+                    return self._row_to_entity(row)
+        except sqlite3.Error as e:
+            logger.error(f"Failed to fetch last indexed folder: {e}")
+        return None
+
+    def get_folder_state(self, folder_path: str) -> Optional[IndexedFolderState]:
+        """
+        Retrieve the indexed-folder record for a specific path.
+
+        Args:
+            folder_path: Absolute folder path.
+
+        Returns:
+            An IndexedFolderState if found, else None.
+        """
+        query = "SELECT * FROM indexed_folders WHERE folder_path = ?;"
+        try:
+            with self._db.session() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, (folder_path,))
+                row = cursor.fetchone()
+                if row:
+                    return self._row_to_entity(row)
+        except sqlite3.Error as e:
+            logger.error(f"Failed to fetch folder state for '{folder_path}': {e}")
+        return None
+
+    @staticmethod
+    def _row_to_entity(row: sqlite3.Row) -> IndexedFolderState:
+        return IndexedFolderState(
+            id=row["id"],
+            folder_path=row["folder_path"],
+            last_indexed_at=_parse_timestamp(row["last_indexed_at"]),
+        )

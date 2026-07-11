@@ -64,6 +64,7 @@ class IndexingView(QWidget):
         self._setup_ui()
         self._connect_signals()
         self._apply_styles()
+        self._viewmodel.load_persisted_folder_state()
         logger.debug("IndexingView initialized.")
 
     # ── UI Construction ───────────────────────────────────────────────────────
@@ -132,9 +133,12 @@ class IndexingView(QWidget):
         """Build the folder selector group box with path display and browse button."""
         group = QGroupBox("📂  Tile Image Folder")
         group.setObjectName("SectionGroup")
-        layout = QHBoxLayout(group)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(12)
+        outer_layout = QVBoxLayout(group)
+        outer_layout.setContentsMargins(16, 12, 16, 12)
+        outer_layout.setSpacing(10)
+
+        path_row = QHBoxLayout()
+        path_row.setSpacing(12)
 
         self._folder_path_edit = QLineEdit()
         self._folder_path_edit.setObjectName("FolderPathEdit")
@@ -148,8 +152,32 @@ class IndexingView(QWidget):
         self._browse_button.setFixedHeight(36)
         self._browse_button.setToolTip("Open folder picker dialog")
 
-        layout.addWidget(self._folder_path_edit)
-        layout.addWidget(self._browse_button)
+        path_row.addWidget(self._folder_path_edit)
+        path_row.addWidget(self._browse_button)
+        outer_layout.addLayout(path_row)
+
+        # Status info row (Task 1: Persistent Indexed Folder) — restored
+        # automatically at startup from the last folder that was indexed,
+        # so the user isn't staring at an empty page after a restart even
+        # though their catalog is fully intact.
+        info_row = QHBoxLayout()
+        info_row.setSpacing(20)
+
+        self._indexed_images_info_label = QLabel("")
+        self._indexed_images_info_label.setObjectName("FolderInfoLabel")
+        info_row.addWidget(self._indexed_images_info_label)
+
+        self._status_info_label = QLabel("")
+        self._status_info_label.setObjectName("FolderInfoLabel")
+        info_row.addWidget(self._status_info_label)
+
+        self._last_indexed_info_label = QLabel("")
+        self._last_indexed_info_label.setObjectName("FolderInfoLabel")
+        info_row.addWidget(self._last_indexed_info_label)
+
+        info_row.addStretch()
+        outer_layout.addLayout(info_row)
+
         return group
 
     def _build_progress_section(self) -> QGroupBox:
@@ -256,27 +284,40 @@ class IndexingView(QWidget):
 
             return icon_label, value_label, desc_label
 
-        # Indexed stat
-        ic1, self._indexed_value_label, dc1 = _make_stat_block("🆕", "Newly Indexed", "IndexedStatValue")
+        # New stat
+        ic1, self._new_value_label, dc1 = _make_stat_block("🆕", "New", "IndexedStatValue")
         layout.addWidget(ic1, 0, 0)
-        layout.addWidget(self._indexed_value_label, 1, 0)
+        layout.addWidget(self._new_value_label, 1, 0)
         layout.addWidget(dc1, 2, 0)
 
-        # Skipped stat
-        ic2, self._skipped_value_label, dc2 = _make_stat_block("⏭", "Skipped (Unchanged)", "SkippedStatValue")
+        # Modified stat
+        ic2, self._modified_value_label, dc2 = _make_stat_block("✏️", "Modified", "ModifiedStatValue")
         layout.addWidget(ic2, 0, 1)
-        layout.addWidget(self._skipped_value_label, 1, 1)
+        layout.addWidget(self._modified_value_label, 1, 1)
         layout.addWidget(dc2, 2, 1)
 
-        # Total stat
-        ic3, self._total_stat_value_label, dc3 = _make_stat_block("🗂", "Total Scanned", "TotalStatValue")
+        # Deleted stat
+        ic3, self._deleted_value_label, dc3 = _make_stat_block("🗑", "Deleted", "DeletedStatValue")
         layout.addWidget(ic3, 0, 2)
-        layout.addWidget(self._total_stat_value_label, 1, 2)
+        layout.addWidget(self._deleted_value_label, 1, 2)
         layout.addWidget(dc3, 2, 2)
+
+        # Skipped stat
+        ic4, self._skipped_value_label, dc4 = _make_stat_block("⏭", "Skipped (Unchanged)", "SkippedStatValue")
+        layout.addWidget(ic4, 0, 3)
+        layout.addWidget(self._skipped_value_label, 1, 3)
+        layout.addWidget(dc4, 2, 3)
 
         layout.setColumnStretch(0, 1)
         layout.setColumnStretch(1, 1)
         layout.setColumnStretch(2, 1)
+        layout.setColumnStretch(3, 1)
+
+        self._time_saved_label = QLabel("")
+        self._time_saved_label.setObjectName("TimeSavedLabel")
+        self._time_saved_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self._time_saved_label, 3, 0, 1, 4)
+
         return group
 
     def _build_status_log(self) -> QGroupBox:
@@ -319,6 +360,7 @@ class IndexingView(QWidget):
         self._viewmodel.error_occurred.connect(self._on_error_occurred)
         self._viewmodel.folder_selected.connect(self._on_folder_selected)
         self._viewmodel.status_message.connect(self._log_message)
+        self._viewmodel.persisted_folder_loaded.connect(self._on_persisted_folder_loaded)
 
     # ── UI Event Handlers ─────────────────────────────────────────────────────
 
@@ -413,19 +455,36 @@ class IndexingView(QWidget):
             self._browse_button.setEnabled(True)
             self._current_file_label.setText("❌ An error occurred. Check the activity log.")
 
-    @Slot(int, int, int)
-    def _on_indexing_completed(self, indexed: int, skipped: int, total: int) -> None:
+    @Slot(object)
+    def _on_indexing_completed(self, result) -> None:
         """
         Populate the results summary stats panel after indexing finishes.
 
         Args:
-            indexed: Count of tiles newly indexed.
-            skipped: Count of tiles skipped as unchanged.
-            total: Total tiles scanned.
+            result: The ScanResult from IndexImagesUseCase.scan_and_index_directory().
         """
-        self._indexed_value_label.setText(f"{indexed:,}")
-        self._skipped_value_label.setText(f"{skipped:,}")
-        self._total_stat_value_label.setText(f"{total:,}")
+        self._new_value_label.setText(f"{result.new_count:,}")
+        self._modified_value_label.setText(f"{result.modified_count:,}")
+        self._deleted_value_label.setText(f"{result.deleted_count:,}")
+        self._skipped_value_label.setText(f"{result.skipped_count:,}")
+
+        if not result.has_any_changes and result.is_completed:
+            self._time_saved_label.setText("✅ Everything is already indexed.")
+        elif result.time_saved_seconds >= 1:
+            self._time_saved_label.setText(
+                f"⏱  Saved ~{self._format_duration(result.time_saved_seconds)} by skipping unchanged files."
+            )
+        else:
+            self._time_saved_label.setText("")
+
+    @staticmethod
+    def _format_duration(seconds: float) -> str:
+        """Human-readable duration for the Time Saved display."""
+        total = int(seconds)
+        minutes, secs = divmod(total, 60)
+        if minutes > 0:
+            return f"{minutes}m {secs}s"
+        return f"{secs}s"
 
     @Slot(str)
     def _on_error_occurred(self, message: str) -> None:
@@ -450,6 +509,57 @@ class IndexingView(QWidget):
         """
         self._folder_path_edit.setText(folder_path)
         self._folder_path_edit.setToolTip(folder_path)
+        # A brand-new selection means "not yet indexed" until a scan runs —
+        # clear any stats left over from a previously-restored/completed folder.
+        self._indexed_images_info_label.setText("")
+        self._status_info_label.setText("")
+        self._last_indexed_info_label.setText("")
+
+    @Slot(object)
+    def _on_persisted_folder_loaded(self, status) -> None:
+        """
+        Restore the Index page's display from a previously-indexed folder
+        (Task 1: Persistent Indexed Folder) — no re-scan required.
+
+        Args:
+            status: IndexedFolderState with folder_path, indexed_image_count,
+                and last_indexed_at populated.
+        """
+        self._folder_path_edit.setText(status.folder_path)
+        self._folder_path_edit.setToolTip(status.folder_path)
+        self._indexed_images_info_label.setText(f"Indexed Images: {status.indexed_image_count:,}")
+        self._status_info_label.setText("Status: Ready")
+        self._last_indexed_info_label.setText(
+            f"Last Indexed: {self._format_last_indexed(status.last_indexed_at)}"
+        )
+        self._current_file_label.setText("✅ Ready — click Start Indexing to check for changes.")
+
+    @staticmethod
+    def _format_last_indexed(when) -> str:
+        """
+        Human-friendly 'Today 4:35 PM' / 'Jan 3, 2:10 PM' style timestamp.
+
+        Uses only standard strftime codes (%I/%d always zero-padded) and
+        strips a leading zero manually, rather than the %-I/%-d "no
+        leading zero" extension — that extension is Linux/macOS-only and
+        raises ValueError on Windows, this app's actual target platform.
+        """
+        if when is None:
+            return "Never"
+
+        from datetime import datetime as _dt
+
+        def _strip_leading_zero(text: str) -> str:
+            return text[1:] if text.startswith("0") else text
+
+        now = _dt.now()
+        time_part = _strip_leading_zero(when.strftime("%I:%M %p"))
+
+        if when.date() == now.date():
+            return f"Today {time_part}"
+
+        month_day = f"{when.strftime('%b')} {_strip_leading_zero(when.strftime('%d'))}"
+        return f"{month_day}, {time_part}"
 
     @Slot(str)
     def _log_message(self, message: str) -> None:

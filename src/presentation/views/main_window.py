@@ -153,8 +153,13 @@ class MainWindow(QMainWindow):
         self._setup_status_bar()
         self._connect_signals()
 
-        if self._settings is not None:
-            self._on_theme_changed_request(getattr(self._settings, "theme", "dark"))
+        # Apply the app-level theme unconditionally (defaults to dark if no
+        # settings/theme preference is available) — this is also what fixes
+        # unreadable QComboBox popups/QMenu/QTableWidget selection colors
+        # app-wide (Task 5/10), so it must never be skipped just because
+        # Settings wasn't wired up in a given construction context.
+        theme = getattr(self._settings, "theme", "dark") if self._settings is not None else "dark"
+        self._on_theme_changed_request(theme)
 
         logger.info("MainWindow initialized and displayed.")
 

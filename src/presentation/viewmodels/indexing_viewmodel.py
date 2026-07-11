@@ -50,8 +50,9 @@ class IndexingViewModel(QObject):
     # (state: str) — one of IndexingState constants
     state_changed = Signal(str)
 
-    # (indexed_count, skipped_count, total_count)
-    indexing_completed = Signal(int, int, int)
+    # ScanResult — the full new/modified/deleted/skipped breakdown
+    # (Task 2: Smart Re-index), not just a flat total.
+    indexing_completed = Signal(object)
 
     # (error_message: str)
     error_occurred = Signal(str)
@@ -61,6 +62,12 @@ class IndexingViewModel(QObject):
 
     # (message: str) — informational status line
     status_message = Signal(str)
+
+    # IndexedFolderState — emitted at startup (Task 1: Persistent Indexed
+    # Folder) if a previously-indexed folder was found, so the View can
+    # restore "Folder: X / Indexed Images: N / Status: Ready / Last
+    # Indexed: ..." without requiring the user to re-select or re-scan.
+    persisted_folder_loaded = Signal(object)
 
     def __init__(self, use_case: IndexImagesUseCase, parent: Optional[QObject] = None) -> None:
         """
@@ -112,6 +119,40 @@ class IndexingViewModel(QObject):
     def is_paused(self) -> bool:
         """True if the indexing thread is currently paused."""
         return self._state == IndexingState.PAUSED
+
+    @Slot()
+    def load_persisted_folder_state(self) -> None:
+        """
+        Restore the most recently indexed folder from persistent storage
+        (Task 1: Persistent Indexed Folder), if one exists. Intended to be
+        called once at startup (after the View has connected its signals),
+        so the Index page shows "Folder: X / Indexed Images: N / Status:
+        Ready / Last Indexed: ..." immediately, without the user needing
+        to re-select or re-scan a folder they already indexed in a
+        previous session.
+
+        No-op (does not emit anything) if this use case wasn't configured
+        with a folder repository, or if no folder has ever been indexed.
+        """
+        get_status = getattr(self._use_case, "get_last_indexed_folder_status", None)
+        if get_status is None:
+            logger.debug(
+                "Use case has no get_last_indexed_folder_status() — skipping folder restoration."
+            )
+            return
+
+        status = get_status()
+        if status is None:
+            logger.info("No persisted folder state found — Index page starts empty.")
+            return
+
+        self._selected_folder = Path(status.folder_path)
+        self._set_state(IndexingState.FINISHED)
+        logger.info(
+            f"Restored persisted folder state: {status.folder_path} "
+            f"({status.indexed_image_count} images, last indexed {status.last_indexed_at})"
+        )
+        self.persisted_folder_loaded.emit(status)
 
     # ── Public Slots (called by the View) ────────────────────────────────────
 
@@ -243,23 +284,35 @@ class IndexingViewModel(QObject):
 
         self.progress_changed.emit(processed, total, percent, filename, eta_string)
 
-    @Slot(int, int, bool)
-    def _on_indexing_finished(self, indexed: int, skipped: int, completed: bool) -> None:
+    @Slot(object)
+    def _on_indexing_finished(self, result) -> None:
         """
         Handle the indexing_finished signal from the worker.
 
         Args:
-            indexed: Number of new tiles successfully indexed.
-            skipped: Number of unchanged tiles skipped.
-            completed: True if indexing completed fully without cancellation.
+            result: The ScanResult from IndexImagesUseCase.scan_and_index_directory().
         """
-        if completed:
+        if result.is_completed:
             self._set_state(IndexingState.FINISHED)
-            summary = (
-                f"Indexing complete. "
-                f"Indexed: {indexed:,} new tiles, "
-                f"Skipped: {skipped:,} unchanged."
-            )
+
+            if not result.has_any_changes:
+                # Task 2: nothing to do — show a clear, reassuring message
+                # rather than a summary line of all zeros.
+                summary = "Everything is already indexed."
+            else:
+                parts = []
+                if result.new_count:
+                    parts.append(f"{result.new_count:,} new")
+                if result.modified_count:
+                    parts.append(f"{result.modified_count:,} modified")
+                if result.deleted_count:
+                    parts.append(f"{result.deleted_count:,} removed")
+                if result.skipped_count:
+                    parts.append(f"{result.skipped_count:,} unchanged")
+                summary = "Indexing complete — " + ", ".join(parts) + "."
+                if result.time_saved_seconds >= 1:
+                    summary += f" Saved ~{self._format_eta(result.time_saved_seconds)} by skipping unchanged files."
+
             self.status_message.emit(summary)
             logger.info(summary)
         else:
@@ -268,10 +321,10 @@ class IndexingViewModel(QObject):
             # path that reports completed=False).
             self._set_state(IndexingState.CANCELLED)
             self.status_message.emit(
-                f"Indexing cancelled. Indexed {indexed:,} tiles before stopping."
+                f"Indexing cancelled. Indexed {result.indexed_count:,} tiles before stopping."
             )
 
-        self.indexing_completed.emit(indexed, skipped, self._total_count)
+        self.indexing_completed.emit(result)
         self._worker = None
 
     @Slot(str)
