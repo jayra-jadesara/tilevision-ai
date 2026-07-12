@@ -31,6 +31,8 @@ from PySide6.QtWidgets import (
     QScrollArea,
 )
 
+from src.theme.theme_manager import get_palette
+
 logger = logging.getLogger("tilevision.presentation.views.dashboard_view")
 
 
@@ -88,9 +90,11 @@ class DashboardView(QWidget):
         on_go_to_duplicates: Optional[Callable[[], None]] = None,
         on_go_to_settings: Optional[Callable[[], None]] = None,
         on_repeat_search: Optional[Callable[[str], None]] = None,
+        theme: str = "dark",
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
+        self._theme = theme
         self._catalog_count_provider = catalog_count_provider
         self._watched_folder_count_provider = watched_folder_count_provider
         self._indexed_folder_count_provider = indexed_folder_count_provider
@@ -367,35 +371,41 @@ class DashboardView(QWidget):
             return f"{self._license_details.get('license_type', 'Licensed')} — {self._license_details.get('customer_name', '')}"
         return "Unlicensed"
 
+    def set_theme(self, theme: str) -> None:
+        """Re-skin this view for a newly-selected theme (called by MainWindow)."""
+        self._theme = theme
+        self._apply_styles()
+
     def _apply_styles(self) -> None:
+        p = get_palette(self._theme)
         self.setStyleSheet(
-            """
-            #PageTitle { font-size: 20px; font-weight: 700; color: #E8EAF6; }
-            #PageSubtitle { font-size: 12px; color: #8A8FA3; }
-            #SectionLabel { font-size: 13px; font-weight: 700; color: #ACB0C4; margin-top: 4px; }
-            #StatCard {
-                background-color: #232634; border: 1px solid #2E3243; border-radius: 10px;
+            f"""
+            #PageTitle {{ font-size: 20px; font-weight: 700; color: {p['text_primary']}; }}
+            #PageSubtitle {{ font-size: 12px; color: {p['text_muted']}; }}
+            #SectionLabel {{ font-size: 13px; font-weight: 700; color: {p['text_secondary']}; margin-top: 4px; }}
+            #StatCard {{
+                background-color: {p['bg_panel']}; border: 1px solid {p['border']}; border-radius: 10px;
                 padding: 14px; min-width: 140px; min-height: 80px;
-            }
-            #StatIcon { font-size: 16px; }
-            #StatValue { font-size: 20px; font-weight: 700; color: #E8EAF6; }
-            #StatCaption { font-size: 11px; color: #8A8FA3; }
-            #ActionButton {
-                background-color: #2D3250; border: 1px solid #3D4166; border-radius: 8px;
-                padding: 14px 18px; color: #E8EAF6; font-size: 13px; font-weight: 600;
-            }
-            #ActionButton:hover:enabled { background-color: #3D4166; }
-            #ActionButton:disabled { color: #55596B; }
-            #ListPanel {
-                background-color: #1E212C; border: 1px solid #2E3243; border-radius: 10px;
+            }}
+            #StatIcon {{ font-size: 16px; }}
+            #StatValue {{ font-size: 20px; font-weight: 700; color: {p['text_primary']}; }}
+            #StatCaption {{ font-size: 11px; color: {p['text_muted']}; }}
+            #ActionButton {{
+                background-color: {p['accent']}; border: 1px solid {p['accent_hover']}; border-radius: 8px;
+                padding: 14px 18px; color: white; font-size: 13px; font-weight: 600;
+            }}
+            #ActionButton:hover:enabled {{ background-color: {p['accent_hover']}; }}
+            #ActionButton:disabled {{ background-color: {p['button_bg']}; color: {p['text_faint']}; border-color: {p['border']}; }}
+            #ListPanel {{
+                background-color: {p['bg_panel_alt']}; border: 1px solid {p['border']}; border-radius: 10px;
                 padding: 14px;
-            }
-            #ActivityRow { color: #C7CAD9; font-size: 12px; padding: 3px 0; }
-            #EmptyListLabel { color: #55596B; font-size: 12px; font-style: italic; }
-            #SearchHistoryRow {
-                text-align: left; background-color: #262B3D; border: 1px solid #2E3243;
-                border-radius: 6px; padding: 6px 10px; color: #D6D9E8; font-size: 12px;
-            }
-            #SearchHistoryRow:hover { background-color: #333852; }
+            }}
+            #ActivityRow {{ color: {p['text_secondary']}; font-size: 12px; padding: 3px 0; }}
+            #EmptyListLabel {{ color: {p['text_faint']}; font-size: 12px; font-style: italic; }}
+            #SearchHistoryRow {{
+                text-align: left; background-color: {p['row_alt']}; border: 1px solid {p['border']};
+                border-radius: 6px; padding: 6px 10px; color: {p['text_secondary']}; font-size: 12px;
+            }}
+            #SearchHistoryRow:hover {{ background-color: {p['button_hover']}; }}
             """
         )

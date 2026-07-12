@@ -23,6 +23,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.theme.theme_manager import get_palette
+
 logger = logging.getLogger("tilevision.presentation.views.crop_dialog")
 
 _DISPLAY_MAX_SIZE = 640  # max width/height for the crop preview canvas
@@ -128,10 +130,11 @@ class CropDialog(QDialog):
             cropped_path = dialog.cropped_image_path  # feed this into search
     """
 
-    def __init__(self, image_path: str, parent=None) -> None:
+    def __init__(self, image_path: str, parent=None, theme: str = "dark") -> None:
         super().__init__(parent)
         self._source_path = Path(image_path)
         self._cropped_image_path: Optional[str] = None
+        self._theme = theme
 
         self.setWindowTitle("Crop & Search — Select a Region")
         self._setup_ui()
@@ -216,18 +219,19 @@ class CropDialog(QDialog):
             logger.error(f"Failed to produce cropped image: {e}")
 
     def _apply_styles(self) -> None:
+        p = get_palette(self._theme)
         self.setStyleSheet(
-            """
-            QDialog { background-color: #1A1D26; }
-            QWidget { color: #E8EAF6; }
-            #Instructions { color: #8A8FA3; font-size: 12px; }
-            QPushButton {
-                background-color: #2A2E3D; border: 1px solid #3A3F52; border-radius: 6px;
-                padding: 8px 14px; color: #C7CAD9;
-            }
-            QPushButton:hover:enabled { background-color: #333852; }
-            #PrimaryButton { background-color: #3949AB; color: white; font-weight: 600; }
-            #PrimaryButton:hover:enabled { background-color: #5C6BC0; }
-            #PrimaryButton:disabled { background-color: #2A2E3D; color: #55596B; }
+            f"""
+            QDialog {{ background-color: {p['bg_app']}; }}
+            QWidget {{ color: {p['text_primary']}; }}
+            #Instructions {{ color: {p['text_muted']}; font-size: 12px; }}
+            QPushButton {{
+                background-color: {p['button_bg']}; border: 1px solid {p['border_strong']}; border-radius: 6px;
+                padding: 8px 14px; color: {p['text_secondary']};
+            }}
+            QPushButton:hover:enabled {{ background-color: {p['button_hover']}; }}
+            #PrimaryButton {{ background-color: {p['accent']}; color: white; font-weight: 600; }}
+            #PrimaryButton:hover:enabled {{ background-color: {p['accent_hover']}; }}
+            #PrimaryButton:disabled {{ background-color: {p['button_bg']}; color: {p['text_faint']}; }}
             """
         )

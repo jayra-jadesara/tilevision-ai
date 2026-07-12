@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 from src.core.models import TileImage
 from src.core.use_cases.find_duplicates import FindDuplicatesUseCase
 from src.presentation.workers.duplicates_worker import DuplicatesWorker
+from src.theme.theme_manager import get_palette
 
 logger = logging.getLogger("tilevision.presentation.views.duplicates_view")
 
@@ -186,10 +187,11 @@ class _DuplicateGroupWidget(QFrame):
 class DuplicatesView(QDialog):
     """Modal dialog for scanning and reviewing duplicate/near-duplicate tiles."""
 
-    def __init__(self, use_case: FindDuplicatesUseCase, parent=None) -> None:
+    def __init__(self, use_case: FindDuplicatesUseCase, parent=None, theme: str = "dark") -> None:
         super().__init__(parent)
         self._use_case = use_case
         self._worker: DuplicatesWorker = None
+        self._theme = theme
 
         self.setWindowTitle("Duplicate Detection")
         self.resize(800, 620)
@@ -292,32 +294,33 @@ class DuplicatesView(QDialog):
                 item.widget().deleteLater()
 
     def _apply_styles(self) -> None:
+        p = get_palette(self._theme)
         self.setStyleSheet(
-            """
-            QDialog { background-color: #1A1D26; }
-            QWidget { color: #E8EAF6; }
-            #Title { font-size: 16px; font-weight: 700; }
-            #StatusLabel { color: #8A8FA3; font-size: 12px; }
-            #ScanButton { background-color: #3949AB; border-radius: 6px; padding: 8px 16px; font-weight: 600; }
-            #ScanButton:hover:enabled { background-color: #5C6BC0; }
-            #ScanButton:disabled { background-color: #2A2E3D; color: #55596B; }
-            #DuplicateGroupFrame {
-                background-color: #232634; border: 1px solid #2E3243; border-radius: 8px;
+            f"""
+            QDialog {{ background-color: {p['bg_app']}; }}
+            QWidget {{ color: {p['text_primary']}; }}
+            #Title {{ font-size: 16px; font-weight: 700; }}
+            #StatusLabel {{ color: {p['text_muted']}; font-size: 12px; }}
+            #ScanButton {{ background-color: {p['accent']}; border-radius: 6px; padding: 8px 16px; font-weight: 600; }}
+            #ScanButton:hover:enabled {{ background-color: {p['accent_hover']}; }}
+            #ScanButton:disabled {{ background-color: {p['button_bg']}; color: {p['text_faint']}; }}
+            #DuplicateGroupFrame {{
+                background-color: {p['bg_panel']}; border: 1px solid {p['border']}; border-radius: 8px;
                 padding: 10px; margin-bottom: 8px;
-            }
-            #GroupHeader { font-weight: 600; color: #ACB0C4; font-size: 12px; }
-            #TileCard { background-color: #1E212C; border-radius: 6px; padding: 6px; }
-            #TileCardName { font-size: 10px; color: #8A8FA3; }
-            #DuplicateBadgeExact {
-                background-color: #1B4332; color: #6EE7B7; border-radius: 4px;
+            }}
+            #GroupHeader {{ font-weight: 600; color: {p['text_secondary']}; font-size: 12px; }}
+            #TileCard {{ background-color: {p['bg_panel_alt']}; border-radius: 6px; padding: 6px; }}
+            #TileCardName {{ font-size: 10px; color: {p['text_muted']}; }}
+            #DuplicateBadgeExact {{
+                background-color: {p['success_bg']}; color: {p['success_text']}; border-radius: 4px;
                 font-size: 10px; font-weight: 600; padding: 2px;
-            }
-            #DuplicateBadgeNear {
-                background-color: #453410; color: #FBBF24; border-radius: 4px;
+            }}
+            #DuplicateBadgeNear {{
+                background-color: {p['warning_bg']}; color: {p['warning_text']}; border-radius: 4px;
                 font-size: 10px; font-weight: 600; padding: 2px;
-            }
-            #DeleteButton { background-color: #4A1A1A; }
-            #DeleteButton:hover { background-color: #7A2828; }
-            QRadioButton { font-size: 12px; }
+            }}
+            #DeleteButton {{ background-color: {p['danger_bg']}; }}
+            #DeleteButton:hover {{ background-color: {p['danger_hover']}; }}
+            QRadioButton {{ font-size: 12px; }}
             """
         )

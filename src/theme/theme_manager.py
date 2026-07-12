@@ -18,20 +18,13 @@ Covers, app-wide (Tasks 5 & 10 — dark theme readability fixes):
   - QScrollBar (dark-styled scroll handles instead of the native default,
     which looks out of place against a dark background).
 
-SCOPE NOTE: Several views (SearchView, DuplicatesView, CropDialog,
-IndexingView) apply their own hardcoded dark-palette QSS directly via
-setStyleSheet() on themselves — Qt gives explicit widget-level
-stylesheets precedence over inherited/application-level ones for any
-property they set. This means the app-level theme switch here reliably
-re-skins the MainWindow chrome (sidebar, status bar, page background)
-plus the combo/menu/table/scrollbar fixes above (those were never styled
-locally anywhere, so there's no per-widget override to conflict with),
-but a full re-skin of the *rest* of every already-styled child view for
-light mode is a larger follow-up task (each view would need its own
-theme-aware _apply_styles(theme) variant). This is a known, deliberate
-scope boundary rather than an oversight — documented here so it's easy
-to finish later without re-deriving why the chrome/dropdowns/menus match
-the selected theme but some view backgrounds don't yet.
+SCOPE NOTE (historical — now fixed): earlier versions of this app had
+every view hardcoding its own dark-only colors directly, so switching
+themes only ever re-skinned the MainWindow chrome plus the shared
+combo/menu/table/scrollbar fixes above, not each view's own panels/cards.
+See get_palette() below — every view now builds its stylesheet from the
+shared palette and exposes set_theme() so MainWindow can propagate a
+theme change to every open view immediately.
 """
 
 _SHARED_COMPONENT_QSS_TEMPLATE = """
@@ -171,3 +164,90 @@ def get_app_stylesheet(theme: str) -> str:
         A QSS string, applied via QApplication.setStyleSheet().
     """
     return LIGHT_APP_QSS if theme == "light" else DARK_APP_QSS
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Shared color palette (fixes "theme not worked properly")
+#
+# Every view previously hardcoded its own dark-only hex colors directly in
+# a local setStyleSheet() call. Switching themes only ever re-skinned the
+# MainWindow chrome + combo/menu/table/scrollbar (see SCOPE NOTE above) —
+# every view's own panels, cards, and text stayed dark regardless of the
+# selected theme, which is what made the light theme look broken/half-
+# applied rather than genuinely not working at all.
+#
+# Fix: every view now pulls its colors from get_palette(theme) instead of
+# hardcoding hex values, and exposes a set_theme(theme) method that rebuilds
+# its stylesheet from the new palette. MainWindow calls set_theme() on every
+# currently-open view when the theme changes, and passes the current theme
+# to any dialog constructed afterward (Duplicates, Crop, Help), so newly
+# opened dialogs also match immediately.
+# ─────────────────────────────────────────────────────────────────────────
+
+_DARK_PALETTE = {
+    "bg_app": "#1A1D26",
+    "bg_panel": "#232634",
+    "bg_panel_alt": "#1E212C",
+    "bg_sidebar": "#14161F",
+    "bg_input": "#232634",
+    "text_primary": "#E8EAF6",
+    "text_secondary": "#ACB0C4",
+    "text_muted": "#8A8FA3",
+    "text_faint": "#55596B",
+    "border": "#2E3243",
+    "border_strong": "#3A3F52",
+    "accent": "#3949AB",
+    "accent_hover": "#5C6BC0",
+    "accent_text": "#7C83D3",
+    "button_bg": "#2A2E3D",
+    "button_hover": "#333852",
+    "success_bg": "#1B4332",
+    "success_text": "#6EE7B7",
+    "warning_bg": "#453410",
+    "warning_text": "#FBBF24",
+    "danger_bg": "#4A1A1A",
+    "danger_hover": "#7A2828",
+    "row_alt": "#262B3D",
+}
+
+_LIGHT_PALETTE = {
+    "bg_app": "#F5F6FA",
+    "bg_panel": "#FFFFFF",
+    "bg_panel_alt": "#F7F8FC",
+    "bg_sidebar": "#FFFFFF",
+    "bg_input": "#FFFFFF",
+    "text_primary": "#1E212C",
+    "text_secondary": "#3F4358",
+    "text_muted": "#5A5F73",
+    "text_faint": "#9297A8",
+    "border": "#E0E2EC",
+    "border_strong": "#C7CAD9",
+    "accent": "#3949AB",
+    "accent_hover": "#5C6BC0",
+    "accent_text": "#3949AB",
+    "button_bg": "#EEF0F7",
+    "button_hover": "#E0E4F2",
+    "success_bg": "#DCFCE7",
+    "success_text": "#15803D",
+    "warning_bg": "#FEF3C7",
+    "warning_text": "#B45309",
+    "danger_bg": "#FEE2E2",
+    "danger_hover": "#FCA5A5",
+    "row_alt": "#F5F6FB",
+}
+
+
+def get_palette(theme: str) -> dict:
+    """
+    Return the shared named-color palette for a theme, for views to build
+    their own stylesheets from.
+
+    Args:
+        theme: "dark" or "light". Any other value falls back to "dark".
+
+    Returns:
+        A dict of semantic color name -> hex string. Keys are stable
+        across both themes so view code never branches on theme itself,
+        only on which palette dict it was given.
+    """
+    return dict(_LIGHT_PALETTE if theme == "light" else _DARK_PALETTE)

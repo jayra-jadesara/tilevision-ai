@@ -47,6 +47,7 @@ from PySide6.QtWidgets import (
 from src.core.models import SearchResult
 from src.presentation.viewmodels.search_viewmodel import SearchViewModel, SearchState
 from src.presentation.views.crop_dialog import CropDialog
+from src.theme.theme_manager import get_palette
 
 logger = logging.getLogger("tilevision.presentation.views.search_view")
 
@@ -188,10 +189,11 @@ class _ResultPreviewPanel(QWidget):
     than constructing a new dialog per click.
     """
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, theme: str = "dark") -> None:
         super().__init__(parent, Qt.WindowType.Tool)
         self.setWindowTitle("Tile Preview")
         self.setMinimumSize(360, 420)
+        self._theme = theme
         self._setup_ui()
         self._apply_styles()
 
@@ -213,6 +215,7 @@ class _ResultPreviewPanel(QWidget):
         layout.addStretch()
 
     def show_result(self, result: SearchResult) -> None:
+        p = get_palette(self._theme)
         tile = result.tile
         pixmap = QPixmap(tile.file_path)
         if pixmap.isNull():
@@ -229,18 +232,24 @@ class _ResultPreviewPanel(QWidget):
             f"Product Code: {tile.product_code or '—'}<br>"
             f"Brand: {tile.brand or '—'}<br>"
             f"Category: {tile.category or '—'}<br>"
-            f"<span style='color:#8A8FA3; font-size:10px;'>{tile.file_path}</span>"
+            f"<span style='color:{p['text_muted']}; font-size:10px;'>{tile.file_path}</span>"
         )
         self.show()
         self.raise_()
         self.activateWindow()
 
+    def set_theme(self, theme: str) -> None:
+        """Re-skin this panel for a newly-selected theme."""
+        self._theme = theme
+        self._apply_styles()
+
     def _apply_styles(self) -> None:
+        p = get_palette(self._theme)
         self.setStyleSheet(
-            """
-            QWidget { background-color: #1E212C; color: #E8EAF6; }
-            #PreviewImage { background-color: #14161F; border-radius: 8px; }
-            #PreviewDetails { font-size: 12px; line-height: 1.5; }
+            f"""
+            QWidget {{ background-color: {p['bg_panel_alt']}; color: {p['text_primary']}; }}
+            #PreviewImage {{ background-color: {p['bg_sidebar']}; border-radius: 8px; }}
+            #PreviewDetails {{ font-size: 12px; line-height: 1.5; }}
             """
         )
 
@@ -252,19 +261,23 @@ class SearchView(QWidget):
     Connects to a SearchViewModel instance to drive all state and logic.
     """
 
-    def __init__(self, viewmodel: SearchViewModel, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self, viewmodel: SearchViewModel, theme: str = "dark", parent: Optional[QWidget] = None
+    ) -> None:
         """
         Initialize the SearchView.
 
         Args:
             viewmodel: The bound SearchViewModel instance.
+            theme: Initial theme ("dark"/"light") to render with.
             parent: Optional Qt parent widget.
         """
         super().__init__(parent)
+        self._theme = theme
         self._viewmodel = viewmodel
         self._current_results: List[SearchResult] = []
         self._current_query_image_path: Optional[str] = None
-        self._preview_panel = _ResultPreviewPanel(self)
+        self._preview_panel = _ResultPreviewPanel(self, theme=theme)
         self._search_animation_timer = QTimer(self)
         self._search_animation_timer.setInterval(400)
         self._search_animation_timer.timeout.connect(self._tick_searching_animation)
@@ -505,7 +518,7 @@ class SearchView(QWidget):
     def _on_crop_clicked(self) -> None:
         if not self._current_query_image_path:
             return
-        dialog = CropDialog(self._current_query_image_path, parent=self)
+        dialog = CropDialog(self._current_query_image_path, parent=self, theme=self._theme)
         if dialog.exec() == dialog.DialogCode.Accepted and dialog.cropped_image_path:
             logger.info(f"Searching with cropped region: {dialog.cropped_image_path}")
             self._viewmodel.search_by_image(dialog.cropped_image_path)
@@ -591,7 +604,7 @@ class SearchView(QWidget):
         # search scenario (WhatsApp photo, phone snapshot) where the user
         # usually wants "which exact tile is this" first, with the rest as
         # fallback options if the best match isn't quite right.
-        best_match_brush = QColor("#3B4270")
+        best_match_brush = QColor(get_palette(self._theme)["accent_hover"])
 
         for row, result in enumerate(results):
             tile = result.tile
@@ -686,75 +699,82 @@ class SearchView(QWidget):
 
     # ── Styling ──────────────────────────────────────────────────────────
 
-    def _apply_styles(self) -> None:
-        self.setStyleSheet(
-            """
-            #PageTitle { font-size: 20px; font-weight: 700; color: #E8EAF6; }
-            #PageSubtitle { font-size: 12px; color: #8A8FA3; }
+    def set_theme(self, theme: str) -> None:
+        """Re-skin this view (and its preview panel) for a newly-selected theme."""
+        self._theme = theme
+        self._preview_panel.set_theme(theme)
+        self._apply_styles()
 
-            #FilterLabel { color: #8A8FA3; font-size: 12px; font-weight: 600; }
-            #FilterCombo {
-                background-color: #232634;
-                color: #D6D9E8;
-                border: 1px solid #3A3F52;
+    def _apply_styles(self) -> None:
+        p = get_palette(self._theme)
+        self.setStyleSheet(
+            f"""
+            #PageTitle {{ font-size: 20px; font-weight: 700; color: {p['text_primary']}; }}
+            #PageSubtitle {{ font-size: 12px; color: {p['text_muted']}; }}
+
+            #FilterLabel {{ color: {p['text_muted']}; font-size: 12px; font-weight: 600; }}
+            #FilterCombo {{
+                background-color: {p['bg_input']};
+                color: {p['text_secondary']};
+                border: 1px solid {p['border_strong']};
                 border-radius: 6px;
                 padding: 4px 8px;
                 min-width: 110px;
                 font-size: 12px;
-            }
-            #FilterCombo:hover { border-color: #5C6BC0; }
+            }}
+            #FilterCombo:hover {{ border-color: {p['accent_hover']}; }}
 
-            #DropZone {
-                background-color: #232634;
-                border: 2px dashed #3A3F52;
+            #DropZone {{
+                background-color: {p['bg_panel']};
+                border: 2px dashed {p['border_strong']};
                 border-radius: 10px;
-            }
-            #DropZone[dragActive="true"] {
-                border: 2px dashed #5C6BC0;
-                background-color: #262B3D;
-            }
-            #DropZoneIcon { font-size: 36px; }
-            #DropZoneTitle { font-size: 14px; font-weight: 600; color: #E8EAF6; }
-            #DropZoneSubtitle { font-size: 11px; color: #8A8FA3; }
+            }}
+            #DropZone[dragActive="true"] {{
+                border: 2px dashed {p['accent_hover']};
+                background-color: {p['row_alt']};
+            }}
+            #DropZoneIcon {{ font-size: 36px; }}
+            #DropZoneTitle {{ font-size: 14px; font-weight: 600; color: {p['text_primary']}; }}
+            #DropZoneSubtitle {{ font-size: 11px; color: {p['text_muted']}; }}
 
-            #SecondaryButton {
-                background-color: #2A2E3D;
-                color: #C7CAD9;
-                border: 1px solid #3A3F52;
+            #SecondaryButton {{
+                background-color: {p['button_bg']};
+                color: {p['text_secondary']};
+                border: 1px solid {p['border_strong']};
                 border-radius: 6px;
                 padding: 8px 14px;
                 font-size: 12px;
-            }
-            #SecondaryButton:hover:enabled { background-color: #333852; }
-            #SecondaryButton:disabled { color: #55596B; }
+            }}
+            #SecondaryButton:hover:enabled {{ background-color: {p['button_hover']}; }}
+            #SecondaryButton:disabled {{ color: {p['text_faint']}; }}
 
-            #ResultsTable {
-                background-color: #1E212C;
-                alternate-background-color: #232634;
-                gridline-color: #2E3243;
-                color: #D6D9E8;
-                border: 1px solid #2E3243;
+            #ResultsTable {{
+                background-color: {p['bg_panel_alt']};
+                alternate-background-color: {p['bg_panel']};
+                gridline-color: {p['border']};
+                color: {p['text_secondary']};
+                border: 1px solid {p['border']};
                 border-radius: 8px;
-            }
-            #ResultsTable::item:selected { background-color: #3B4270; }
-            QHeaderView::section {
-                background-color: #262B3D;
-                color: #ACB0C4;
+            }}
+            #ResultsTable::item:selected {{ background-color: {p['accent_hover']}; }}
+            QHeaderView::section {{
+                background-color: {p['row_alt']};
+                color: {p['text_secondary']};
                 padding: 6px;
                 border: none;
-                border-bottom: 1px solid #2E3243;
+                border-bottom: 1px solid {p['border']};
                 font-weight: 600;
                 font-size: 11px;
-            }
+            }}
 
-            #EmptyStateIcon { font-size: 48px; padding-bottom: 8px; }
-            #EmptyStateLabel { color: #6C7086; font-size: 13px; padding: 8px 40px 40px 40px; }
-            #SearchStatusLabel { color: #8A8FA3; font-size: 12px; }
-            #SearchStatsLabel { color: #7C83D3; font-size: 12px; font-weight: 600; }
-            #SearchProgressBar {
-                background-color: #232634;
+            #EmptyStateIcon {{ font-size: 48px; padding-bottom: 8px; }}
+            #EmptyStateLabel {{ color: {p['text_faint']}; font-size: 13px; padding: 8px 40px 40px 40px; }}
+            #SearchStatusLabel {{ color: {p['text_muted']}; font-size: 12px; }}
+            #SearchStatsLabel {{ color: {p['accent_text']}; font-size: 12px; font-weight: 600; }}
+            #SearchProgressBar {{
+                background-color: {p['bg_panel']};
                 border-radius: 2px;
-            }
-            #SearchProgressBar::chunk { background-color: #5C6BC0; }
+            }}
+            #SearchProgressBar::chunk {{ background-color: {p['accent_hover']}; }}
             """
         )

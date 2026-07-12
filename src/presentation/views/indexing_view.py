@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.presentation.viewmodels.indexing_viewmodel import IndexingViewModel, IndexingState
+from src.theme.theme_manager import get_palette
 
 logger = logging.getLogger("tilevision.presentation.views.indexing_view")
 
@@ -51,15 +52,19 @@ class IndexingView(QWidget):
     Connects to an IndexingViewModel instance to drive all state and logic.
     """
 
-    def __init__(self, viewmodel: IndexingViewModel, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self, viewmodel: IndexingViewModel, theme: str = "dark", parent: Optional[QWidget] = None
+    ) -> None:
         """
         Initialize the IndexingView.
 
         Args:
             viewmodel: The bound IndexingViewModel instance.
+            theme: Initial theme ("dark"/"light") to render with.
             parent: Optional Qt parent widget.
         """
         super().__init__(parent)
+        self._theme = theme
         self._viewmodel = viewmodel
         self._setup_ui()
         self._connect_signals()
@@ -577,129 +582,160 @@ class IndexingView(QWidget):
 
     # ── Styling ───────────────────────────────────────────────────────────────
 
+    def set_theme(self, theme: str) -> None:
+        """Re-skin this view for a newly-selected theme (called by MainWindow)."""
+        self._theme = theme
+        self._apply_styles()
+
     def _apply_styles(self) -> None:
-        """Apply QSS dark theme styles to this view and all child widgets."""
-        self.setStyleSheet("""
+        """Apply QSS theme styles to this view and all child widgets."""
+        p = get_palette(self._theme)
+        self.setStyleSheet(f"""
             /* ── Base ─────────────────────────────────────────────────────── */
-            #IndexingView {
-                background-color: #1A1D26;
-            }
+            #IndexingView {{
+                background-color: {p['bg_app']};
+            }}
 
             /* ── Header ───────────────────────────────────────────────────── */
-            #PageTitle {
-                color: #E8EAF6;
+            #PageTitle {{
+                color: {p['text_primary']};
                 font-size: 20px;
                 font-weight: bold;
-            }
-            #PageSubtitle {
-                color: #9E9E9E;
+            }}
+            #PageSubtitle {{
+                color: {p['text_muted']};
                 font-size: 12px;
-            }
-            #Separator {
+            }}
+            #Separator {{
                 border: none;
-                border-top: 1px solid #2D3250;
+                border-top: 1px solid {p['border']};
                 margin: 4px 0;
-            }
+            }}
 
             /* ── Section Groups ───────────────────────────────────────────── */
-            QGroupBox {
-                background-color: #1E2130;
-                border: 1px solid #2D3250;
+            QGroupBox {{
+                background-color: {p['bg_panel_alt']};
+                border: 1px solid {p['border']};
                 border-radius: 8px;
                 margin-top: 12px;
                 font-size: 13px;
-                color: #B0BEC5;
+                color: {p['text_secondary']};
                 font-weight: 600;
                 padding-top: 6px;
-            }
-            QGroupBox::title {
+            }}
+            QGroupBox::title {{
                 subcontrol-origin: margin;
                 subcontrol-position: top left;
                 padding: 0 8px;
                 left: 12px;
                 top: -6px;
-                color: #7C83D3;
-            }
+                color: {p['accent_text']};
+            }}
 
             /* ── Folder Path Input ────────────────────────────────────────── */
-            #FolderPathEdit {
-                background-color: #252837;
-                border: 1px solid #3D4166;
+            #FolderPathEdit {{
+                background-color: {p['bg_input']};
+                border: 1px solid {p['border_strong']};
                 border-radius: 6px;
-                color: #E8EAF6;
+                color: {p['text_primary']};
                 font-size: 13px;
                 padding: 6px 10px;
-            }
-            #FolderPathEdit:read-only {
-                color: #B0BEC5;
-            }
+            }}
+            #FolderPathEdit:read-only {{
+                color: {p['text_secondary']};
+            }}
+            #FolderInfoLabel {{
+                color: {p['text_muted']};
+                font-size: 12px;
+            }}
 
             /* ── Browse Button ────────────────────────────────────────────── */
-            #BrowseButton {
-                background-color: #3D4166;
-                border: 1px solid #5C6BC0;
+            #BrowseButton {{
+                background-color: {p['border_strong']};
+                border: 1px solid {p['accent_hover']};
                 border-radius: 6px;
-                color: #E8EAF6;
+                color: {p['text_primary']};
                 font-size: 13px;
                 font-weight: 600;
                 padding: 6px 14px;
-            }
-            #BrowseButton:hover {
-                background-color: #5C6BC0;
-                border-color: #7986CB;
-            }
-            #BrowseButton:pressed {
-                background-color: #3949AB;
-            }
+            }}
+            #BrowseButton:hover {{
+                background-color: {p['accent_hover']};
+                border-color: {p['accent_hover']};
+                color: white;
+            }}
+            #BrowseButton:pressed {{
+                background-color: {p['accent']};
+            }}
 
             /* ── Progress Bar ─────────────────────────────────────────────── */
-            #IndexingProgressBar {
-                background-color: #252837;
-                border: 1px solid #3D4166;
+            #IndexingProgressBar {{
+                background-color: {p['bg_input']};
+                border: 1px solid {p['border_strong']};
                 border-radius: 4px;
                 text-align: center;
-                color: #E8EAF6;
+                color: {p['text_primary']};
                 font-size: 12px;
-            }
-            #IndexingProgressBar::chunk {
+            }}
+            #IndexingProgressBar::chunk {{
                 background: qlineargradient(
                     x1: 0, y1: 0, x2: 1, y2: 0,
                     stop: 0 #5C6BC0,
                     stop: 1 #7C4DFF
                 );
                 border-radius: 4px;
-            }
+            }}
 
             /* ── Stat Labels ──────────────────────────────────────────────── */
-            #StatLabel, #CurrentFileLabel {
-                color: #B0BEC5;
+            /* Semantic status colors (green=new/success, amber=skipped,
+               blue=info, orange=pause, red=cancel/danger) are kept
+               consistent across themes on purpose — they're recognized by
+               hue, not by matching the surrounding chrome. */
+            #StatLabel, #CurrentFileLabel {{
+                color: {p['text_secondary']};
                 font-size: 12px;
-            }
-            #StatIcon {
+            }}
+            #StatIcon {{
                 font-size: 22px;
-            }
-            #IndexedStatValue {
-                color: #69F0AE;
-                font-size: 22px;
-                font-weight: bold;
-            }
-            #SkippedStatValue {
-                color: #FFD740;
+            }}
+            #IndexedStatValue {{
+                color: #2FB574;
                 font-size: 22px;
                 font-weight: bold;
-            }
-            #TotalStatValue {
-                color: #82B1FF;
+            }}
+            #ModifiedStatValue {{
+                color: #4C8DFF;
                 font-size: 22px;
                 font-weight: bold;
-            }
-            #StatDesc {
-                color: #757575;
+            }}
+            #DeletedStatValue {{
+                color: #EF5350;
+                font-size: 22px;
+                font-weight: bold;
+            }}
+            #SkippedStatValue {{
+                color: #D4A017;
+                font-size: 22px;
+                font-weight: bold;
+            }}
+            #TotalStatValue {{
+                color: #4C8DFF;
+                font-size: 22px;
+                font-weight: bold;
+            }}
+            #StatDesc {{
+                color: {p['text_muted']};
                 font-size: 11px;
-            }
+            }}
+            #TimeSavedLabel {{
+                color: {p['text_secondary']};
+                font-size: 12px;
+                font-weight: 600;
+                padding-top: 4px;
+            }}
 
             /* ── Start Button ─────────────────────────────────────────────── */
-            #StartButton {
+            #StartButton {{
                 background: qlineargradient(
                     x1: 0, y1: 0, x2: 1, y2: 0,
                     stop: 0 #3949AB,
@@ -710,89 +746,89 @@ class IndexingView(QWidget):
                 color: #FFFFFF;
                 font-size: 14px;
                 font-weight: bold;
-            }
-            #StartButton:hover {
+            }}
+            #StartButton:hover {{
                 background: qlineargradient(
                     x1: 0, y1: 0, x2: 1, y2: 0,
                     stop: 0 #5C6BC0,
                     stop: 1 #7986CB
                 );
-            }
-            #StartButton:pressed {
+            }}
+            #StartButton:pressed {{
                 background-color: #283593;
-            }
-            #StartButton:disabled {
-                background-color: #2D3250;
-                color: #546E7A;
-            }
+            }}
+            #StartButton:disabled {{
+                background-color: {p['button_bg']};
+                color: {p['text_faint']};
+            }}
 
             /* ── Pause Button ─────────────────────────────────────────────── */
-            #PauseButton {
-                background-color: #2D3250;
+            #PauseButton {{
+                background-color: {p['button_bg']};
                 border: 1px solid #FF9800;
                 border-radius: 8px;
                 color: #FF9800;
                 font-size: 13px;
                 font-weight: 600;
-            }
-            #PauseButton:hover {
+            }}
+            #PauseButton:hover {{
                 background-color: #FF9800;
-                color: #1A1D26;
-            }
-            #PauseButton:pressed {
+                color: {p['bg_app']};
+            }}
+            #PauseButton:pressed {{
                 background-color: #E65100;
                 color: #FFFFFF;
-            }
-            #PauseButton:disabled {
-                border-color: #37474F;
-                color: #546E7A;
-                background-color: #1E2130;
-            }
+            }}
+            #PauseButton:disabled {{
+                border-color: {p['border']};
+                color: {p['text_faint']};
+                background-color: {p['bg_panel_alt']};
+            }}
 
             /* ── Cancel Button ────────────────────────────────────────────── */
-            #CancelButton {
-                background-color: #2D3250;
+            #CancelButton {{
+                background-color: {p['button_bg']};
                 border: 1px solid #EF5350;
                 border-radius: 8px;
                 color: #EF5350;
                 font-size: 13px;
                 font-weight: 600;
-            }
-            #CancelButton:hover {
+            }}
+            #CancelButton:hover {{
                 background-color: #EF5350;
                 color: #FFFFFF;
-            }
-            #CancelButton:pressed {
+            }}
+            #CancelButton:pressed {{
                 background-color: #B71C1C;
-            }
-            #CancelButton:disabled {
-                border-color: #37474F;
-                color: #546E7A;
-                background-color: #1E2130;
-            }
+            }}
+            #CancelButton:disabled {{
+                border-color: {p['border']};
+                color: {p['text_faint']};
+                background-color: {p['bg_panel_alt']};
+            }}
 
             /* ── Status Log ───────────────────────────────────────────────── */
-            #StatusLog {
-                background-color: #12141E;
-                border: 1px solid #2D3250;
+            #StatusLog {{
+                background-color: {p['bg_sidebar']};
+                border: 1px solid {p['border']};
                 border-radius: 6px;
-                color: #B0BEC5;
+                color: {p['text_secondary']};
                 font-family: "Consolas", "Courier New", monospace;
                 font-size: 12px;
-                selection-background-color: #3D4166;
-            }
+                selection-background-color: {p['border_strong']};
+            }}
 
             /* ── Clear Log Button ─────────────────────────────────────────── */
-            #ClearLogButton {
+            #ClearLogButton {{
                 background-color: transparent;
-                border: 1px solid #3D4166;
+                border: 1px solid {p['border_strong']};
                 border-radius: 4px;
-                color: #757575;
+                color: {p['text_muted']};
                 font-size: 11px;
                 padding: 2px 10px;
-            }
-            #ClearLogButton:hover {
-                color: #B0BEC5;
-                border-color: #546E7A;
-            }
+            }}
+            #ClearLogButton:hover {{
+                color: {p['text_secondary']};
+                border-color: {p['text_faint']};
+            }}
         """)

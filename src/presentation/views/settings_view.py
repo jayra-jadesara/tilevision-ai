@@ -5,7 +5,8 @@ Lets the user configure:
   - Theme (dark/light), thumbnail size, number of search results.
   - Watched folders for auto-indexing (Feature 7) — add/remove.
   - Language (placeholder — English only for now).
-  - Database path, Backup Database.
+  - Backup Database (uses the database path internally; not shown to the
+    user — an absolute file path invites accidental navigation/deletion).
   - Rebuild FAISS Index (force re-embed everything).
   - Clear thumbnail Cache.
   - Export Logs.
@@ -26,7 +27,6 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QFileDialog,
-    QSpinBox,
     QComboBox,
     QGroupBox,
     QFormLayout,
@@ -38,6 +38,7 @@ from src.config.settings import AppSettings
 from src.core.use_cases.index_images import IndexImagesUseCase
 from src.presentation.workers.rebuild_index_worker import RebuildIndexWorker
 from src.utils.logger import get_log_file_path
+from src.theme.theme_manager import get_palette
 
 logger = logging.getLogger("tilevision.presentation.views.settings_view")
 
@@ -54,6 +55,7 @@ class SettingsView(QWidget):
         db_path_provider: Optional[Callable[[], Path]] = None,
         indexing_use_case: Optional[IndexImagesUseCase] = None,
         indexed_folders_provider: Optional[Callable[[], List[str]]] = None,
+        theme: str = "dark",
         parent: Optional[QWidget] = None,
     ) -> None:
         """
@@ -65,17 +67,19 @@ class SettingsView(QWidget):
             on_theme_changed: Callback invoked with the new theme name
                 ("dark"/"light") when the user changes the theme dropdown.
             db_path_provider: Callable returning the SQLite database's
-                absolute Path, for the Database Path display and Backup
-                Database action. If omitted, those controls are disabled.
+                absolute Path, used internally for the Backup Database
+                action. If omitted, that control is disabled.
             indexing_use_case: The shared IndexImagesUseCase, needed for
                 the "Rebuild FAISS Index" action (Task D). If omitted,
                 that button is disabled.
             indexed_folders_provider: Callable returning every folder
                 that's been indexed at least once — the set Rebuild FAISS
                 Index operates over. If omitted, Rebuild is disabled.
+            theme: Initial theme ("dark"/"light") to render with.
             parent: Optional Qt parent widget.
         """
         super().__init__(parent)
+        self._theme = theme
         self._settings = settings
         self._license_details = license_details or {}
         self._catalog_count_provider = catalog_count_provider
@@ -120,11 +124,6 @@ class SettingsView(QWidget):
             license_text = "🔓 Unlicensed"
         form.addRow("License:", QLabel(license_text))
 
-        form.addRow("Thumbnail Cache:", QLabel(self._settings.thumbnail_dir))
-
-        db_path_text = str(self._db_path_provider()) if self._db_path_provider else "—"
-        form.addRow("Database Path:", QLabel(db_path_text))
-
         return box
 
     def _build_watched_folders_section(self) -> QGroupBox:
@@ -163,19 +162,20 @@ class SettingsView(QWidget):
         box = QGroupBox("Preferences")
         form = QFormLayout(box)
 
-        self._top_k_spinbox = QSpinBox()
-        self._top_k_spinbox.setRange(1, 100)
-        self._top_k_spinbox.setValue(self._settings.top_k)
-        self._top_k_spinbox.valueChanged.connect(self._on_top_k_changed)
-        form.addRow("Search Results Shown:", self._top_k_spinbox)
-
-        self._thumbnail_size_spinbox = QSpinBox()
-        self._thumbnail_size_spinbox.setRange(64, 512)
-        self._thumbnail_size_spinbox.setSingleStep(32)
-        self._thumbnail_size_spinbox.setValue(getattr(self._settings, "thumbnail_size", 200))
-        self._thumbnail_size_spinbox.setSuffix(" px")
-        self._thumbnail_size_spinbox.valueChanged.connect(self._on_thumbnail_size_changed)
-        form.addRow("Thumbnail Size:", self._thumbnail_size_spinbox)
+        self._top_k_combo = QComboBox()
+        _RESULT_COUNT_OPTIONS = ["5", "10", "15", "20", "25"]
+        self._top_k_combo.addItems(_RESULT_COUNT_OPTIONS)
+        current_top_k = str(self._settings.top_k)
+        idx = self._top_k_combo.findText(current_top_k)
+        if idx < 0:
+            # Current value isn't one of the presets (e.g. from an older
+            # free-form setting) — add it so the dropdown still reflects
+            # the real, active value rather than silently changing it.
+            self._top_k_combo.insertItem(0, current_top_k)
+            idx = 0
+        self._top_k_combo.setCurrentIndex(idx)
+        self._top_k_combo.currentTextChanged.connect(self._on_top_k_changed)
+        form.addRow("Search Results Shown:", self._top_k_combo)
 
         self._theme_combo = QComboBox()
         self._theme_combo.addItems(["dark", "light"])
@@ -266,11 +266,11 @@ class SettingsView(QWidget):
 
     # ── Handlers: Preferences ────────────────────────────────────────────
 
-    def _on_top_k_changed(self, value: int) -> None:
-        self._settings.top_k = value
-
-    def _on_thumbnail_size_changed(self, value: int) -> None:
-        self._settings.thumbnail_size = value
+    def _on_top_k_changed(self, value: str) -> None:
+        try:
+            self._settings.top_k = int(value)
+        except ValueError:
+            logger.warning(f"Ignoring non-numeric Search Results Shown value: {value!r}")
 
     def _on_theme_selected(self, theme: str) -> None:
         self._settings.theme = theme
@@ -418,30 +418,36 @@ class SettingsView(QWidget):
         self._rebuild_worker = None
         QMessageBox.critical(self, "Rebuild Failed", error_message)
 
+    def set_theme(self, theme: str) -> None:
+        """Re-skin this view for a newly-selected theme (called by MainWindow)."""
+        self._theme = theme
+        self._apply_styles()
+
     def _apply_styles(self) -> None:
+        p = get_palette(self._theme)
         self.setStyleSheet(
-            """
-            #PageTitle { font-size: 20px; font-weight: 700; color: #E8EAF6; }
-            QGroupBox {
-                color: #E8EAF6; border: 1px solid #2D3250; border-radius: 8px;
+            f"""
+            #PageTitle {{ font-size: 20px; font-weight: 700; color: {p['text_primary']}; }}
+            QGroupBox {{
+                color: {p['text_primary']}; border: 1px solid {p['border']}; border-radius: 8px;
                 margin-top: 12px; padding-top: 12px; font-weight: 600;
-            }
-            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 6px; color: #7C83D3; }
-            QLabel { color: #C7CAD9; }
-            #SectionNote { color: #8A8FA3; font-size: 11px; }
-            #FoldersList {
-                background-color: #1E212C; border: 1px solid #2E3243; border-radius: 6px;
-                color: #D6D9E8; min-height: 100px;
-            }
-            QPushButton {
-                background-color: #2A2E3D; border: 1px solid #3A3F52; border-radius: 6px;
-                padding: 6px 12px; color: #C7CAD9;
-            }
-            QPushButton:hover:enabled { background-color: #333852; }
-            QPushButton:disabled { color: #55596B; }
-            QSpinBox, QComboBox {
-                background-color: #232634; border: 1px solid #3A3F52; border-radius: 6px;
-                padding: 4px 8px; color: #E8EAF6;
-            }
+            }}
+            QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 6px; color: {p['accent_text']}; }}
+            QLabel {{ color: {p['text_secondary']}; }}
+            #SectionNote {{ color: {p['text_muted']}; font-size: 11px; }}
+            #FoldersList {{
+                background-color: {p['bg_panel_alt']}; border: 1px solid {p['border']}; border-radius: 6px;
+                color: {p['text_secondary']}; min-height: 100px;
+            }}
+            QPushButton {{
+                background-color: {p['button_bg']}; border: 1px solid {p['border_strong']}; border-radius: 6px;
+                padding: 6px 12px; color: {p['text_secondary']};
+            }}
+            QPushButton:hover:enabled {{ background-color: {p['button_hover']}; }}
+            QPushButton:disabled {{ color: {p['text_faint']}; }}
+            QComboBox {{
+                background-color: {p['bg_input']}; border: 1px solid {p['border_strong']}; border-radius: 6px;
+                padding: 4px 8px; color: {p['text_primary']};
+            }}
             """
         )

@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtWidgets import QApplication, QMessageBox
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QIcon
 
 from src.utils.logger import setup_logger
 from src.config.settings import AppSettings
@@ -89,8 +89,12 @@ def build_application() -> int:
     # ── 3. Create QApplication (must happen before any QWidget is created) ────
     app = QApplication(sys.argv)
     app.setApplicationName("TileVision AI")
-    app.setOrganizationName("TileVision")
+    app.setOrganizationName("JD Software")
     app.setApplicationVersion("1.0.0")
+
+    app_icon_path = Path(__file__).resolve().parent / "resources" / "app_icon.ico"
+    if app_icon_path.exists():
+        app.setWindowIcon(QIcon(str(app_icon_path)))
 
     # Set modern default font
     default_font = QFont("Segoe UI", 10)

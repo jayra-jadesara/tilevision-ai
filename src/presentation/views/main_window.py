@@ -18,10 +18,11 @@ Design Decision:
 
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, List, Optional
 
 from PySide6.QtCore import Qt, Slot
-from PySide6.QtGui import QFont, QIcon, QAction, QCloseEvent
+from PySide6.QtGui import QFont, QIcon, QAction, QCloseEvent, QPixmap
 from PySide6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -49,6 +50,10 @@ from src.presentation.views.help_view import HelpView
 from src.theme.theme_manager import get_app_stylesheet
 
 logger = logging.getLogger("tilevision.presentation.views.main_window")
+
+_RESOURCES_DIR = Path(__file__).resolve().parents[2] / "resources"
+_LOGO_SMALL_PATH = _RESOURCES_DIR / "logo_small.png"
+_APP_ICON_PATH = _RESOURCES_DIR / "app_icon.ico"
 
 
 @dataclass
@@ -182,8 +187,11 @@ class MainWindow(QMainWindow):
         self._db_path_provider = db_path_provider
         self._indexing_use_case = indexing_use_case
         self._indexed_folders_provider = indexed_folders_provider
+        self._current_theme = getattr(self._settings, "theme", "dark") if self._settings is not None else "dark"
 
         self.setWindowTitle("TileVision AI — Visual Tile Search")
+        if _APP_ICON_PATH.exists():
+            self.setWindowIcon(QIcon(str(_APP_ICON_PATH)))
         self.setMinimumSize(1100, 760)
         self.resize(1280, 800)
 
@@ -197,8 +205,7 @@ class MainWindow(QMainWindow):
         # unreadable QComboBox popups/QMenu/QTableWidget selection colors
         # app-wide (Task 5/10), so it must never be skipped just because
         # Settings wasn't wired up in a given construction context.
-        theme = getattr(self._settings, "theme", "dark") if self._settings is not None else "dark"
-        self._on_theme_changed_request(theme)
+        self._on_theme_changed_request(self._current_theme)
 
         logger.info("MainWindow initialized and displayed.")
 
@@ -230,11 +237,11 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(self._content_stack, stretch=1)
 
         # ── Add Views to Content Stack
-        self._indexing_view = IndexingView(self._indexing_viewmodel)
+        self._indexing_view = IndexingView(self._indexing_viewmodel, theme=self._current_theme)
         self._content_stack.addWidget(self._indexing_view)  # index 0
 
         if self._search_viewmodel is not None:
-            self._search_view = SearchView(self._search_viewmodel)
+            self._search_view = SearchView(self._search_viewmodel, theme=self._current_theme)
             self._content_stack.addWidget(self._search_view)  # index 1
             self._nav_search_button.setEnabled(True)
             self._nav_search_button.setToolTip("Visual Search")
@@ -266,6 +273,7 @@ class MainWindow(QMainWindow):
                 on_go_to_duplicates=self._on_duplicates_clicked if self._find_duplicates_use_case else None,
                 on_go_to_settings=(lambda: self._navigate(3)) if self._settings is not None else None,
                 on_repeat_search=self._on_dashboard_repeat_search,
+                theme=self._current_theme,
             )
             self._content_stack.addWidget(self._dashboard_view)  # index 2
             self._nav_catalog_button.setEnabled(True)
@@ -283,6 +291,7 @@ class MainWindow(QMainWindow):
                 db_path_provider=self._db_path_provider,
                 indexing_use_case=self._indexing_use_case,
                 indexed_folders_provider=self._indexed_folders_provider,
+                theme=self._current_theme,
             )
             self._content_stack.addWidget(self._settings_view)  # index 3
             self._nav_settings_button.setEnabled(True)
@@ -307,14 +316,25 @@ class MainWindow(QMainWindow):
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         # ── App Logo / Brand
-        brand_label = QLabel("TV\nAI")
-        brand_label.setObjectName("BrandLabel")
-        brand_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        brand_font = QFont()
-        brand_font.setPointSize(14)
-        brand_font.setBold(True)
-        brand_label.setFont(brand_font)
-        layout.addWidget(brand_label)
+        logo_label = QLabel()
+        logo_pixmap = QPixmap(str(_LOGO_SMALL_PATH))
+        if not logo_pixmap.isNull():
+            logo_label.setPixmap(
+                logo_pixmap.scaled(
+                    56, 56, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+                )
+            )
+        else:
+            # Fallback if the logo asset is ever missing — never crash on a
+            # missing image, just fall back to the original text mark.
+            logo_label.setText("TV\nAI")
+            logo_font = QFont()
+            logo_font.setPointSize(14)
+            logo_font.setBold(True)
+            logo_label.setFont(logo_font)
+        logo_label.setObjectName("BrandLabel")
+        logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(logo_label)
 
         separator = QFrame()
         separator.setFrameShape(QFrame.Shape.HLine)
@@ -358,10 +378,16 @@ class MainWindow(QMainWindow):
 
         layout.addStretch()
 
-        # ── Bottom: Version Label
+        # ── Bottom: Version Label (credits JD Software via tooltip — the
+        # sidebar is too narrow to show the full credit line as text; the
+        # complete "Made by JD Software" + contact number also appears in
+        # the Help dialog's footer for anyone who wants it front-and-center)
         version_label = QLabel("v1.0.0")
         version_label.setObjectName("VersionLabel")
         version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        version_label.setToolTip("TileVision AI v1.0.0\nMade by JD Software\nContact: 88662 77767")
+        version_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        version_label.mousePressEvent = lambda event: self._on_help_clicked()
         layout.addWidget(version_label)
 
         return sidebar
@@ -444,7 +470,7 @@ class MainWindow(QMainWindow):
         """Open the Duplicate Detection dialog (modal, like License activation)."""
         if self._find_duplicates_use_case is None:
             return
-        dialog = DuplicatesView(self._find_duplicates_use_case, parent=self)
+        dialog = DuplicatesView(self._find_duplicates_use_case, parent=self, theme=self._current_theme)
         dialog.exec()
 
     def _on_dashboard_repeat_search(self, query_image_path: str) -> None:
@@ -456,18 +482,28 @@ class MainWindow(QMainWindow):
 
     def _on_help_clicked(self) -> None:
         """Open the Help & User Guide dialog (Task E)."""
-        dialog = HelpView(parent=self)
+        dialog = HelpView(parent=self, theme=self._current_theme)
         dialog.exec()
 
     def _on_theme_changed_request(self, theme: str) -> None:
         """
-        Apply the app-level theme (MainWindow chrome). See theme_manager.py
-        for a note on the current scope of what does/doesn't re-skin.
+        Apply the new theme app-wide: the MainWindow chrome (via the
+        QApplication-level stylesheet) plus every currently-open view,
+        each of which now builds its own stylesheet from the shared
+        palette (see theme_manager.get_palette) and exposes set_theme()
+        for exactly this purpose.
         """
+        self._current_theme = theme
         app = QApplication.instance()
         if app is not None:
             app.setStyleSheet(get_app_stylesheet(theme))
-            logger.info(f"Applied '{theme}' theme.")
+
+        for view_attr in ("_indexing_view", "_search_view", "_dashboard_view", "_settings_view"):
+            view = getattr(self, view_attr, None)
+            if view is not None and hasattr(view, "set_theme"):
+                view.set_theme(theme)
+
+        logger.info(f"Applied '{theme}' theme.")
 
     # ── Slots ─────────────────────────────────────────────────────────────────
 
