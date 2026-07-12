@@ -36,6 +36,11 @@ class FaissIndexManager:
         self._dimension = dimension
         self._index = None
 
+    @property
+    def index_path(self) -> Path:
+        """Absolute path to the FAISS index file on disk (Task A: Dashboard, FAISS Index Size)."""
+        return self._index_path
+
     def load_index(self) -> None:
         """
         Load the index from disk.

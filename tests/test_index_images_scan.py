@@ -273,6 +273,23 @@ def test_mixed_new_modified_and_unchanged_in_one_scan(env):
 # ── Task 1: Persistent Indexed Folder ────────────────────────────────────
 
 
+def test_force_rebuild_reembeds_unchanged_files(env):
+    d = env["images_dir"]
+    _make_image(d / "a.jpg", (1, 2, 3))
+    _make_image(d / "b.jpg", (4, 5, 6))
+
+    env["use_case"].scan_and_index_directory(d)
+    calls_after_first = env["embedder"].calls
+    assert calls_after_first == 2
+
+    # Nothing changed on disk, but force=True should re-embed everything anyway.
+    result = env["use_case"].scan_and_index_directory(d, force=True)
+
+    assert result.skipped_count == 0
+    assert result.modified_count == 2  # counted as "modified" since already known
+    assert env["embedder"].calls == calls_after_first + 2
+
+
 def test_folder_is_recorded_after_successful_scan(tmp_path):
     from src.data.sqlite_repository import SQLiteIndexedFolderRepository
 

@@ -17,7 +17,8 @@ Design Decision:
 """
 
 import logging
-from typing import Callable, Optional
+from dataclasses import dataclass, field
+from typing import Callable, List, Optional
 
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QFont, QIcon, QAction, QCloseEvent
@@ -44,9 +45,27 @@ from src.presentation.viewmodels.search_viewmodel import SearchViewModel
 from src.presentation.views.duplicates_view import DuplicatesView
 from src.presentation.views.settings_view import SettingsView
 from src.presentation.views.dashboard_view import DashboardView
+from src.presentation.views.help_view import HelpView
 from src.theme.theme_manager import get_app_stylesheet
 
 logger = logging.getLogger("tilevision.presentation.views.main_window")
+
+
+@dataclass
+class DashboardDataProviders:
+    """
+    Bundles the extra data-source callables needed for the Professional
+    Dashboard (Task A) into a single object, rather than growing
+    MainWindow's constructor with 6+ individual provider parameters.
+    All fields are optional; any left as None simply show "—"/empty on
+    the Dashboard rather than erroring.
+    """
+    indexed_folder_count: Optional[Callable[[], int]] = None
+    database_size: Optional[Callable[[], int]] = None
+    faiss_size: Optional[Callable[[], int]] = None
+    last_search: Optional[Callable[[], object]] = None
+    recent_activity: Optional[Callable[[], List[object]]] = None
+    recent_searches: Optional[Callable[[], List[object]]] = None
 
 
 class NavButton(QPushButton):
@@ -113,6 +132,10 @@ class MainWindow(QMainWindow):
         find_duplicates_use_case=None,
         settings=None,
         catalog_count_provider: Optional[Callable[[], int]] = None,
+        dashboard_providers: Optional[DashboardDataProviders] = None,
+        db_path_provider: Optional[Callable[[], object]] = None,
+        indexing_use_case=None,
+        indexed_folders_provider: Optional[Callable[[], List[str]]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         """
@@ -133,7 +156,19 @@ class MainWindow(QMainWindow):
             settings: The shared AppSettings instance. If omitted, the
                 Settings nav item stays disabled.
             catalog_count_provider: Callable returning the current number
-                of indexed tiles, for the Settings page's Overview stat.
+                of indexed tiles, for the Settings/Dashboard Overview stats.
+            dashboard_providers: Optional DashboardDataProviders bundle for
+                the Professional Dashboard's extra stat cards / activity /
+                search history panels (Task A). Any omitted field just
+                shows "—"/empty rather than erroring.
+            db_path_provider: Callable returning the SQLite database's
+                absolute Path (Task D: Settings — Database Path display,
+                Backup Database).
+            indexing_use_case: The shared IndexImagesUseCase, needed for
+                Settings' "Rebuild FAISS Index" action (Task D).
+            indexed_folders_provider: Callable returning every folder
+                that's been indexed, the set Rebuild FAISS Index operates
+                over (Task D).
             parent: Optional Qt parent widget.
         """
         super().__init__(parent)
@@ -143,6 +178,10 @@ class MainWindow(QMainWindow):
         self._find_duplicates_use_case = find_duplicates_use_case
         self._settings = settings
         self._catalog_count_provider = catalog_count_provider
+        self._dashboard_providers = dashboard_providers or DashboardDataProviders()
+        self._db_path_provider = db_path_provider
+        self._indexing_use_case = indexing_use_case
+        self._indexed_folders_provider = indexed_folders_provider
 
         self.setWindowTitle("TileVision AI — Visual Tile Search")
         self.setMinimumSize(1100, 760)
@@ -215,9 +254,18 @@ class MainWindow(QMainWindow):
                 watched_folder_count_provider=(
                     lambda: len(self._settings.watch_folders) if self._settings else 0
                 ),
+                indexed_folder_count_provider=self._dashboard_providers.indexed_folder_count,
+                database_size_provider=self._dashboard_providers.database_size,
+                faiss_size_provider=self._dashboard_providers.faiss_size,
+                last_search_provider=self._dashboard_providers.last_search,
+                recent_activity_provider=self._dashboard_providers.recent_activity,
+                recent_searches_provider=self._dashboard_providers.recent_searches,
                 license_details=self._license_details,
                 on_go_to_index=lambda: self._navigate(0),
                 on_go_to_search=lambda: self._navigate(1),
+                on_go_to_duplicates=self._on_duplicates_clicked if self._find_duplicates_use_case else None,
+                on_go_to_settings=(lambda: self._navigate(3)) if self._settings is not None else None,
+                on_repeat_search=self._on_dashboard_repeat_search,
             )
             self._content_stack.addWidget(self._dashboard_view)  # index 2
             self._nav_catalog_button.setEnabled(True)
@@ -232,6 +280,9 @@ class MainWindow(QMainWindow):
                 license_details=self._license_details,
                 catalog_count_provider=self._catalog_count_provider,
                 on_theme_changed=self._on_theme_changed_request,
+                db_path_provider=self._db_path_provider,
+                indexing_use_case=self._indexing_use_case,
+                indexed_folders_provider=self._indexed_folders_provider,
             )
             self._content_stack.addWidget(self._settings_view)  # index 3
             self._nav_settings_button.setEnabled(True)
@@ -298,6 +349,12 @@ class MainWindow(QMainWindow):
         self._nav_settings_button.setEnabled(False)
         self._nav_settings_button.setToolTip("Settings — Coming soon")
         layout.addWidget(self._nav_settings_button)
+
+        self._nav_help_button = NavButton("❓", "Help")
+        self._nav_help_button.setToolTip("Help & User Guide")
+        self._nav_help_button.setCheckable(False)  # opens a modal, not a nav page
+        self._nav_help_button.clicked.connect(self._on_help_clicked)
+        layout.addWidget(self._nav_help_button)
 
         layout.addStretch()
 
@@ -380,11 +437,26 @@ class MainWindow(QMainWindow):
         self._content_stack.setCurrentIndex(index)
         logger.debug(f"Navigated to content stack index: {index}")
 
+        if index == 2 and hasattr(self, "_dashboard_view"):
+            self._dashboard_view.refresh()
+
     def _on_duplicates_clicked(self) -> None:
         """Open the Duplicate Detection dialog (modal, like License activation)."""
         if self._find_duplicates_use_case is None:
             return
         dialog = DuplicatesView(self._find_duplicates_use_case, parent=self)
+        dialog.exec()
+
+    def _on_dashboard_repeat_search(self, query_image_path: str) -> None:
+        """Navigate to Search and re-run a query from the Dashboard's Recent Searches panel."""
+        if self._search_viewmodel is None:
+            return
+        self._navigate(1)
+        self._search_viewmodel.repeat_search(query_image_path)
+
+    def _on_help_clicked(self) -> None:
+        """Open the Help & User Guide dialog (Task E)."""
+        dialog = HelpView(parent=self)
         dialog.exec()
 
     def _on_theme_changed_request(self, theme: str) -> None:

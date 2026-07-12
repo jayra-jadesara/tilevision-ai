@@ -113,3 +113,30 @@ class ScanResult:
     def has_any_changes(self) -> bool:
         """True if this scan found anything to do at all."""
         return self.new_count > 0 or self.modified_count > 0 or self.deleted_count > 0
+
+
+@dataclass
+class SearchHistoryEntry:
+    """
+    A single past search (Task A: Dashboard 'Recent Searches' /
+    Task C: Search UX 'search history' — clicking an entry re-runs it).
+    """
+    query_image_path: str
+    result_count: int = 0
+    elapsed_seconds: Optional[float] = None
+    query_thumbnail_path: Optional[str] = None
+    id: Optional[int] = None
+    searched_at: Optional[datetime] = None
+
+
+@dataclass
+class ActivityLogEntry:
+    """
+    A single recent-activity event (Task A: Dashboard 'Recent Activity'),
+    e.g. "Indexed 'E:\\Tiles' — 42 new, 3 modified" or "Searched with
+    query.jpg — 18 results".
+    """
+    activity_type: str
+    message: str
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None

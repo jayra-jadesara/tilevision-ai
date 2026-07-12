@@ -27,7 +27,10 @@ from PySide6.QtGui import QFont
 from src.utils.logger import setup_logger
 from src.config.settings import AppSettings
 from src.data.db_context import DatabaseContext
-from src.data.sqlite_repository import SQLiteImageRepository, SQLiteLicenseRepository, SQLiteIndexedFolderRepository
+from src.data.sqlite_repository import (
+    SQLiteImageRepository, SQLiteLicenseRepository, SQLiteIndexedFolderRepository,
+    SQLiteSearchHistoryRepository, SQLiteActivityLogRepository,
+)
 from src.ai.embedder import OpenCLIPEmbedder
 from src.ai.vector_index import FaissIndexManager
 from src.core.use_cases.index_images import IndexImagesUseCase
@@ -39,7 +42,7 @@ from src.licensing.trial_manager import TrialManager
 from src.licensing.validator import LicenseValidator
 from src.presentation.viewmodels.indexing_viewmodel import IndexingViewModel
 from src.presentation.viewmodels.search_viewmodel import SearchViewModel
-from src.presentation.views.main_window import MainWindow
+from src.presentation.views.main_window import MainWindow, DashboardDataProviders
 from src.presentation.views.license_view import LicenseView
 
 
@@ -100,6 +103,8 @@ def build_application() -> int:
     image_repository = SQLiteImageRepository(db_context=db_context)
     license_repository = SQLiteLicenseRepository(db_context=db_context)
     indexed_folder_repository = SQLiteIndexedFolderRepository(db_context=db_context)
+    search_history_repository = SQLiteSearchHistoryRepository(db_context=db_context)
+    activity_log_repository = SQLiteActivityLogRepository(db_context=db_context)
 
     # ── 5. Construct Licensing Layer ──────────────────────────────────────────
     logger.info("Initializing license validator...")
@@ -172,7 +177,7 @@ def build_application() -> int:
         vector_index=vector_index,
         thumbnail_dir=settings.thumbnail_dir,
     )
-    find_duplicates_use_case = FindDuplicatesUseCase(image_repository=image_repository)
+    find_duplicates_use_case = FindDuplicatesUseCase(image_repository=image_repository, vector_index=vector_index)
 
     # ── 8b. Warm up the CLIP model and FAISS index now, synchronously, so the
     #        *first* search a user runs is fast rather than paying model-load
@@ -214,11 +219,34 @@ def build_application() -> int:
 
     # ── 9. Construct ViewModels ───────────────────────────────────────────────
     logger.info("Constructing view models...")
-    indexing_viewmodel = IndexingViewModel(use_case=index_images_use_case)
-    search_viewmodel = SearchViewModel(use_case=search_tiles_use_case, default_top_k=settings.top_k)
+    indexing_viewmodel = IndexingViewModel(
+        use_case=index_images_use_case, activity_log_repository=activity_log_repository
+    )
+    search_viewmodel = SearchViewModel(
+        use_case=search_tiles_use_case,
+        default_top_k=settings.top_k,
+        search_history_repository=search_history_repository,
+        activity_log_repository=activity_log_repository,
+    )
 
     # ── 10. Launch Main Window ────────────────────────────────────────────────
     logger.info("Launching main application window...")
+
+    def _get_file_size(path) -> int:
+        try:
+            return path.stat().st_size if path.exists() else 0
+        except OSError:
+            return 0
+
+    dashboard_providers = DashboardDataProviders(
+        indexed_folder_count=lambda: len(indexed_folder_repository.get_all_folders()),
+        database_size=lambda: _get_file_size(db_context.db_path),
+        faiss_size=lambda: _get_file_size(vector_index.index_path),
+        last_search=search_history_repository.get_last_search,
+        recent_activity=lambda: activity_log_repository.get_recent_activity(limit=8),
+        recent_searches=lambda: search_history_repository.get_recent_searches(limit=8),
+    )
+
     main_window = MainWindow(
         indexing_viewmodel=indexing_viewmodel,
         search_viewmodel=search_viewmodel,
@@ -226,6 +254,10 @@ def build_application() -> int:
         find_duplicates_use_case=find_duplicates_use_case,
         settings=settings,
         catalog_count_provider=lambda: len(image_repository.get_all()),
+        dashboard_providers=dashboard_providers,
+        db_path_provider=lambda: db_context.db_path,
+        indexing_use_case=index_images_use_case,
+        indexed_folders_provider=lambda: [f.folder_path for f in indexed_folder_repository.get_all_folders()],
     )
     main_window.show()
 

@@ -7,13 +7,15 @@ exposing results/status to the SearchView through Qt signals.
 """
 
 import logging
+import time
 from pathlib import Path
 from typing import List, Optional
 
 from PySide6.QtCore import QObject, Signal, Slot
 
-from src.core.models import SearchResult
+from src.core.models import SearchResult, SearchHistoryEntry
 from src.core.use_cases.search_tiles import SearchTilesUseCase
+from src.data.repository_interface import ISearchHistoryRepository, IActivityLogRepository
 from src.presentation.workers.search_worker import SearchWorker
 
 logger = logging.getLogger("tilevision.presentation.viewmodels.search_viewmodel")
@@ -48,13 +50,31 @@ class SearchViewModel(QObject):
 
     filters_available = Signal(dict)  # Dict[str, List[str]] — for populating dropdowns
 
-    def __init__(self, use_case: SearchTilesUseCase, default_top_k: int = 20) -> None:
+    # (result_count, elapsed_seconds) — Task C: Search UX (elapsed time + results count display)
+    search_stats_ready = Signal(int, float)
+
+    # List[SearchHistoryEntry] — Task C: Search UX (search history panel)
+    search_history_updated = Signal(list)
+
+    def __init__(
+        self,
+        use_case: SearchTilesUseCase,
+        default_top_k: int = 20,
+        search_history_repository: Optional[ISearchHistoryRepository] = None,
+        activity_log_repository: Optional[IActivityLogRepository] = None,
+    ) -> None:
         """
         Initialize the SearchViewModel.
 
         Args:
             use_case: Fully configured SearchTilesUseCase.
             default_top_k: Default maximum number of results to request.
+            search_history_repository: Optional repository for recording/
+                retrieving search history (Task C). If omitted, searches
+                simply aren't recorded — kept optional for backward
+                compatibility with any existing construction sites/tests.
+            activity_log_repository: Optional repository for the
+                Dashboard's Recent Activity feed (Task A).
         """
         super().__init__()
         self._use_case = use_case
@@ -64,6 +84,9 @@ class SearchViewModel(QObject):
         self._last_results: List[SearchResult] = []
         self._last_query_path: Optional[str] = None
         self._active_filters: dict = {}
+        self._last_elapsed_seconds: float = 0.0
+        self._history_repo = search_history_repository
+        self._activity_repo = activity_log_repository
 
     # ── Properties ────────────────────────────────────────────────────────
 
@@ -193,6 +216,25 @@ class SearchViewModel(QObject):
             self.status_message.emit("No similar tiles found in the indexed catalog.")
 
         self.results_ready.emit(results)
+        self.search_stats_ready.emit(len(results), self._last_elapsed_seconds)
+
+        if self._history_repo is not None and self._last_query_path:
+            try:
+                self._history_repo.record_search(
+                    self._last_query_path, len(results), self._last_elapsed_seconds
+                )
+                self.load_search_history()
+            except Exception as e:
+                logger.error(f"Failed to record search history: {e}")
+
+        if self._activity_repo is not None and self._last_query_path:
+            try:
+                name = Path(self._last_query_path).name
+                self._activity_repo.record_activity(
+                    "search", f"Searched with '{name}' — {len(results)} result(s)"
+                )
+            except Exception as e:
+                logger.error(f"Failed to record search activity: {e}")
 
     @Slot(str)
     def _on_search_failed(self, message: str) -> None:
@@ -203,4 +245,43 @@ class SearchViewModel(QObject):
 
     @Slot(float)
     def _on_search_timed(self, elapsed_seconds: float) -> None:
+        self._last_elapsed_seconds = elapsed_seconds
         logger.info(f"Search for '{self._last_query_path}' completed in {elapsed_seconds:.3f}s.")
+
+    # ── Search History (Task C) ─────────────────────────────────────────
+
+    @Slot()
+    def load_search_history(self, limit: int = 10) -> None:
+        """
+        Fetch recent searches and emit them via search_history_updated for
+        the View to render as a clickable history panel.
+
+        Args:
+            limit: Maximum number of history entries to retrieve.
+        """
+        if self._history_repo is None:
+            self.search_history_updated.emit([])
+            return
+
+        try:
+            entries = self._history_repo.get_recent_searches(limit=limit)
+            self.search_history_updated.emit(entries)
+        except Exception as e:
+            logger.error(f"Failed to load search history: {e}")
+            self.search_history_updated.emit([])
+
+    @Slot(str)
+    def repeat_search(self, query_image_path: str) -> None:
+        """
+        Re-run a past search from history (Task C), if the original query
+        image still exists on disk.
+
+        Args:
+            query_image_path: Absolute path from a SearchHistoryEntry.
+        """
+        if not Path(query_image_path).exists():
+            self.search_error.emit(
+                f"That search's original image no longer exists:\n{query_image_path}"
+            )
+            return
+        self.search_by_image(query_image_path)

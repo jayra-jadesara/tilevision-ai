@@ -22,7 +22,7 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 
-from PySide6.QtCore import Qt, Slot, QUrl, QSize
+from PySide6.QtCore import Qt, Slot, QUrl, QSize, QTimer
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QDesktopServices, QPixmap, QIcon, QColor
 from PySide6.QtWidgets import (
     QWidget,
@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QComboBox,
+    QApplication,
 )
 
 from src.core.models import SearchResult
@@ -179,6 +180,71 @@ class DropZone(QFrame):
             self._on_image_selected(file_path)
 
 
+class _ResultPreviewPanel(QWidget):
+    """
+    Lightweight, reusable "large preview" popup for Task C: Search UX.
+    A single click on a results row calls show_result() on one shared
+    instance, which updates its content and pops to the front — cheaper
+    than constructing a new dialog per click.
+    """
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent, Qt.WindowType.Tool)
+        self.setWindowTitle("Tile Preview")
+        self.setMinimumSize(360, 420)
+        self._setup_ui()
+        self._apply_styles()
+
+    def _setup_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        self._image_label = QLabel()
+        self._image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._image_label.setFixedSize(320, 320)
+        self._image_label.setObjectName("PreviewImage")
+        layout.addWidget(self._image_label)
+
+        self._details_label = QLabel()
+        self._details_label.setObjectName("PreviewDetails")
+        self._details_label.setWordWrap(True)
+        layout.addWidget(self._details_label)
+        layout.addStretch()
+
+    def show_result(self, result: SearchResult) -> None:
+        tile = result.tile
+        pixmap = QPixmap(tile.file_path)
+        if pixmap.isNull():
+            pixmap = QPixmap(result.thumbnail_path)
+        if not pixmap.isNull():
+            scaled = pixmap.scaled(
+                320, 320, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+            )
+            self._image_label.setPixmap(scaled)
+
+        self._details_label.setText(
+            f"<b>{tile.file_name}</b><br>"
+            f"Similarity: {result.similarity_score:.1f}%<br>"
+            f"Product Code: {tile.product_code or '—'}<br>"
+            f"Brand: {tile.brand or '—'}<br>"
+            f"Category: {tile.category or '—'}<br>"
+            f"<span style='color:#8A8FA3; font-size:10px;'>{tile.file_path}</span>"
+        )
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _apply_styles(self) -> None:
+        self.setStyleSheet(
+            """
+            QWidget { background-color: #1E212C; color: #E8EAF6; }
+            #PreviewImage { background-color: #14161F; border-radius: 8px; }
+            #PreviewDetails { font-size: 12px; line-height: 1.5; }
+            """
+        )
+
+
 class SearchView(QWidget):
     """
     Full-featured Visual Similarity Search panel widget.
@@ -198,6 +264,12 @@ class SearchView(QWidget):
         self._viewmodel = viewmodel
         self._current_results: List[SearchResult] = []
         self._current_query_image_path: Optional[str] = None
+        self._preview_panel = _ResultPreviewPanel(self)
+        self._search_animation_timer = QTimer(self)
+        self._search_animation_timer.setInterval(400)
+        self._search_animation_timer.timeout.connect(self._tick_searching_animation)
+        self._search_animation_dots = 0
+        self._search_animation_base_text = "Searching"
         self._setup_ui()
         self._connect_signals()
         self._apply_styles()
@@ -259,6 +331,11 @@ class SearchView(QWidget):
         self._clear_button.clicked.connect(self._on_clear_clicked)
         self._clear_button.setEnabled(False)
         button_col.addWidget(self._clear_button)
+
+        self._history_button = QPushButton("🕐  Recent Searches")
+        self._history_button.setObjectName("SecondaryButton")
+        self._history_button.clicked.connect(self._on_history_clicked)
+        button_col.addWidget(self._history_button)
 
         button_col.addStretch()
         layout.addLayout(button_col)
@@ -343,7 +420,12 @@ class SearchView(QWidget):
         header.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
 
         self._results_table.cellDoubleClicked.connect(self._on_row_double_clicked)
+        self._results_table.cellClicked.connect(self._on_row_clicked)
         self._results_table.customContextMenuRequested.connect(self._on_results_context_menu)
+
+        self._empty_state_icon = QLabel("🔍")
+        self._empty_state_icon.setObjectName("EmptyStateIcon")
+        self._empty_state_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self._empty_state_label = QLabel(
             "No results yet.\nDrag or browse a tile photo above to start searching."
@@ -351,19 +433,39 @@ class SearchView(QWidget):
         self._empty_state_label.setObjectName("EmptyStateLabel")
         self._empty_state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+        empty_state_container = QVBoxLayout()
+        empty_state_container.addStretch()
+        empty_state_container.addWidget(self._empty_state_icon)
+        empty_state_container.addWidget(self._empty_state_label)
+        empty_state_container.addStretch()
+        self._empty_state_widget = QWidget()
+        self._empty_state_widget.setLayout(empty_state_container)
+
         container = QWidget()
         container_layout = QVBoxLayout(container)
         container_layout.setContentsMargins(0, 0, 0, 0)
-        container_layout.addWidget(self._empty_state_label)
+        container_layout.addWidget(self._empty_state_widget)
         container_layout.addWidget(self._results_table)
         self._results_table.setVisible(False)
         self._results_container = container
         return container
 
     def _build_status_line(self) -> QWidget:
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
         self._status_label = QLabel("Ready. Drag an image or click Browse to search.")
         self._status_label.setObjectName("SearchStatusLabel")
-        return self._status_label
+        layout.addWidget(self._status_label, stretch=1)
+
+        self._stats_label = QLabel("")
+        self._stats_label.setObjectName("SearchStatsLabel")
+        self._stats_label.setVisible(False)
+        layout.addWidget(self._stats_label)
+
+        return container
 
     # ── Signal Wiring ────────────────────────────────────────────────────
 
@@ -374,7 +476,23 @@ class SearchView(QWidget):
         self._viewmodel.search_error.connect(self._on_search_error)
         self._viewmodel.query_image_selected.connect(self._drop_zone.show_preview)
         self._viewmodel.filters_available.connect(self._on_filters_available)
+        self._viewmodel.search_history_updated.connect(self._show_history_menu)
+        self._viewmodel.search_stats_ready.connect(self._on_search_stats_ready)
         self._viewmodel.load_filter_options()
+
+    def _start_searching_animation(self) -> None:
+        """Animate the status label with cycling dots while a search runs
+        (Task C: 'Searching animation')."""
+        self._search_animation_dots = 0
+        self._search_animation_timer.start()
+
+    def _stop_searching_animation(self) -> None:
+        self._search_animation_timer.stop()
+
+    def _tick_searching_animation(self) -> None:
+        self._search_animation_dots = (self._search_animation_dots + 1) % 4
+        dots = "." * self._search_animation_dots
+        self._status_label.setText(f"{self._search_animation_base_text}{dots}")
 
     # ── Event Handlers ───────────────────────────────────────────────────
 
@@ -398,6 +516,28 @@ class SearchView(QWidget):
         self._crop_button.setEnabled(False)
         self._viewmodel.clear_results()
 
+    def _on_history_clicked(self) -> None:
+        """Show a popup menu of recent searches (Task C: Search History)."""
+        self._viewmodel.load_search_history()
+        # _on_search_history_updated (connected below) populates and shows
+        # the menu once the ViewModel responds — see that handler.
+
+    def _show_history_menu(self, entries: List) -> None:
+        menu = QMenu(self)
+        if not entries:
+            no_history_action = menu.addAction("No recent searches yet")
+            no_history_action.setEnabled(False)
+        else:
+            for entry in entries:
+                name = Path(entry.query_image_path).name
+                when = entry.searched_at.strftime("%b %d, %I:%M %p") if entry.searched_at else ""
+                label = f"{name} — {entry.result_count} result(s)  ({when})"
+                action = menu.addAction(label)
+                action.triggered.connect(
+                    lambda checked=False, path=entry.query_image_path: self._viewmodel.repeat_search(path)
+                )
+        menu.exec(self._history_button.mapToGlobal(self._history_button.rect().bottomLeft()))
+
     @Slot(str)
     def _on_state_changed(self, state: str) -> None:
         is_searching = state == SearchState.SEARCHING
@@ -408,6 +548,12 @@ class SearchView(QWidget):
         for combo in self._filter_combos.values():
             combo.setEnabled(not is_searching)
 
+        if is_searching:
+            self._stats_label.setVisible(False)
+            self._start_searching_animation()
+        else:
+            self._stop_searching_animation()
+
     @Slot(list)
     def _on_results_ready(self, results: List[SearchResult]) -> None:
         self._current_results = results
@@ -417,15 +563,25 @@ class SearchView(QWidget):
     def _on_search_error(self, message: str) -> None:
         QMessageBox.warning(self, "Search Failed", message)
 
+    @Slot(int, float)
+    def _on_search_stats_ready(self, result_count: int, elapsed_seconds: float) -> None:
+        """Show elapsed search time + results count (Task C: Search UX)."""
+        self._stats_label.setText(
+            f"{result_count} result(s) in {elapsed_seconds * 1000:.0f} ms"
+            if elapsed_seconds < 1
+            else f"{result_count} result(s) in {elapsed_seconds:.2f}s"
+        )
+        self._stats_label.setVisible(True)
+
     def _populate_table(self, results: List[SearchResult]) -> None:
         self._results_table.setRowCount(0)
 
         if not results:
             self._results_table.setVisible(False)
-            self._empty_state_label.setVisible(True)
+            self._empty_state_widget.setVisible(True)
             return
 
-        self._empty_state_label.setVisible(False)
+        self._empty_state_widget.setVisible(False)
         self._results_table.setVisible(True)
         self._results_table.setRowCount(len(results))
 
@@ -475,6 +631,15 @@ class SearchView(QWidget):
     def _on_row_double_clicked(self, row: int, _column: int) -> None:
         self._open_image_at_row(row)
 
+    def _on_row_clicked(self, row: int, _column: int) -> None:
+        """Task C: Large Preview — a single click shows a bigger preview
+        of the result without leaving the app (double-click still opens
+        the image in the OS default viewer)."""
+        if row < 0 or row >= len(self._current_results):
+            return
+        result = self._current_results[row]
+        self._preview_panel.show_result(result)
+
     def _on_results_context_menu(self, position) -> None:
         row = self._results_table.rowAt(position.y())
         if row < 0 or row >= len(self._current_results):
@@ -483,12 +648,22 @@ class SearchView(QWidget):
         menu = QMenu(self)
         open_image_action = menu.addAction("🖼️  Open Image")
         open_folder_action = menu.addAction("📂  Open Containing Folder")
+        copy_path_action = menu.addAction("📋  Copy Path")
 
         chosen = menu.exec(self._results_table.viewport().mapToGlobal(position))
         if chosen == open_image_action:
             self._open_image_at_row(row)
         elif chosen == open_folder_action:
             self._open_folder_at_row(row)
+        elif chosen == copy_path_action:
+            self._copy_path_at_row(row)
+
+    def _copy_path_at_row(self, row: int) -> None:
+        if row < 0 or row >= len(self._current_results):
+            return
+        path = self._current_results[row].tile.file_path
+        QApplication.clipboard().setText(path)
+        self._status_label.setText(f"Copied path to clipboard: {path}")
 
     def _open_image_at_row(self, row: int) -> None:
         if row < 0 or row >= len(self._current_results):
@@ -572,8 +747,10 @@ class SearchView(QWidget):
                 font-size: 11px;
             }
 
-            #EmptyStateLabel { color: #6C7086; font-size: 13px; padding: 40px; }
+            #EmptyStateIcon { font-size: 48px; padding-bottom: 8px; }
+            #EmptyStateLabel { color: #6C7086; font-size: 13px; padding: 8px 40px 40px 40px; }
             #SearchStatusLabel { color: #8A8FA3; font-size: 12px; }
+            #SearchStatsLabel { color: #7C83D3; font-size: 12px; font-weight: 600; }
             #SearchProgressBar {
                 background-color: #232634;
                 border-radius: 2px;

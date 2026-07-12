@@ -69,13 +69,19 @@ class IndexingViewModel(QObject):
     # Indexed: ..." without requiring the user to re-select or re-scan.
     persisted_folder_loaded = Signal(object)
 
-    def __init__(self, use_case: IndexImagesUseCase, parent: Optional[QObject] = None) -> None:
+    def __init__(
+        self, use_case: IndexImagesUseCase, parent: Optional[QObject] = None,
+        activity_log_repository=None,
+    ) -> None:
         """
         Initialize the IndexingViewModel.
 
         Args:
             use_case: Fully configured IndexImagesUseCase instance.
             parent: Optional Qt parent object.
+            activity_log_repository: Optional repository for the
+                Dashboard's Recent Activity feed (Task A). If omitted,
+                indexing events simply aren't recorded there.
         """
         super().__init__(parent)
         self._use_case = use_case
@@ -84,6 +90,7 @@ class IndexingViewModel(QObject):
         self._selected_folder: Optional[Path] = None
         self._total_count: int = 0
         self._processed_count: int = 0
+        self._activity_repo = activity_log_repository
 
     # ── Properties ───────────────────────────────────────────────────────────
 
@@ -323,6 +330,22 @@ class IndexingViewModel(QObject):
             self.status_message.emit(
                 f"Indexing cancelled. Indexed {result.indexed_count:,} tiles before stopping."
             )
+
+        if self._activity_repo is not None and result.is_completed and result.has_any_changes:
+            try:
+                folder_name = self._selected_folder.name if self._selected_folder else "folder"
+                parts = []
+                if result.new_count:
+                    parts.append(f"{result.new_count} new")
+                if result.modified_count:
+                    parts.append(f"{result.modified_count} modified")
+                if result.deleted_count:
+                    parts.append(f"{result.deleted_count} removed")
+                self._activity_repo.record_activity(
+                    "index", f"Indexed '{folder_name}' — {', '.join(parts)}"
+                )
+            except Exception as e:
+                logger.error(f"Failed to record indexing activity: {e}")
 
         self.indexing_completed.emit(result)
         self._worker = None

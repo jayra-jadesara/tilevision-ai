@@ -10,6 +10,25 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 
+def get_log_file_path(log_file_name: str = "tilevision.log") -> Path:
+    """
+    Resolve the default log file path (Task D: Settings, Export Logs).
+
+    Mirrors the location setup_logger() uses internally, without requiring
+    a logger instance — used by the Settings page to locate the file to
+    export/copy.
+
+    Args:
+        log_file_name: The log file name, matching setup_logger()'s default.
+
+    Returns:
+        The expected absolute path to the current log file. Not guaranteed
+        to exist (e.g. before the app has logged anything, or if the
+        AppData fallback path was used instead — callers should check).
+    """
+    return Path.home() / ".tilevision_ai" / "logs" / log_file_name
+
+
 def setup_logger(
     name: str = "tilevision",
     log_file_name: str = "tilevision.log",

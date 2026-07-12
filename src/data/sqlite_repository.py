@@ -10,9 +10,12 @@ import logging
 import sqlite3
 from typing import List, Optional
 
-from src.core.models import TileImage, LicenseInfo, IndexedFolderState
+from src.core.models import TileImage, LicenseInfo, IndexedFolderState, SearchHistoryEntry, ActivityLogEntry
 from src.data.db_context import DatabaseContext
-from src.data.repository_interface import IImageRepository, ILicenseRepository, IIndexedFolderRepository
+from src.data.repository_interface import (
+    IImageRepository, ILicenseRepository, IIndexedFolderRepository,
+    ISearchHistoryRepository, IActivityLogRepository,
+)
 
 logger = logging.getLogger("tilevision.data.sqlite_repository")
 
@@ -548,6 +551,24 @@ class SQLiteIndexedFolderRepository(IIndexedFolderRepository):
             logger.error(f"Failed to fetch folder state for '{folder_path}': {e}")
         return None
 
+    def get_all_folders(self) -> List[IndexedFolderState]:
+        """
+        Retrieve every folder that has ever been indexed.
+
+        Returns:
+            A list of IndexedFolderState, most recently indexed first.
+        """
+        query = "SELECT * FROM indexed_folders ORDER BY last_indexed_at DESC;"
+        try:
+            with self._db.session() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query)
+                rows = cursor.fetchall()
+                return [self._row_to_entity(row) for row in rows]
+        except sqlite3.Error as e:
+            logger.error(f"Failed to fetch all indexed folders: {e}")
+            return []
+
     @staticmethod
     def _row_to_entity(row: sqlite3.Row) -> IndexedFolderState:
         return IndexedFolderState(
@@ -555,3 +576,93 @@ class SQLiteIndexedFolderRepository(IIndexedFolderRepository):
             folder_path=row["folder_path"],
             last_indexed_at=_parse_timestamp(row["last_indexed_at"]),
         )
+
+
+class SQLiteSearchHistoryRepository(ISearchHistoryRepository):
+    """
+    SQLite-backed repository for search history (Task A: Dashboard /
+    Task C: Search UX).
+    """
+
+    def __init__(self, db_context: DatabaseContext) -> None:
+        self._db = db_context
+
+    def record_search(
+        self, query_image_path: str, result_count: int,
+        elapsed_seconds: Optional[float] = None, query_thumbnail_path: Optional[str] = None,
+    ) -> None:
+        query = """
+        INSERT INTO search_history (query_image_path, query_thumbnail_path, result_count, elapsed_seconds)
+        VALUES (?, ?, ?, ?);
+        """
+        try:
+            with self._db.session() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, (query_image_path, query_thumbnail_path, result_count, elapsed_seconds))
+                conn.commit()
+        except sqlite3.Error as e:
+            logger.error(f"Failed to record search history: {e}")
+
+    def get_recent_searches(self, limit: int = 10) -> List[SearchHistoryEntry]:
+        query = "SELECT * FROM search_history ORDER BY searched_at DESC LIMIT ?;"
+        try:
+            with self._db.session() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, (limit,))
+                rows = cursor.fetchall()
+                return [self._row_to_entity(row) for row in rows]
+        except sqlite3.Error as e:
+            logger.error(f"Failed to fetch recent searches: {e}")
+            return []
+
+    def get_last_search(self) -> Optional[SearchHistoryEntry]:
+        results = self.get_recent_searches(limit=1)
+        return results[0] if results else None
+
+    @staticmethod
+    def _row_to_entity(row: sqlite3.Row) -> SearchHistoryEntry:
+        return SearchHistoryEntry(
+            id=row["id"],
+            query_image_path=row["query_image_path"],
+            query_thumbnail_path=row["query_thumbnail_path"],
+            result_count=row["result_count"],
+            elapsed_seconds=row["elapsed_seconds"],
+            searched_at=_parse_timestamp(row["searched_at"]),
+        )
+
+
+class SQLiteActivityLogRepository(IActivityLogRepository):
+    """SQLite-backed repository for the Dashboard's Recent Activity feed."""
+
+    def __init__(self, db_context: DatabaseContext) -> None:
+        self._db = db_context
+
+    def record_activity(self, activity_type: str, message: str) -> None:
+        query = "INSERT INTO activity_log (activity_type, message) VALUES (?, ?);"
+        try:
+            with self._db.session() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, (activity_type, message))
+                conn.commit()
+        except sqlite3.Error as e:
+            logger.error(f"Failed to record activity log entry: {e}")
+
+    def get_recent_activity(self, limit: int = 10) -> List[ActivityLogEntry]:
+        query = "SELECT * FROM activity_log ORDER BY created_at DESC LIMIT ?;"
+        try:
+            with self._db.session() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, (limit,))
+                rows = cursor.fetchall()
+                return [
+                    ActivityLogEntry(
+                        id=row["id"],
+                        activity_type=row["activity_type"],
+                        message=row["message"],
+                        created_at=_parse_timestamp(row["created_at"]),
+                    )
+                    for row in rows
+                ]
+        except sqlite3.Error as e:
+            logger.error(f"Failed to fetch recent activity: {e}")
+            return []

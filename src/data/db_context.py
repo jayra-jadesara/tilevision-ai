@@ -32,6 +32,11 @@ class DatabaseContext:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self.initialize_schema()
 
+    @property
+    def db_path(self) -> Path:
+        """Absolute path to the SQLite database file (Task D: Settings, Database Size card)."""
+        return self._db_path
+
     def initialize_schema(self) -> None:
         """Create database tables and indexes if they do not exist."""
         queries = [
@@ -75,7 +80,27 @@ class DatabaseContext:
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
             """,
-            "CREATE INDEX IF NOT EXISTS idx_tiles_file_name ON tiles(file_name);"
+            """
+            CREATE TABLE IF NOT EXISTS search_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                query_image_path TEXT NOT NULL,
+                query_thumbnail_path TEXT,
+                result_count INTEGER NOT NULL DEFAULT 0,
+                elapsed_seconds REAL,
+                searched_at TIMESTAMP NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS activity_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                activity_type TEXT NOT NULL,
+                message TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
+            );
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_tiles_file_name ON tiles(file_name);",
+            "CREATE INDEX IF NOT EXISTS idx_search_history_searched_at ON search_history(searched_at);",
+            "CREATE INDEX IF NOT EXISTS idx_activity_log_created_at ON activity_log(created_at);"
         ]
 
         logger.info(f"Initializing SQLite schema at: {self._db_path}")

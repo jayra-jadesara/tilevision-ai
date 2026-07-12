@@ -46,6 +46,7 @@ class AppSettings:
             "watch_folders": [],
             "top_k": 20,
             "theme": "dark",
+            "thumbnail_size": 200,
             "license_key": ""
         }
         
@@ -161,6 +162,16 @@ class AppSettings:
     @theme.setter
     def theme(self, value: str) -> None:
         self._settings["theme"] = value
+        self.save()
+
+    @property
+    def thumbnail_size(self) -> int:
+        """Get the preferred thumbnail size in pixels (Task D: Settings)."""
+        return int(self._settings.get("thumbnail_size", 200))
+
+    @thumbnail_size.setter
+    def thumbnail_size(self, value: int) -> None:
+        self._settings["thumbnail_size"] = int(value)
         self.save()
 
     @property

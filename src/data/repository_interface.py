@@ -8,7 +8,7 @@ decoupling of the business logic from data storage implementations.
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
-from src.core.models import TileImage, LicenseInfo, IndexedFolderState
+from src.core.models import TileImage, LicenseInfo, IndexedFolderState, SearchHistoryEntry, ActivityLogEntry
 
 
 class IImageRepository(ABC):
@@ -213,5 +213,98 @@ class IIndexedFolderRepository(ABC):
         Returns:
             An IndexedFolderState if this folder has been indexed before,
             otherwise None.
+        """
+        pass
+
+    @abstractmethod
+    def get_all_folders(self) -> List[IndexedFolderState]:
+        """
+        Retrieve every folder that has ever been indexed (Task A: Dashboard
+        'Indexed Folders' stat card).
+
+        Returns:
+            A list of IndexedFolderState, most recently indexed first.
+        """
+        pass
+
+
+class ISearchHistoryRepository(ABC):
+    """
+    Abstract interface for recording and retrieving past searches
+    (Task A: Dashboard 'Recent Searches' / Task C: Search UX history).
+    """
+
+    @abstractmethod
+    def record_search(
+        self, query_image_path: str, result_count: int,
+        elapsed_seconds: Optional[float] = None, query_thumbnail_path: Optional[str] = None,
+    ) -> None:
+        """
+        Record that a search was performed.
+
+        Args:
+            query_image_path: Absolute path to the query image used.
+            result_count: Number of results the search returned.
+            elapsed_seconds: How long the search took, if known.
+            query_thumbnail_path: Optional cached thumbnail path for the
+                query image, so search history can show a small preview
+                without re-reading the (possibly large/temporary) original.
+        """
+        pass
+
+    @abstractmethod
+    def get_recent_searches(self, limit: int = 10) -> List[SearchHistoryEntry]:
+        """
+        Retrieve the most recent searches, newest first.
+
+        Args:
+            limit: Maximum number of entries to return.
+
+        Returns:
+            A list of SearchHistoryEntry, newest first.
+        """
+        pass
+
+    @abstractmethod
+    def get_last_search(self) -> Optional[SearchHistoryEntry]:
+        """
+        Retrieve the single most recent search, for the Dashboard's
+        "Last Search" stat card.
+
+        Returns:
+            The most recent SearchHistoryEntry, or None if no search has
+            ever been performed.
+        """
+        pass
+
+
+class IActivityLogRepository(ABC):
+    """
+    Abstract interface for recording and retrieving recent system activity
+    (Task A: Dashboard 'Recent Activity').
+    """
+
+    @abstractmethod
+    def record_activity(self, activity_type: str, message: str) -> None:
+        """
+        Record an activity event.
+
+        Args:
+            activity_type: Short category tag (e.g. "index", "search",
+                "duplicate_scan", "license").
+            message: Human-readable description shown on the Dashboard.
+        """
+        pass
+
+    @abstractmethod
+    def get_recent_activity(self, limit: int = 10) -> List[ActivityLogEntry]:
+        """
+        Retrieve the most recent activity events, newest first.
+
+        Args:
+            limit: Maximum number of entries to return.
+
+        Returns:
+            A list of ActivityLogEntry, newest first.
         """
         pass

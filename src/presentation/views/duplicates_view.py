@@ -1,10 +1,14 @@
 """
-Duplicates View for TileVision AI (Feature 5: Duplicate Detection).
+Duplicates View for TileVision AI (Feature 5 / Task B: Duplicate Detection UI).
 
 A modal dialog that scans the indexed catalog for exact and near-duplicate
-tiles and displays them grouped, with quick actions to open each file or
-its containing folder — mirroring the Search view's Open Image / Open
-Folder actions (Feature 6) for consistency.
+tiles and displays them grouped, each tile card showing:
+  - Thumbnail
+  - Duplicate % (100% for exact matches; a Hamming-distance-derived
+    percentage for near-duplicates)
+  - Exact / Near Duplicate badge
+  - Delete (removes the file from disk + FAISS + SQLite, after confirmation)
+  - Open Image / Open Containing Folder (Feature 6, for consistency)
 """
 
 import logging
@@ -38,22 +42,42 @@ logger = logging.getLogger("tilevision.presentation.views.duplicates_view")
 class _DuplicateGroupWidget(QFrame):
     """A single duplicate group: a header + a horizontal row of tile cards."""
 
-    def __init__(self, group: List[TileImage], group_kind: str, parent=None) -> None:
+    # Emitted whenever a tile in this group is deleted, so the parent
+    # dialog can update its overall status line / remove empty groups.
+    tile_deleted = Signal()
+
+    def __init__(
+        self, group: List[TileImage], is_exact: bool, use_case: FindDuplicatesUseCase, parent=None
+    ) -> None:
         super().__init__(parent)
+        self._use_case = use_case
+        self._is_exact = is_exact
+        self._tiles = list(group)
         self.setObjectName("DuplicateGroupFrame")
-        layout = QVBoxLayout(self)
-        layout.setSpacing(6)
 
-        header = QLabel(f"{group_kind} — {len(group)} files")
-        header.setObjectName("GroupHeader")
-        layout.addWidget(header)
+        self._layout = QVBoxLayout(self)
+        self._layout.setSpacing(6)
 
-        row = QHBoxLayout()
-        row.setSpacing(10)
-        for tile in group:
-            row.addWidget(self._build_tile_card(tile))
-        row.addStretch()
-        layout.addLayout(row)
+        kind_label = "Exact Duplicates" if is_exact else "Near Duplicates"
+        self._header = QLabel(f"{kind_label} — {len(self._tiles)} files")
+        self._header.setObjectName("GroupHeader")
+        self._layout.addWidget(self._header)
+
+        self._row_layout = QHBoxLayout()
+        self._row_layout.setSpacing(10)
+        self._reference_hash = self._tiles[0].perceptual_hash if self._tiles else None
+
+        for tile in self._tiles:
+            self._row_layout.addWidget(self._build_tile_card(tile))
+        self._row_layout.addStretch()
+        self._layout.addLayout(self._row_layout)
+
+    def _compute_duplicate_percent(self, tile: TileImage) -> float:
+        if self._is_exact:
+            return 100.0
+        if not self._reference_hash or not tile.perceptual_hash:
+            return 0.0
+        return self._use_case.similarity_percent(self._reference_hash, tile.perceptual_hash)
 
     def _build_tile_card(self, tile: TileImage) -> QWidget:
         card = QFrame()
@@ -73,6 +97,14 @@ class _DuplicateGroupWidget(QFrame):
         thumb_label.setFixedSize(100, 100)
         card_layout.addWidget(thumb_label)
 
+        # Duplicate % + Exact/Near badge (Task B)
+        pct = self._compute_duplicate_percent(tile)
+        badge_text = f"{'🟢 Exact' if self._is_exact else '🟡 Near'} · {pct:.0f}%"
+        badge_label = QLabel(badge_text)
+        badge_label.setObjectName("DuplicateBadgeExact" if self._is_exact else "DuplicateBadgeNear")
+        badge_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        card_layout.addWidget(badge_label)
+
         name_label = QLabel(tile.file_name)
         name_label.setObjectName("TileCardName")
         name_label.setWordWrap(True)
@@ -83,18 +115,58 @@ class _DuplicateGroupWidget(QFrame):
         button_row = QHBoxLayout()
         open_button = QPushButton("🖼️")
         open_button.setToolTip("Open Image")
-        open_button.setFixedWidth(30)
+        open_button.setFixedWidth(28)
         open_button.clicked.connect(lambda: self._open_image(tile))
         button_row.addWidget(open_button)
 
         folder_button = QPushButton("📂")
         folder_button.setToolTip("Open Containing Folder")
-        folder_button.setFixedWidth(30)
+        folder_button.setFixedWidth(28)
         folder_button.clicked.connect(lambda: self._open_folder(tile))
         button_row.addWidget(folder_button)
+
+        delete_button = QPushButton("🗑")
+        delete_button.setObjectName("DeleteButton")
+        delete_button.setToolTip("Delete this duplicate")
+        delete_button.setFixedWidth(28)
+        delete_button.clicked.connect(lambda: self._on_delete_clicked(tile, card))
+        button_row.addWidget(delete_button)
+
         card_layout.addLayout(button_row)
 
         return card
+
+    def _on_delete_clicked(self, tile: TileImage, card: QWidget) -> None:
+        confirm = QMessageBox.question(
+            self,
+            "Delete Duplicate",
+            f"Permanently delete this file?\n\n{tile.file_path}\n\n"
+            "This removes it from disk and from the search index. This cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            self._use_case.delete_duplicate(tile)
+        except RuntimeError as e:
+            QMessageBox.critical(self, "Delete Failed", str(e))
+            return
+
+        self._tiles = [t for t in self._tiles if t.id != tile.id]
+        self._row_layout.removeWidget(card)
+        card.deleteLater()
+        self._header.setText(
+            f"{'Exact Duplicates' if self._is_exact else 'Near Duplicates'} — {len(self._tiles)} files"
+        )
+        self.tile_deleted.emit()
+
+        if len(self._tiles) <= 1:
+            # Fewer than 2 files left means this is no longer a duplicate
+            # group at all — remove the whole group card.
+            self.setVisible(False)
+            self.deleteLater()
 
     def _open_image(self, tile: TileImage) -> None:
         path = Path(tile.file_path)
@@ -120,7 +192,7 @@ class DuplicatesView(QDialog):
         self._worker: DuplicatesWorker = None
 
         self.setWindowTitle("Duplicate Detection")
-        self.resize(760, 600)
+        self.resize(800, 620)
         self._setup_ui()
         self._apply_styles()
 
@@ -196,15 +268,16 @@ class DuplicatesView(QDialog):
             )
 
         for group in exact_groups:
-            self._results_layout.insertWidget(
-                self._results_layout.count() - 1,
-                _DuplicateGroupWidget(group, "Exact Duplicates"),
-            )
+            widget = _DuplicateGroupWidget(group, is_exact=True, use_case=self._use_case)
+            widget.tile_deleted.connect(self._on_tile_deleted)
+            self._results_layout.insertWidget(self._results_layout.count() - 1, widget)
         for group in near_groups:
-            self._results_layout.insertWidget(
-                self._results_layout.count() - 1,
-                _DuplicateGroupWidget(group, "Near Duplicates"),
-            )
+            widget = _DuplicateGroupWidget(group, is_exact=False, use_case=self._use_case)
+            widget.tile_deleted.connect(self._on_tile_deleted)
+            self._results_layout.insertWidget(self._results_layout.count() - 1, widget)
+
+    def _on_tile_deleted(self) -> None:
+        self._status_label.setText("Duplicate deleted. Re-scan to refresh remaining groups.")
 
     def _on_scan_failed(self, message: str) -> None:
         self._scan_button.setEnabled(True)
@@ -235,6 +308,16 @@ class DuplicatesView(QDialog):
             #GroupHeader { font-weight: 600; color: #ACB0C4; font-size: 12px; }
             #TileCard { background-color: #1E212C; border-radius: 6px; padding: 6px; }
             #TileCardName { font-size: 10px; color: #8A8FA3; }
+            #DuplicateBadgeExact {
+                background-color: #1B4332; color: #6EE7B7; border-radius: 4px;
+                font-size: 10px; font-weight: 600; padding: 2px;
+            }
+            #DuplicateBadgeNear {
+                background-color: #453410; color: #FBBF24; border-radius: 4px;
+                font-size: 10px; font-weight: 600; padding: 2px;
+            }
+            #DeleteButton { background-color: #4A1A1A; }
+            #DeleteButton:hover { background-color: #7A2828; }
             QRadioButton { font-size: 12px; }
             """
         )

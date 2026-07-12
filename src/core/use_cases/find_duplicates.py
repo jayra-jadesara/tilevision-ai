@@ -66,12 +66,82 @@ class _UnionFind:
 class FindDuplicatesUseCase:
     """Use case to find exact and near-duplicate tiles in the catalog."""
 
-    def __init__(self, image_repository: IImageRepository) -> None:
+    def __init__(self, image_repository: IImageRepository, vector_index=None) -> None:
         """
         Args:
             image_repository: Repository interface for SQLite tile access.
+            vector_index: Optional FaissIndexManager. Required only for
+                delete_duplicate() to also remove the tile's FAISS vector;
+                kept optional so existing construction sites/tests that
+                only need read-only duplicate detection keep working
+                unchanged.
         """
         self._repo = image_repository
+        self._vector_index = vector_index
+
+    @staticmethod
+    def similarity_percent(hash_a: str, hash_b: str) -> float:
+        """
+        Convert a Hamming distance between two perceptual hashes into a
+        0-100 "duplicate %" for display (Task B: Duplicate Detection UI).
+
+        Args:
+            hash_a: First tile's perceptual hash.
+            hash_b: Second tile's perceptual hash.
+
+        Returns:
+            100.0 for identical hashes, decreasing as the hashes diverge;
+            0.0 if either hash is invalid/empty.
+        """
+        distance = hamming_distance(hash_a, hash_b)
+        if distance < 0:
+            return 0.0
+        return max(0.0, 100.0 - (distance / 64.0) * 100.0)
+
+    def delete_duplicate(self, tile: TileImage, delete_file_from_disk: bool = True) -> None:
+        """
+        Remove a duplicate tile: from disk (optional), FAISS, and SQLite.
+
+        Args:
+            tile: The TileImage to remove (as returned by
+                find_exact_duplicates()/find_near_duplicates()).
+            delete_file_from_disk: If True (default), also deletes the
+                underlying image file from disk. Set False to only remove
+                it from the catalog (e.g. the file already moved/was
+                deleted externally) without touching the filesystem.
+
+        Raises:
+            RuntimeError: If any step of the removal fails. Partial
+                cleanup (e.g. file deleted but DB row removal failed) is
+                logged clearly so the user isn't left with a silent
+                inconsistency.
+        """
+        import os
+
+        if delete_file_from_disk:
+            try:
+                if os.path.exists(tile.file_path):
+                    os.remove(tile.file_path)
+                    logger.info(f"Deleted duplicate file from disk: {tile.file_path}")
+            except OSError as e:
+                logger.error(f"Failed to delete file from disk: {tile.file_path}: {e}")
+                raise RuntimeError(f"Could not delete file from disk: {e}") from e
+
+        if self._vector_index is not None and tile.embedding_id is not None:
+            try:
+                self._vector_index.remove_vectors([tile.embedding_id])
+                self._vector_index.save_index()
+            except Exception as e:
+                logger.error(f"Failed to remove FAISS vector for tile {tile.id}: {e}")
+                raise RuntimeError(f"Could not remove vector from search index: {e}") from e
+
+        if tile.id is not None:
+            try:
+                self._repo.remove(tile.id)
+                logger.info(f"Removed duplicate tile from catalog: {tile.file_path}")
+            except Exception as e:
+                logger.error(f"Failed to remove tile {tile.id} from database: {e}")
+                raise RuntimeError(f"Could not remove tile from database: {e}") from e
 
     def find_exact_duplicates(self) -> List[List[TileImage]]:
         """

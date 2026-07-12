@@ -150,3 +150,105 @@ def test_clear_results_resets_to_idle(qapp, tmp_path):
     vm.clear_results()
     assert vm.state == SearchState.IDLE
     assert vm.last_results == []
+
+
+# ── Task C: Search History integration ──────────────────────────────────
+
+
+class FakeHistoryRepo:
+    def __init__(self):
+        self.recorded = []
+
+    def record_search(self, query_image_path, result_count, elapsed_seconds=None, query_thumbnail_path=None):
+        self.recorded.append((query_image_path, result_count, elapsed_seconds))
+
+    def get_recent_searches(self, limit=10):
+        return list(reversed(self.recorded))[:limit]
+
+    def get_last_search(self):
+        return self.recorded[-1] if self.recorded else None
+
+
+class FakeActivityRepo:
+    def __init__(self):
+        self.recorded = []
+
+    def record_activity(self, activity_type, message):
+        self.recorded.append((activity_type, message))
+
+    def get_recent_activity(self, limit=10):
+        return list(reversed(self.recorded))[:limit]
+
+
+def test_successful_search_is_recorded_in_history(qapp, tmp_path):
+    query_file = tmp_path / "query.jpg"
+    query_file.write_bytes(b"fake")
+
+    history_repo = FakeHistoryRepo()
+    use_case = FakeSearchUseCase(results=[_make_result(), _make_result()])
+    vm = SearchViewModel(use_case=use_case, search_history_repository=history_repo)
+
+    vm.search_by_image(str(query_file))
+    assert _pump_until(lambda: vm.state == SearchState.RESULTS)
+
+    assert len(history_repo.recorded) == 1
+    assert history_repo.recorded[0][0] == str(query_file)
+    assert history_repo.recorded[0][1] == 2
+
+
+def test_successful_search_is_recorded_in_activity_log(qapp, tmp_path):
+    query_file = tmp_path / "query.jpg"
+    query_file.write_bytes(b"fake")
+
+    activity_repo = FakeActivityRepo()
+    use_case = FakeSearchUseCase(results=[_make_result()])
+    vm = SearchViewModel(use_case=use_case, activity_log_repository=activity_repo)
+
+    vm.search_by_image(str(query_file))
+    assert _pump_until(lambda: vm.state == SearchState.RESULTS)
+
+    assert len(activity_repo.recorded) == 1
+    assert activity_repo.recorded[0][0] == "search"
+    assert "query.jpg" in activity_repo.recorded[0][1]
+
+
+def test_search_stats_signal_carries_count_and_elapsed_time(qapp, tmp_path):
+    query_file = tmp_path / "query.jpg"
+    query_file.write_bytes(b"fake")
+
+    use_case = FakeSearchUseCase(results=[_make_result(), _make_result(), _make_result()])
+    vm = SearchViewModel(use_case=use_case)
+
+    captured = []
+    vm.search_stats_ready.connect(lambda count, elapsed: captured.append((count, elapsed)))
+
+    vm.search_by_image(str(query_file))
+    assert _pump_until(lambda: vm.state == SearchState.RESULTS)
+
+    assert len(captured) == 1
+    assert captured[0][0] == 3
+    assert captured[0][1] >= 0
+
+
+def test_repeat_search_reruns_with_existing_file(qapp, tmp_path):
+    query_file = tmp_path / "query.jpg"
+    query_file.write_bytes(b"fake")
+
+    use_case = FakeSearchUseCase(results=[_make_result()])
+    vm = SearchViewModel(use_case=use_case)
+
+    vm.repeat_search(str(query_file))
+    assert _pump_until(lambda: vm.state == SearchState.RESULTS)
+    assert use_case.calls == [(str(query_file), 20, {})]
+
+
+def test_repeat_search_with_missing_file_emits_error(qapp, tmp_path):
+    use_case = FakeSearchUseCase(results=[_make_result()])
+    vm = SearchViewModel(use_case=use_case)
+
+    errors = []
+    vm.search_error.connect(errors.append)
+
+    vm.repeat_search(str(tmp_path / "gone.jpg"))
+    assert errors
+    assert use_case.calls == []

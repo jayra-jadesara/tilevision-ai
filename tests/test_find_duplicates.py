@@ -118,3 +118,79 @@ def test_exact_duplicates_also_appear_as_near_duplicates_at_distance_zero():
     ]
     groups = _use_case(tiles).find_near_duplicates(threshold=0)
     assert len(groups) == 1
+
+
+# ── Task B: Duplicate Detection UI — similarity_percent, delete_duplicate ──
+
+
+def test_similarity_percent_identical_hashes_is_100():
+    use_case = _use_case([])
+    assert FindDuplicatesUseCase.similarity_percent("abc0000000000000", "abc0000000000000") == 100.0
+
+
+def test_similarity_percent_decreases_with_distance():
+    use_case = _use_case([])
+    # Maximally different (all 64 bits flipped) -> 0%
+    pct = FindDuplicatesUseCase.similarity_percent("0000000000000000", "ffffffffffffffff")
+    assert pct == 0.0
+
+
+def test_similarity_percent_invalid_hash_returns_zero():
+    assert FindDuplicatesUseCase.similarity_percent("", "abc0000000000000") == 0.0
+
+
+def test_delete_duplicate_removes_file_vector_and_db_row(tmp_path):
+    from PIL import Image
+    from unittest.mock import MagicMock
+
+    img_path = tmp_path / "dup.jpg"
+    Image.new("RGB", (10, 10)).save(img_path)
+
+    tile = _tile(1, str(img_path), sha256="X")
+    tile.embedding_id = 1
+
+    repo = MagicMock()
+    vector_index = MagicMock()
+    use_case = FindDuplicatesUseCase(repo, vector_index=vector_index)
+
+    use_case.delete_duplicate(tile)
+
+    assert not img_path.exists()
+    vector_index.remove_vectors.assert_called_once_with([1])
+    vector_index.save_index.assert_called_once()
+    repo.remove.assert_called_once_with(1)
+
+
+def test_delete_duplicate_without_removing_file(tmp_path):
+    from PIL import Image
+    from unittest.mock import MagicMock
+
+    img_path = tmp_path / "dup.jpg"
+    Image.new("RGB", (10, 10)).save(img_path)
+
+    tile = _tile(1, str(img_path), sha256="X")
+    repo = MagicMock()
+    use_case = FindDuplicatesUseCase(repo)
+
+    use_case.delete_duplicate(tile, delete_file_from_disk=False)
+
+    assert img_path.exists()  # file untouched
+    repo.remove.assert_called_once_with(1)
+
+
+def test_delete_duplicate_without_vector_index_skips_faiss_cleanup(tmp_path):
+    from PIL import Image
+    from unittest.mock import MagicMock
+
+    img_path = tmp_path / "dup.jpg"
+    Image.new("RGB", (10, 10)).save(img_path)
+
+    tile = _tile(1, str(img_path), sha256="X")
+    tile.embedding_id = 1
+    repo = MagicMock()
+    use_case = FindDuplicatesUseCase(repo)  # no vector_index provided
+
+    use_case.delete_duplicate(tile)  # must not raise
+
+    assert not img_path.exists()
+    repo.remove.assert_called_once_with(1)

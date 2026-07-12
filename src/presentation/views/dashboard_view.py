@@ -1,63 +1,168 @@
 """
-Dashboard View for TileVision AI.
+Dashboard View for TileVision AI (Task A: Professional Dashboard).
 
-The landing/overview page: catalog size, license/trial status, and quick
-shortcuts into Index and Search.
+The landing/overview page. Shows:
+  - Stat cards: Total Images, Indexed Folders, Database Size, FAISS Index
+    Size, Last Search, License Status, Trial Remaining.
+  - Recent Activity feed (indexing/search/duplicate-scan events).
+  - Recent Searches list (click to re-run — mirrors the Search page's
+    history panel).
+  - Quick Actions: Search, Index Folder, Duplicate Detection, Settings.
+
+All data is supplied via provider callables (consistent with the existing
+pattern from the original Dashboard) rather than passing repository
+objects directly into the View, keeping this layer decoupled from data
+access per the app's Clean Architecture / MVVM structure.
 """
 
 import logging
-from typing import Callable, Optional
+from pathlib import Path
+from typing import Callable, List, Optional
 
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QGridLayout,
+    QLabel,
+    QPushButton,
+    QFrame,
+    QScrollArea,
+)
 
 logger = logging.getLogger("tilevision.presentation.views.dashboard_view")
 
 
 class _StatCard(QFrame):
-    """A single stat tile (e.g. '1,204 Indexed Tiles')."""
+    """A single stat tile (e.g. '1,204 Total Images')."""
 
-    def __init__(self, value: str, label: str, parent=None) -> None:
+    def __init__(self, icon: str, value: str, label: str, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("StatCard")
         layout = QVBoxLayout(self)
+        layout.setSpacing(2)
+
+        icon_label = QLabel(icon)
+        icon_label.setObjectName("StatIcon")
+        layout.addWidget(icon_label)
 
         value_label = QLabel(value)
         value_label.setObjectName("StatValue")
+        value_label.setWordWrap(True)
         layout.addWidget(value_label)
 
         caption_label = QLabel(label)
         caption_label.setObjectName("StatCaption")
         layout.addWidget(caption_label)
 
+        self.value_label = value_label
+
+
+def _format_bytes(num_bytes: int) -> str:
+    """Human-readable file size, e.g. '4.2 MB'."""
+    size = float(num_bytes)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} {unit}"
+        size /= 1024
+    return f"{size:.1f} GB"
+
 
 class DashboardView(QWidget):
-    """Landing page widget showing catalog overview and quick actions."""
+    """Landing page widget showing catalog overview, activity, and quick actions."""
 
     def __init__(
         self,
         catalog_count_provider: Optional[Callable[[], int]] = None,
         watched_folder_count_provider: Optional[Callable[[], int]] = None,
+        indexed_folder_count_provider: Optional[Callable[[], int]] = None,
+        database_size_provider: Optional[Callable[[], int]] = None,
+        faiss_size_provider: Optional[Callable[[], int]] = None,
+        last_search_provider: Optional[Callable[[], object]] = None,
+        recent_activity_provider: Optional[Callable[[], List[object]]] = None,
+        recent_searches_provider: Optional[Callable[[], List[object]]] = None,
         license_details: Optional[dict] = None,
         on_go_to_index: Optional[Callable[[], None]] = None,
         on_go_to_search: Optional[Callable[[], None]] = None,
+        on_go_to_duplicates: Optional[Callable[[], None]] = None,
+        on_go_to_settings: Optional[Callable[[], None]] = None,
+        on_repeat_search: Optional[Callable[[str], None]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self._catalog_count_provider = catalog_count_provider
         self._watched_folder_count_provider = watched_folder_count_provider
+        self._indexed_folder_count_provider = indexed_folder_count_provider
+        self._database_size_provider = database_size_provider
+        self._faiss_size_provider = faiss_size_provider
+        self._last_search_provider = last_search_provider
+        self._recent_activity_provider = recent_activity_provider
+        self._recent_searches_provider = recent_searches_provider
         self._license_details = license_details or {}
         self._on_go_to_index = on_go_to_index
         self._on_go_to_search = on_go_to_search
+        self._on_go_to_duplicates = on_go_to_duplicates
+        self._on_go_to_settings = on_go_to_settings
+        self._on_repeat_search = on_repeat_search
         self._setup_ui()
         self._apply_styles()
 
     def refresh(self) -> None:
-        """Re-read catalog stats (call after indexing completes)."""
-        count = self._catalog_count_provider() if self._catalog_count_provider else 0
-        self._tiles_card_value.setText(f"{count:,}")
+        """Re-read all stats and lists (call after indexing/search/duplicate scans)."""
+        self._tiles_card.value_label.setText(self._safe_call(self._catalog_count_provider, "0", fmt="{:,}"))
+        self._folders_card.value_label.setText(self._safe_call(self._indexed_folder_count_provider, "0", fmt="{:,}"))
+        self._db_size_card.value_label.setText(self._format_size(self._database_size_provider))
+        self._faiss_size_card.value_label.setText(self._format_size(self._faiss_size_provider))
+        self._last_search_card.value_label.setText(self._format_last_search())
+        self._populate_activity_list()
+        self._populate_search_list()
+
+    @staticmethod
+    def _safe_call(provider, default, fmt: Optional[str] = None) -> str:
+        if provider is None:
+            return default
+        try:
+            value = provider()
+            return fmt.format(value) if fmt else str(value)
+        except Exception as e:
+            logger.error(f"Dashboard provider call failed: {e}")
+            return default
+
+    def _format_size(self, provider) -> str:
+        if provider is None:
+            return "—"
+        try:
+            return _format_bytes(provider())
+        except Exception as e:
+            logger.error(f"Dashboard size provider failed: {e}")
+            return "—"
+
+    def _format_last_search(self) -> str:
+        if self._last_search_provider is None:
+            return "Never"
+        try:
+            entry = self._last_search_provider()
+        except Exception as e:
+            logger.error(f"Dashboard last-search provider failed: {e}")
+            return "—"
+        if entry is None:
+            return "Never"
+        name = Path(entry.query_image_path).name
+        return name
 
     def _setup_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        outer_layout.addWidget(scroll)
+
+        content = QWidget()
+        scroll.setWidget(content)
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(16)
 
@@ -65,44 +170,194 @@ class DashboardView(QWidget):
         title.setObjectName("PageTitle")
         layout.addWidget(title)
 
-        subtitle_text = self._build_license_subtitle()
-        subtitle = QLabel(subtitle_text)
+        subtitle = QLabel(self._build_license_subtitle())
         subtitle.setObjectName("PageSubtitle")
         layout.addWidget(subtitle)
 
-        stats_row = QHBoxLayout()
-        stats_row.setSpacing(12)
+        layout.addWidget(self._build_stats_grid())
+        layout.addWidget(self._build_quick_actions())
+        layout.addWidget(self._build_activity_and_history_row(), stretch=1)
+
+    def _build_stats_grid(self) -> QWidget:
+        grid_widget = QWidget()
+        grid = QGridLayout(grid_widget)
+        grid.setSpacing(12)
 
         tile_count = self._catalog_count_provider() if self._catalog_count_provider else 0
-        tiles_card = _StatCard(f"{tile_count:,}", "Indexed Tiles")
-        self._tiles_card_value = tiles_card.findChild(QLabel, "StatValue")
-        stats_row.addWidget(tiles_card)
+        self._tiles_card = _StatCard("🖼️", f"{tile_count:,}", "Total Images")
+        grid.addWidget(self._tiles_card, 0, 0)
+
+        folder_count = self._indexed_folder_count_provider() if self._indexed_folder_count_provider else 0
+        self._folders_card = _StatCard("📂", f"{folder_count:,}", "Indexed Folders")
+        grid.addWidget(self._folders_card, 0, 1)
+
+        self._db_size_card = _StatCard("🗄️", self._format_size(self._database_size_provider), "Database Size")
+        grid.addWidget(self._db_size_card, 0, 2)
+
+        self._faiss_size_card = _StatCard("🧮", self._format_size(self._faiss_size_provider), "FAISS Index Size")
+        grid.addWidget(self._faiss_size_card, 0, 3)
+
+        self._last_search_card = _StatCard("🔍", self._format_last_search(), "Last Search")
+        grid.addWidget(self._last_search_card, 1, 0)
+
+        license_text, license_icon = self._build_license_card_text()
+        self._license_card = _StatCard(license_icon, license_text, "License Status")
+        grid.addWidget(self._license_card, 1, 1)
+
+        trial_text = self._build_trial_remaining_text()
+        self._trial_card = _StatCard("⏳", trial_text, "Trial Remaining")
+        grid.addWidget(self._trial_card, 1, 2)
 
         watched_count = self._watched_folder_count_provider() if self._watched_folder_count_provider else 0
-        stats_row.addWidget(_StatCard(str(watched_count), "Watched Folders"))
+        self._watched_card = _StatCard("👁️", f"{watched_count:,}", "Watched Folders")
+        grid.addWidget(self._watched_card, 1, 3)
 
-        stats_row.addStretch()
-        layout.addLayout(stats_row)
+        for col in range(4):
+            grid.setColumnStretch(col, 1)
+
+        return grid_widget
+
+    def _build_license_card_text(self) -> tuple:
+        if self._license_details.get("is_trial"):
+            return "Trial", "🕐"
+        if self._license_details:
+            return self._license_details.get("license_type", "Licensed"), "🔐"
+        return "Unlicensed", "🔓"
+
+    def _build_trial_remaining_text(self) -> str:
+        if self._license_details.get("is_trial"):
+            return f"{self._license_details.get('days_remaining', 0)} days"
+        return "N/A"
+
+    def _build_quick_actions(self) -> QWidget:
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 4, 0, 0)
+        layout.setSpacing(8)
+
+        section_label = QLabel("Quick Actions")
+        section_label.setObjectName("SectionLabel")
+        layout.addWidget(section_label)
 
         actions_row = QHBoxLayout()
         actions_row.setSpacing(12)
 
-        index_button = QPushButton("📁  Go to Folder Indexing")
-        index_button.setObjectName("ActionButton")
-        if self._on_go_to_index:
-            index_button.clicked.connect(self._on_go_to_index)
-        actions_row.addWidget(index_button)
-
-        search_button = QPushButton("🔍  Go to Visual Search")
-        search_button.setObjectName("ActionButton")
-        if self._on_go_to_search:
-            search_button.clicked.connect(self._on_go_to_search)
-        actions_row.addWidget(search_button)
+        for icon_text, label_text, callback in [
+            ("🔍", "Search", self._on_go_to_search),
+            ("📁", "Index Folder", self._on_go_to_index),
+            ("🧬", "Duplicate Detection", self._on_go_to_duplicates),
+            ("⚙️", "Settings", self._on_go_to_settings),
+        ]:
+            button = QPushButton(f"{icon_text}  {label_text}")
+            button.setObjectName("ActionButton")
+            if callback:
+                button.clicked.connect(callback)
+            else:
+                button.setEnabled(False)
+            actions_row.addWidget(button)
 
         actions_row.addStretch()
         layout.addLayout(actions_row)
+        return container
 
+    def _build_activity_and_history_row(self) -> QWidget:
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 8, 0, 0)
+        layout.setSpacing(16)
+
+        layout.addWidget(self._build_activity_panel(), stretch=1)
+        layout.addWidget(self._build_search_history_panel(), stretch=1)
+        return container
+
+    def _build_activity_panel(self) -> QWidget:
+        panel = QFrame()
+        panel.setObjectName("ListPanel")
+        layout = QVBoxLayout(panel)
+
+        label = QLabel("Recent Activity")
+        label.setObjectName("SectionLabel")
+        layout.addWidget(label)
+
+        self._activity_list_layout = QVBoxLayout()
+        self._activity_list_layout.setSpacing(4)
+        layout.addLayout(self._activity_list_layout)
         layout.addStretch()
+
+        self._populate_activity_list()
+        return panel
+
+    def _populate_activity_list(self) -> None:
+        while self._activity_list_layout.count():
+            item = self._activity_list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        entries = []
+        if self._recent_activity_provider is not None:
+            try:
+                entries = self._recent_activity_provider()
+            except Exception as e:
+                logger.error(f"Dashboard activity provider failed: {e}")
+
+        if not entries:
+            empty = QLabel("No activity yet.")
+            empty.setObjectName("EmptyListLabel")
+            self._activity_list_layout.addWidget(empty)
+            return
+
+        for entry in entries:
+            when = entry.created_at.strftime("%b %d, %I:%M %p") if entry.created_at else ""
+            row = QLabel(f"• {entry.message}  <span style='color:#5A5F73;'>({when})</span>")
+            row.setObjectName("ActivityRow")
+            row.setWordWrap(True)
+            self._activity_list_layout.addWidget(row)
+
+    def _build_search_history_panel(self) -> QWidget:
+        panel = QFrame()
+        panel.setObjectName("ListPanel")
+        layout = QVBoxLayout(panel)
+
+        label = QLabel("Recent Searches")
+        label.setObjectName("SectionLabel")
+        layout.addWidget(label)
+
+        self._search_list_layout = QVBoxLayout()
+        self._search_list_layout.setSpacing(4)
+        layout.addLayout(self._search_list_layout)
+        layout.addStretch()
+
+        self._populate_search_list()
+        return panel
+
+    def _populate_search_list(self) -> None:
+        while self._search_list_layout.count():
+            item = self._search_list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        entries = []
+        if self._recent_searches_provider is not None:
+            try:
+                entries = self._recent_searches_provider()
+            except Exception as e:
+                logger.error(f"Dashboard search history provider failed: {e}")
+
+        if not entries:
+            empty = QLabel("No searches yet.")
+            empty.setObjectName("EmptyListLabel")
+            self._search_list_layout.addWidget(empty)
+            return
+
+        for entry in entries:
+            name = Path(entry.query_image_path).name
+            row_button = QPushButton(f"🔍  {name} — {entry.result_count} result(s)")
+            row_button.setObjectName("SearchHistoryRow")
+            if self._on_repeat_search:
+                row_button.clicked.connect(
+                    lambda checked=False, p=entry.query_image_path: self._on_repeat_search(p)
+                )
+            self._search_list_layout.addWidget(row_button)
 
     def _build_license_subtitle(self) -> str:
         if self._license_details.get("is_trial"):
@@ -117,16 +372,30 @@ class DashboardView(QWidget):
             """
             #PageTitle { font-size: 20px; font-weight: 700; color: #E8EAF6; }
             #PageSubtitle { font-size: 12px; color: #8A8FA3; }
+            #SectionLabel { font-size: 13px; font-weight: 700; color: #ACB0C4; margin-top: 4px; }
             #StatCard {
                 background-color: #232634; border: 1px solid #2E3243; border-radius: 10px;
-                padding: 16px; min-width: 160px;
+                padding: 14px; min-width: 140px; min-height: 80px;
             }
-            #StatValue { font-size: 28px; font-weight: 700; color: #E8EAF6; }
+            #StatIcon { font-size: 16px; }
+            #StatValue { font-size: 20px; font-weight: 700; color: #E8EAF6; }
             #StatCaption { font-size: 11px; color: #8A8FA3; }
             #ActionButton {
                 background-color: #2D3250; border: 1px solid #3D4166; border-radius: 8px;
                 padding: 14px 18px; color: #E8EAF6; font-size: 13px; font-weight: 600;
             }
-            #ActionButton:hover { background-color: #3D4166; }
+            #ActionButton:hover:enabled { background-color: #3D4166; }
+            #ActionButton:disabled { color: #55596B; }
+            #ListPanel {
+                background-color: #1E212C; border: 1px solid #2E3243; border-radius: 10px;
+                padding: 14px;
+            }
+            #ActivityRow { color: #C7CAD9; font-size: 12px; padding: 3px 0; }
+            #EmptyListLabel { color: #55596B; font-size: 12px; font-style: italic; }
+            #SearchHistoryRow {
+                text-align: left; background-color: #262B3D; border: 1px solid #2E3243;
+                border-radius: 6px; padding: 6px 10px; color: #D6D9E8; font-size: 12px;
+            }
+            #SearchHistoryRow:hover { background-color: #333852; }
             """
         )

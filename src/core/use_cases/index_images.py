@@ -194,6 +194,7 @@ class IndexImagesUseCase:
         progress_callback: Optional[Callable[[int, int, str, float], None]] = None,
         cancel_event: Optional[threading.Event] = None,
         pause_event: Optional[threading.Event] = None,
+        force: bool = False,
     ) -> ScanResult:
         """
         Scan a directory recursively and perform a "smart" incremental
@@ -211,6 +212,14 @@ class IndexImagesUseCase:
             progress_callback: Optional callback receiving (processed_count, total_count, current_filename, eta_seconds).
             cancel_event: Threading event to stop the scan loop.
             pause_event: Threading event to temporarily pause the scan loop.
+            force: If True, re-embed every file regardless of whether its
+                content hash matches what's already indexed (Task D:
+                Settings' "Rebuild FAISS Index" action — useful if the
+                FAISS index file itself was lost/corrupted while SQLite
+                metadata is still intact, since vectors aren't otherwise
+                recoverable without re-running the embedding model).
+                Every file is counted as "modified" in the returned
+                ScanResult, not "new", since it was already known.
 
         Returns:
             A ScanResult with the new/modified/deleted/skipped breakdown.
@@ -291,7 +300,7 @@ class IndexImagesUseCase:
                 existing_record = self._repo.get_by_path(str(resolved_path))
                 was_previously_indexed = bool(existing_record and existing_record.is_indexed)
 
-                if was_previously_indexed:
+                if was_previously_indexed and not force:
                     current_sha = compute_sha256(resolved_path)
                     if current_sha == existing_record.sha256_hash:
                         logger.debug(f"Skipping unchanged tile: {file_name}")
