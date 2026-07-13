@@ -301,9 +301,29 @@ class DuplicatesView(QDialog):
             QWidget {{ color: {p['text_primary']}; }}
             #Title {{ font-size: 16px; font-weight: 700; }}
             #StatusLabel {{ color: {p['text_muted']}; font-size: 12px; }}
-            #ScanButton {{ background-color: {p['accent']}; border-radius: 6px; padding: 8px 16px; font-weight: 600; }}
-            #ScanButton:hover:enabled {{ background-color: {p['accent_hover']}; }}
-            #ScanButton:disabled {{ background-color: {p['button_bg']}; color: {p['text_faint']}; }}
+            #ScanButton {{
+                background-color: {p['accent']};
+                color: {p['button_text']};
+                border: none;
+                border-radius: 8px;
+                padding: 8px 18px;
+                font-weight: 700;
+            }}
+
+            #ScanButton:hover:enabled {{
+                background-color: {p['accent_hover']};
+                color: {p['button_text']};
+            }}
+
+            #ScanButton:pressed {{
+                background-color: {p['accent_hover']};
+                color: {p['button_text']};
+            }}
+
+            #ScanButton:disabled {{
+                background-color: {p['button_bg']};
+                color: {p['text_faint']};
+            }}
             #DuplicateGroupFrame {{
                 background-color: {p['bg_panel']}; border: 1px solid {p['border']}; border-radius: 8px;
                 padding: 10px; margin-bottom: 8px;

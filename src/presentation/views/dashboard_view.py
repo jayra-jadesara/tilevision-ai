@@ -111,6 +111,7 @@ class DashboardView(QWidget):
         self._on_repeat_search = on_repeat_search
         self._setup_ui()
         self._apply_styles()
+        self.refresh()
 
     def refresh(self) -> None:
         """Re-read all stats and lists (call after indexing/search/duplicate scans)."""
@@ -160,11 +161,14 @@ class DashboardView(QWidget):
         outer_layout.setContentsMargins(0, 0, 0, 0)
 
         scroll = QScrollArea()
+        scroll.setObjectName("DashboardScroll")
+        scroll.viewport().setObjectName("DashboardViewport")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         outer_layout.addWidget(scroll)
 
         content = QWidget()
+        content.setObjectName("DashboardContent")
         scroll.setWidget(content)
         layout = QVBoxLayout(content)
         layout.setContentsMargins(24, 20, 24, 20)
@@ -312,7 +316,11 @@ class DashboardView(QWidget):
 
         for entry in entries:
             when = entry.created_at.strftime("%b %d, %I:%M %p") if entry.created_at else ""
-            row = QLabel(f"• {entry.message}  <span style='color:#5A5F73;'>({when})</span>")
+            p = get_palette(self._theme)
+            row = QLabel(
+                f"• {entry.message} "
+                f"<span style='color:{p['text_muted']};'>({when})</span>"
+            )
             row.setObjectName("ActivityRow")
             row.setWordWrap(True)
             self._activity_list_layout.addWidget(row)
@@ -375,37 +383,76 @@ class DashboardView(QWidget):
         """Re-skin this view for a newly-selected theme (called by MainWindow)."""
         self._theme = theme
         self._apply_styles()
+        self.refresh()
 
     def _apply_styles(self) -> None:
         p = get_palette(self._theme)
         self.setStyleSheet(
             f"""
+            QWidget#DashboardContent {{
+                background-color: {p['bg_app']};
+            }}
+            QScrollArea#DashboardScroll {{
+                background-color: {p['bg_app']};
+                border: none;
+            }}
+            QWidget#DashboardViewport {{
+                background-color: {p['bg_app']};
+            }}
             #PageTitle {{ font-size: 20px; font-weight: 700; color: {p['text_primary']}; }}
             #PageSubtitle {{ font-size: 12px; color: {p['text_muted']}; }}
             #SectionLabel {{ font-size: 13px; font-weight: 700; color: {p['text_secondary']}; margin-top: 4px; }}
             #StatCard {{
-                background-color: {p['bg_panel']}; border: 1px solid {p['border']}; border-radius: 10px;
-                padding: 14px; min-width: 140px; min-height: 80px;
+                background-color:{p['bg_panel']};
+                border:1px solid {p['border']};
+                border-radius:10px;
+                padding:14px;
+                min-width:140px;
+                min-height:80px;
+            }}
+            #StatCard:hover {{
+                border:1px solid {p['accent']};
             }}
             #StatIcon {{ font-size: 16px; }}
             #StatValue {{ font-size: 20px; font-weight: 700; color: {p['text_primary']}; }}
             #StatCaption {{ font-size: 11px; color: {p['text_muted']}; }}
             #ActionButton {{
-                background-color: {p['accent']}; border: 1px solid {p['accent_hover']}; border-radius: 8px;
-                padding: 14px 18px; color: white; font-size: 13px; font-weight: 600;
+                background-color:{p['accent']};
+                color:white;
+                border:none;
+                border-radius:8px;
+                padding:14px 24px;
+                font-size:14px;
+                font-weight:700;
             }}
-            #ActionButton:hover:enabled {{ background-color: {p['accent_hover']}; }}
-            #ActionButton:disabled {{ background-color: {p['button_bg']}; color: {p['text_faint']}; border-color: {p['border']}; }}
+            #ActionButton:hover {{
+                background-color:{p['accent_hover']};
+            }}
+            #ActionButton:pressed {{
+                background-color:{p['accent_hover']};
+            }}
             #ListPanel {{
-                background-color: {p['bg_panel_alt']}; border: 1px solid {p['border']}; border-radius: 10px;
-                padding: 14px;
+                background-color: {p['bg_panel']};
+                border:1px solid {p['border']};
+                border-radius:10px;
+                padding:14px;
             }}
             #ActivityRow {{ color: {p['text_secondary']}; font-size: 12px; padding: 3px 0; }}
             #EmptyListLabel {{ color: {p['text_faint']}; font-size: 12px; font-style: italic; }}
             #SearchHistoryRow {{
-                text-align: left; background-color: {p['row_alt']}; border: 1px solid {p['border']};
-                border-radius: 6px; padding: 6px 10px; color: {p['text_secondary']}; font-size: 12px;
+                text-align:left;
+                background-color:{p['bg_panel_alt']};
+                border:1px solid {p['border']};
+                border-radius:6px;
+                padding:8px 12px;
+                color:{p['text_secondary']};
+            }}
+            #SearchHistoryRow:hover {{
+                background-color:{p['button_hover']};
             }}
             #SearchHistoryRow:hover {{ background-color: {p['button_hover']}; }}
+            QLabel {{
+                background: transparent;
+            }}
             """
         )

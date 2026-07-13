@@ -91,7 +91,8 @@ class HelpView(QDialog):
         super().__init__(parent)
         self._theme = theme
         self.setWindowTitle("Help & User Guide")
-        self.resize(680, 660)
+        self.resize(900, 720)
+        self.setMinimumSize(860, 680)
         self._setup_ui()
         self._apply_styles()
 
@@ -108,11 +109,17 @@ class HelpView(QDialog):
         layout.addWidget(self._build_header())
 
         scroll = QScrollArea()
+        scroll.setObjectName("HelpScroll")
+        scroll.viewport().setObjectName("HelpViewport")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setAutoFillBackground(False)
 
         steps_container = QWidget()
+        steps_container.setObjectName("HelpContent")
+        steps_container.setAutoFillBackground(True)
         steps_layout = QVBoxLayout(steps_container)
+        steps_layout.setContentsMargins(10,10,10,10)
         steps_layout.setSpacing(10)
 
         for step in _STEPS:
@@ -126,6 +133,7 @@ class HelpView(QDialog):
 
     def _build_header(self) -> QWidget:
         header = QWidget()
+        header.setObjectName("HelpHeader")
         layout = QVBoxLayout(header)
         layout.setContentsMargins(0, 0, 0, 8)
         layout.setSpacing(2)
@@ -211,7 +219,7 @@ class HelpView(QDialog):
         pixmap = QPixmap(str(_LOGO_SMALL_PATH))
         if not pixmap.isNull():
             logo_label.setPixmap(
-                pixmap.scaled(28, 28, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                pixmap.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             )
             layout.addWidget(logo_label)
 

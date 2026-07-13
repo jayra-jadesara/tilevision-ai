@@ -210,6 +210,8 @@ _DARK_PALETTE = {
     "danger_bg": "#4A1A1A",
     "danger_hover": "#7A2828",
     "row_alt": "#262B3D",
+    "button_text": "#FFFFFF",
+    "button_secondary_text": "#E8EAF6",
 }
 
 _LIGHT_PALETTE = {
@@ -236,6 +238,8 @@ _LIGHT_PALETTE = {
     "danger_bg": "#FEE2E2",
     "danger_hover": "#FCA5A5",
     "row_alt": "#F5F6FB",
+    "button_text": "#FFFFFF",
+    "button_secondary_text": "#1E212C",
 }
 
 
