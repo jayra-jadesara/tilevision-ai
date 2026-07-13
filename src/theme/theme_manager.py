@@ -27,6 +27,8 @@ shared palette and exposes set_theme() so MainWindow can propagate a
 theme change to every open view immediately.
 """
 
+import re
+
 _SHARED_COMPONENT_QSS_TEMPLATE = """
 /* ── QComboBox popup list (the actual bug fix for Task 5/10) ── */
 QComboBox QAbstractItemView {{
@@ -251,3 +253,34 @@ def get_palette(theme: str) -> dict:
         only on which palette dict it was given.
     """
     return dict(_LIGHT_PALETTE if theme == "light" else _DARK_PALETTE)
+
+
+def adapt_legacy_stylesheet(stylesheet: str, theme: str) -> str:
+    """Translate legacy dark-only QSS into the selected shared palette.
+
+    MainWindow predates the palette-based views and still owns a local QSS
+    stylesheet. Local widget QSS has higher precedence than QApplication QSS,
+    so it must be translated too or it will keep the app chrome dark in light
+    mode.
+    """
+    if theme != "light":
+        return stylesheet
+
+    palette = get_palette(theme)
+    replacements = {
+        "#1A1D26": palette["bg_app"],
+        "#13151F": palette["bg_sidebar"],
+        "#2D3250": palette["border"],
+        "#5C6BC0": palette["accent_hover"],
+        "#37474F": palette["text_faint"],
+        "#546E7A": palette["text_muted"],
+        "#1E2130": palette["bg_panel_alt"],
+        "#1E2847": palette["button_hover"],
+        "#7986CB": palette["accent_text"],
+        "#69F0AE": palette["success_text"],
+        "#E8EAF6": palette["text_primary"],
+        "#252837": palette["bg_input"],
+        "#3D4166": palette["border_strong"],
+    }
+    pattern = re.compile("|".join(re.escape(color) for color in replacements), re.IGNORECASE)
+    return pattern.sub(lambda match: replacements[match.group(0).upper()], stylesheet)
