@@ -47,7 +47,7 @@ from src.presentation.views.duplicates_view import DuplicatesView
 from src.presentation.views.settings_view import SettingsView
 from src.presentation.views.dashboard_view import DashboardView
 from src.presentation.views.help_view import HelpView
-from src.theme.theme_manager import get_app_stylesheet
+from src.theme.theme_manager import adapt_legacy_stylesheet, get_app_stylesheet
 
 logger = logging.getLogger("tilevision.presentation.views.main_window")
 
@@ -497,6 +497,7 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app is not None:
             app.setStyleSheet(get_app_stylesheet(theme))
+        self._apply_styles()
 
         for view_attr in ("_indexing_view", "_search_view", "_dashboard_view", "_settings_view"):
             view = getattr(self, view_attr, None)
@@ -574,7 +575,7 @@ class MainWindow(QMainWindow):
 
     def _apply_styles(self) -> None:
         """Apply global QSS styles to the main window."""
-        self.setStyleSheet("""
+        self.setStyleSheet(adapt_legacy_stylesheet("""
             /* ── Base ──────────────────────────────────────────────────────── */
             QMainWindow {
                 background-color: #1A1D26;
@@ -680,4 +681,4 @@ class MainWindow(QMainWindow):
                 padding: 4px 8px;
                 border-radius: 4px;
             }
-        """)
+        """, self._current_theme))
