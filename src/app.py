@@ -163,7 +163,7 @@ def build_application() -> int:
     )
     vector_index = FaissIndexManager(
         index_path=settings.index_path,
-        dimension=512,
+        dimension=768,
     )
 
     # ── 8. Construct Use Cases ────────────────────────────────────────────────

@@ -187,7 +187,7 @@ class IndexingView(QWidget):
 
     def _build_progress_section(self) -> QGroupBox:
         """Build the progress bar with file counter and ETA display."""
-        group = QGroupBox("⚙️  Indexing Progress")
+        group = QGroupBox("⚙ Indexing Progress")
         group.setObjectName("SectionGroup")
         layout = QVBoxLayout(group)
         layout.setContentsMargins(16, 12, 16, 12)
@@ -617,18 +617,23 @@ class IndexingView(QWidget):
                 background-color: {p['bg_panel_alt']};
                 border: 1px solid {p['border']};
                 border-radius: 8px;
-                margin-top: 12px;
+
+                margin-top: 18px;
+                padding-top: 10px;
+
                 font-size: 13px;
-                color: {p['text_secondary']};
                 font-weight: 600;
-                padding-top: 6px;
+                color: {p['text_secondary']};
             }}
+
             QGroupBox::title {{
                 subcontrol-origin: margin;
                 subcontrol-position: top left;
-                padding: 0 8px;
+
                 left: 12px;
-                top: -6px;
+                top: 0px;
+
+                padding: 0 6px;
                 color: {p['accent_text']};
             }}
 
