@@ -193,7 +193,9 @@ class MainWindow(QMainWindow):
         if _APP_ICON_PATH.exists():
             self.setWindowIcon(QIcon(str(_APP_ICON_PATH)))
         self.setMinimumSize(1100, 760)
-        self.resize(1280, 800)
+
+        # Open maximized by default
+        self.showMaximized()
 
         self._setup_ui()
         self._apply_styles()

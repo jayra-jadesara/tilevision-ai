@@ -370,7 +370,7 @@ class AdminLicenseWindow(QMainWindow):
 def main() -> int:
     app = QApplication(sys.argv)
     window = AdminLicenseWindow()
-    window.show()
+    window.showMaximized()
     return app.exec()
 
 
