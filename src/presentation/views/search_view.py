@@ -60,8 +60,15 @@ _QUERY_IMAGE_EXTENSIONS = {
     ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tiff", ".tif"
 }
 
-_TABLE_COLUMNS = ["Thumbnail", "Similarity", "Product Code", "Brand", "Category", "Image Path"]
-
+_TABLE_COLUMNS = [
+    "Thumbnail",
+    "Similarity",
+    "Product Code",
+    "Brand",
+    "Category",
+    "Preview",
+    "Image Path"
+]
 
 class DropZone(QFrame):
     """
@@ -333,6 +340,11 @@ class SearchView(QWidget):
         button_col.setSpacing(8)
         button_col.addStretch()
 
+        self._export_button = QPushButton("⬇  Export Catalogue")
+        self._export_button.setObjectName("SecondaryButton")
+        self._export_button.clicked.connect(self._on_export_clicked)
+        button_col.addWidget(self._export_button)
+
         self._crop_button = QPushButton("✂️  Crop & Search")
         self._crop_button.setObjectName("SecondaryButton")
         self._crop_button.clicked.connect(self._on_crop_clicked)
@@ -386,6 +398,53 @@ class SearchView(QWidget):
         is_placeholder = value.startswith("Any ")
         self._viewmodel.set_filter(field, "" if is_placeholder else value)
 
+    def _on_export_clicked(self) -> None:
+        import traceback
+        try:
+            from src.presentation.dialogs.export_catalog_dialog import ExportCatalogDialog
+            from src.services.pdf_export_service import PDFExportService
+        except Exception as exc:
+            traceback.print_exc()
+            raise
+            # QMessageBox.critical(self, "Export Error", f"Missing export modules:\n{exc}")
+            # return
+
+        if not self._current_results:
+            QMessageBox.information(self, "Export Catalogue", "No results to export yet.")
+            return
+
+        dialog = ExportCatalogDialog(self)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+
+        output_path = dialog.output_path()
+        if not output_path:
+            return
+
+        options = dialog.options()
+        selected_indices = None
+
+        if options.include_selected_only:
+            selected_indices = sorted({index.row() for index in self._results_table.selectionModel().selectedRows()})
+            if not selected_indices:
+                QMessageBox.information(self, "Export Catalogue", "Select one or more results first.")
+                return
+
+        service = PDFExportService()
+        try:
+            created = service.export_catalogue(
+                output_file=output_path,
+                query_image_path=self._current_query_image_path,
+                results=self._current_results,
+                options=options,
+                selected_indices=selected_indices,
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Export Failed", str(exc))
+            return
+
+        QMessageBox.information(self, "Export Complete", f"Catalogue saved to:\n{created}")
+        
     @Slot(dict)
     def _on_filters_available(self, options: dict) -> None:
         for field, combo in self._filter_combos.items():
@@ -429,11 +488,12 @@ class SearchView(QWidget):
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
 
         self._results_table.cellDoubleClicked.connect(self._on_row_double_clicked)
-        self._results_table.cellClicked.connect(self._on_row_clicked)
+        self._results_table.cellClicked.connect(self._on_table_clicked)
         self._results_table.customContextMenuRequested.connect(self._on_results_context_menu)
 
         self._empty_state_icon = QLabel("🔍")
@@ -528,7 +588,7 @@ class SearchView(QWidget):
         self._current_query_image_path = None
         self._crop_button.setEnabled(False)
         self._viewmodel.clear_results()
-
+        
     def _on_history_clicked(self) -> None:
         """Show a popup menu of recent searches (Task C: Search History)."""
         self._viewmodel.load_search_history()
@@ -631,9 +691,14 @@ class SearchView(QWidget):
             self._results_table.setItem(row, 3, QTableWidgetItem(tile.brand or "—"))
             self._results_table.setItem(row, 4, QTableWidgetItem(tile.category or "—"))
 
+            preview_item = QTableWidgetItem("👁 View")
+            preview_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            preview_item.setToolTip("Preview Tile")
+            self._results_table.setItem(row, 5, preview_item)
+
             path_item = QTableWidgetItem(tile.file_path)
             path_item.setToolTip(tile.file_path)
-            self._results_table.setItem(row, 5, path_item)
+            self._results_table.setItem(row, 6, path_item)
 
             if is_best_match:
                 for col in range(self._results_table.columnCount()):
@@ -644,14 +709,15 @@ class SearchView(QWidget):
     def _on_row_double_clicked(self, row: int, _column: int) -> None:
         self._open_image_at_row(row)
 
-    def _on_row_clicked(self, row: int, _column: int) -> None:
-        """Task C: Large Preview — a single click shows a bigger preview
-        of the result without leaving the app (double-click still opens
-        the image in the OS default viewer)."""
+    def _on_table_clicked(self, row: int, column: int) -> None:
+        # Preview column
+        if column != 5:
+            return
+
         if row < 0 or row >= len(self._current_results):
             return
-        result = self._current_results[row]
-        self._preview_panel.show_result(result)
+
+        self._preview_panel.show_result(self._current_results[row])
 
     def _on_results_context_menu(self, position) -> None:
         row = self._results_table.rowAt(position.y())

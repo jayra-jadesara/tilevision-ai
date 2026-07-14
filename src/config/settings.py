@@ -44,8 +44,8 @@ class AppSettings:
             "index_path": str(self._config_dir / "index" / "tiles.index"),
             "thumbnail_dir": str(self._config_dir / "thumbnails"),
             "watch_folders": [],
-            "top_k": 20,
-            "theme": "dark",
+            "top_k": 10,
+            "theme": "light",
             "thumbnail_size": 200,
             "license_key": ""
         }
