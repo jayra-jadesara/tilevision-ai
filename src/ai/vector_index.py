@@ -22,9 +22,10 @@ logger = logging.getLogger("tilevision.ai.vector_index")
 class FaissIndexManager:
     """
     Manages a local FAISS CPU vector index linked to SQLite database primary keys.
+    dimension: Dimension of the vector embeddings (1024 for DINOv2 Large)
     """
 
-    def __init__(self, index_path: str, dimension: int = 512) -> None:
+    def __init__(self, index_path: str, dimension: int = 1024) -> None:
         """
         Initialize the index manager.
 
@@ -48,6 +49,7 @@ class FaissIndexManager:
         Creates a new IndexIDMap wrapping an IndexFlatIP (Inner Product)
         if the file does not exist.
         """
+        
         if faiss is None:
             logger.critical("faiss package is not installed! Cannot load index.")
             raise ImportError("faiss-cpu package is required for FaissIndexManager.")
@@ -215,6 +217,12 @@ class FaissIndexManager:
             # Format query vector as 2D numpy array
             query_np = np.array([query_vector], dtype=np.float32)
 
+            print("=" * 50)
+            print("FAISS Index Dimension :", self._index.d)
+            print("Query Shape           :", query_np.shape)
+            print("Query Dtype           :", query_np.dtype)
+            print("Query Norm            :", np.linalg.norm(query_np))
+            print("=" * 50)
             # Perform search (Inner Product values equivalent to Cosine similarity for normalized inputs)
             # distances is shape (1, top_k), indices is shape (1, top_k)
             scores, indices = self._index.search(query_np, top_k)
@@ -234,9 +242,14 @@ class FaissIndexManager:
                     similarity_scores.append(clamped_score)
 
             return matching_ids, similarity_scores
-        except Exception as e:
-            logger.error(f"FAISS vector search failed: {e}")
-            raise RuntimeError(f"FAISS index query error: {e}") from e
+        except Exception:
+            import traceback
+
+            traceback.print_exc()
+
+            logger.exception("FAISS vector search failed")
+
+            raise
 
     def save_index(self) -> None:
         """Write the current state of the FAISS index to disk."""

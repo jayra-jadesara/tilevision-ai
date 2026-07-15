@@ -31,7 +31,7 @@ from src.data.sqlite_repository import (
     SQLiteImageRepository, SQLiteLicenseRepository, SQLiteIndexedFolderRepository,
     SQLiteSearchHistoryRepository, SQLiteActivityLogRepository,
 )
-from src.ai.embedder import OpenCLIPEmbedder
+
 from src.ai.vector_index import FaissIndexManager
 from src.core.use_cases.index_images import IndexImagesUseCase
 from src.core.use_cases.search_tiles import SearchTilesUseCase
@@ -45,6 +45,8 @@ from src.presentation.viewmodels.search_viewmodel import SearchViewModel
 from src.presentation.views.main_window import MainWindow, DashboardDataProviders
 from src.presentation.views.license_view import LicenseView
 
+from src.ai.embedder import DINOv2Embedder
+from src.ai.feature_extractor import FeatureExtractor
 
 _app_logger = logging.getLogger("tilevision.app")
 
@@ -156,28 +158,30 @@ def build_application() -> int:
             logger.info(f"Valid license found for: {customer}")
 
     # ── 7. Construct AI Layer ─────────────────────────────────────────────────
-    logger.info("Initializing CLIP embedder and FAISS index manager...")
-    embedder = OpenCLIPEmbedder(
-        model_name=settings.model_name,
-        pretrained=settings.pretrained,
+    logger.info("Initializing AI engine...")
+    embedder = DINOv2Embedder()
+
+    feature_extractor = FeatureExtractor(
+        embedder=embedder
     )
+
     vector_index = FaissIndexManager(
         index_path=settings.index_path,
-        dimension=768,
+        dimension=1024,
     )
 
     # ── 8. Construct Use Cases ────────────────────────────────────────────────
     logger.info("Initializing use cases...")
     index_images_use_case = IndexImagesUseCase(
         image_repository=image_repository,
-        embedder=embedder,
+        feature_extractor=feature_extractor,
         vector_index=vector_index,
         thumbnail_dir=settings.thumbnail_dir,
         folder_repository=indexed_folder_repository,
     )
     search_tiles_use_case = SearchTilesUseCase(
         image_repository=image_repository,
-        embedder=embedder,
+        feature_extractor=feature_extractor,
         vector_index=vector_index,
         thumbnail_dir=settings.thumbnail_dir,
     )
@@ -189,8 +193,8 @@ def build_application() -> int:
     #        after this, both index_images and search_tiles reuse the same
     #        in-memory model/index instances for the lifetime of the process.
     try:
-        logger.info("Warming up CLIP model and FAISS index...")
-        embedder.load_model()
+        logger.info("Warming up AI engine and FAISS index...")
+        feature_extractor.load_model()
         vector_index.load_index()
         logger.info("AI engine warm-up complete.")
     except Exception as e:

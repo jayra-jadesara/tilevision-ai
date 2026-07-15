@@ -2,7 +2,7 @@
 Performance test for Feature 2's <2s @ 50,000 images target.
 
 Builds a real FAISS index (IndexFlatIP via FaissIndexManager) with 50,000
-synthetic 512-dim vectors and measures pure vector-search latency. Model
+ssynthetic 1024-dimensional DINOv2 embeddings and measures pure vector-search latency. Model
 inference time (CLIP forward pass) isn't reproducible without torch/GPU in
 this environment, so this isolates and verifies the piece that scales with
 catalog size: the FAISS query itself must not become the bottleneck.
@@ -24,7 +24,7 @@ from src.ai.vector_index import FaissIndexManager
 
 @pytest.mark.slow
 def test_faiss_search_under_2s_at_50k_scale(tmp_path):
-    dimension = 512
+    dimension = 1024
     n_vectors = 50_000
 
     manager = FaissIndexManager(str(tmp_path / "perf.index"), dimension=dimension)
@@ -35,7 +35,7 @@ def test_faiss_search_under_2s_at_50k_scale(tmp_path):
     for start in range(0, n_vectors, batch):
         ids = list(range(start, min(start + batch, n_vectors)))
         vectors = rng.normal(size=(len(ids), dimension)).astype(np.float32)
-        # L2-normalize, matching how real CLIP embeddings are stored.
+        # L2-normalize, matching real DINOv2 embeddings.
         vectors /= np.linalg.norm(vectors, axis=1, keepdims=True)
         manager.add_vectors(ids, vectors.tolist(), persist=False)
 

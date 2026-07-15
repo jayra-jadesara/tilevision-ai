@@ -14,7 +14,7 @@ from typing import Callable, List, Optional, Tuple
 
 from src.core.models import TileImage, ScanResult, IndexedFolderState
 from src.data.repository_interface import IImageRepository, IIndexedFolderRepository
-from src.ai.embedder import OpenCLIPEmbedder
+from src.ai.feature_extractor import FeatureExtractor
 from src.ai.vector_index import FaissIndexManager
 from src.utils.image_utils import (
     validate_image,
@@ -65,7 +65,7 @@ class IndexImagesUseCase:
     def __init__(
         self,
         image_repository: IImageRepository,
-        embedder: OpenCLIPEmbedder,
+        feature_extractor: FeatureExtractor,
         vector_index: FaissIndexManager,
         thumbnail_dir: str,
         folder_repository: Optional[IIndexedFolderRepository] = None,
@@ -86,7 +86,7 @@ class IndexImagesUseCase:
                 this use case without it keep working unchanged.
         """
         self._repo = image_repository
-        self._embedder = embedder
+        self._feature_extractor = feature_extractor
         self._index = vector_index
         self._thumbnail_dir = Path(thumbnail_dir)
         self._supported_extensions = set(SUPPORTED_IMAGE_EXTENSIONS)
@@ -138,6 +138,11 @@ class IndexImagesUseCase:
         # Parse naming metadata
         brand, category, color, size, product_code = parse_filename_metadata(resolved_path.stem)
 
+        logger.info(
+            "Extracting AI features..."
+        )
+        features = self._feature_extractor.extract(str(resolved_path))
+
         # 1. Store/update metadata record in SQLite
         # Note: We temporarily insert without embedding_id, get the ID, and then update it.
         tile = TileImage(
@@ -155,6 +160,7 @@ class IndexImagesUseCase:
             sha256_hash=sha256_hash,
             perceptual_hash=perceptual_hash,
             is_indexed=False,
+            features=features
         )
         
         # Save record to get the database auto-increment ID
@@ -166,27 +172,39 @@ class IndexImagesUseCase:
 
         try:
             # 2. Generate and cache thumbnail
-            generate_thumbnail(resolved_path, self._thumbnail_dir)
+            generate_thumbnail(
+                resolved_path,
+                self._thumbnail_dir,
+            )
 
-            # 3. Extract embedding vector
-            logger.info(f"Extracting embedding features for tile ID {db_id}: {file_name}")
-            embedding = self._embedder.get_embedding(str(resolved_path))
+            # 3. Reuse embedding already extracted above.
+            # Do NOT run FeatureExtractor again.
+            logger.info(
+                f"Indexing vector into FAISS for ID {db_id}: {file_name}"
+            )
 
-            # 4. Insert/replace embedding into FAISS index. update_vectors()
-            #    removes any existing vector for this id first, so a changed
-            #    file's stale embedding never lingers alongside the fresh one.
-            logger.info(f"Indexing vector into FAISS for ID {db_id}")
-            self._index.update_vectors([db_id], [embedding], persist=persist)
+            self._index.update_vectors(
+                [db_id],
+                [features.embedding.tolist()],
+                persist=persist,
+            )
 
-            # 5. Update SQLite record with embedding_id and mark as successfully indexed
+            # 4. Mark tile as successfully indexed
             tile.is_indexed = True
+
+            # Save again to persist embedding_id + indexed status.
             self._repo.add(tile)
-            
+
             return db_id
+
         except Exception as e:
-            logger.error(f"Failed to complete indexing pipeline for file {resolved_path}: {e}")
-            # Clean up the record or mark it as failed if needed, but we raise to let worker handle
-            raise RuntimeError(f"Indexing pipeline failed for file: {file_name}") from e
+            logger.error(
+                f"Failed to complete indexing pipeline for file "
+                f"{resolved_path}: {e}"
+            )
+            raise RuntimeError(
+                f"Indexing pipeline failed for file: {file_name}"
+            ) from e
 
     def scan_and_index_directory(
         self,

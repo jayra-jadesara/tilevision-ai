@@ -9,9 +9,13 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from src.ai.candidate_filter import CandidateFilter
+from src.ai.pattern_classifier import PatternClassifier
+
 from src.core.models import TileImage, SearchResult
 from src.data.repository_interface import IImageRepository
-from src.ai.embedder import OpenCLIPEmbedder
+from src.ai.feature_extractor import FeatureExtractor
+from src.ai.reranker import HybridReRanker
 from src.ai.vector_index import FaissIndexManager
 from src.utils.image_utils import get_thumbnail_path, validate_image
 
@@ -39,7 +43,7 @@ class SearchTilesUseCase:
     def __init__(
         self,
         image_repository: IImageRepository,
-        embedder: OpenCLIPEmbedder,
+        feature_extractor: FeatureExtractor,
         vector_index: FaissIndexManager,
         thumbnail_dir: str,
     ) -> None:
@@ -53,9 +57,11 @@ class SearchTilesUseCase:
             thumbnail_dir: Folder path where thumbnails are cached.
         """
         self._repo = image_repository
-        self._embedder = embedder
+        self._feature_extractor = feature_extractor
         self._index = vector_index
         self._thumbnail_dir = Path(thumbnail_dir)
+
+        self._reranker = HybridReRanker()
 
     def get_filter_options(self) -> Dict[str, List[str]]:
         """
@@ -112,26 +118,58 @@ class SearchTilesUseCase:
         )
 
         try:
-            # 1. Generate query embedding from CLIP model
+            # 1. Extract AI features from the query image
             logger.info("Computing embedding for query image...")
-            query_embedding = self._embedder.get_embedding(str(query_path))
+            query_features = self._feature_extractor.extract(
+                str(query_path)
+            )
+
+
+            # ----------------------------------------
+            # Detect query pattern type
+            # ----------------------------------------
+
+            query_pattern_type = PatternClassifier.classify(
+                query_features
+            )
+
+            logger.info(
+                "Query pattern type detected: %s",
+                query_pattern_type.value,
+            )
+
 
             # 2. Search FAISS index. If filters are active, widen the
             #    candidate pool since some matches will be filtered out
             #    downstream — otherwise a filtered search could return
             #    fewer than top_k results even when more matches exist
             #    further down the similarity ranking.
-            search_k = top_k
+            total_vectors = self._index.get_total_count()
+
+            if total_vectors <= 0:
+                logger.info("FAISS index is empty. No search results available.")
+                return []
+
+            search_k = min(
+                max(top_k * 5, 100),
+                total_vectors,
+            )
+
             if active_filters:
-                total_vectors = self._index.get_total_count()
                 search_k = min(
-                    max(top_k * _FILTER_CANDIDATE_MULTIPLIER, top_k),
+                    max(
+                        top_k * _FILTER_CANDIDATE_MULTIPLIER,
+                        top_k,
+                    ),
                     _FILTER_CANDIDATE_CAP,
-                    total_vectors or top_k,
+                    total_vectors,
                 )
 
             logger.info(f"Querying FAISS vector index (search_k={search_k})...")
-            matching_ids, similarity_scores = self._index.search_vectors(query_embedding, search_k)
+            matching_ids, _ = self._index.search_vectors(
+                query_features.embedding.tolist(),
+                search_k,
+            )
 
             if not matching_ids:
                 logger.info("No matching records found in vector index.")
@@ -144,31 +182,119 @@ class SearchTilesUseCase:
             # Create a lookup map of Tile ID -> TileImage
             tile_map = {t.id: t for t in matched_tiles if t.id is not None}
 
-            # 4. Construct SearchResult list mapping matches and cached thumbnail paths,
-            #    applying metadata filters, stopping once top_k results are collected.
-            results: List[SearchResult] = []
-            for record_id, score in zip(matching_ids, similarity_scores):
-                if len(results) >= top_k:
-                    break
+            # ----------------------------------------
+            # Build candidate list
+            # ----------------------------------------
 
-                if record_id not in tile_map:
+            candidates = []
+
+            for record_id in matching_ids:
+
+                tile = tile_map.get(record_id)
+
+                if tile is None:
                     continue
-
-                tile = tile_map[record_id]
 
                 if not self._matches_filters(tile, active_filters):
                     continue
 
-                # Resolve cached thumbnail path (same hashing logic used at index time)
-                thumbnail_path = get_thumbnail_path(Path(tile.file_path), self._thumbnail_dir)
+                candidates.append(tile)
 
-                # Fallback to the full-size source image if no cached thumbnail exists
-                # (e.g. thumbnail generation previously failed for this file)
-                thumb_str = str(thumbnail_path) if thumbnail_path.exists() else tile.file_path
+            logger.info(
+                "Candidates before filtering: %d",
+                len(candidates),
+            )
 
-                # Map score (cosine similarity range -1.0 to 1.0) to 0-100 percentage
-                # For CLIP cosine similarity, negative scores are extremely rare.
-                similarity_percentage = max(0.0, min(100.0, score * 100.0))
+            # ----------------------------------------
+            # Candidate filtering
+            # ----------------------------------------
+
+            candidates = CandidateFilter.filter(
+                query_features,
+                candidates,
+            )
+
+            logger.info(
+                "Candidates after filtering: %d",
+                len(candidates),
+            )
+            
+            # -------------------------------------------------------
+            # Hybrid Re-ranking
+            # -------------------------------------------------------
+
+            reranked = []
+
+            for tile in candidates:
+
+                if tile.features is None:
+                    continue
+                
+                # Detect candidate tile pattern type
+                candidate_pattern_type = PatternClassifier.classify(
+                    tile.features
+                )
+
+                hybrid = self._reranker.score(
+                    query_features,
+                    tile.features,
+                )
+
+                logger.info(
+                    "PATTERN TYPE | %s | query=%s | candidate=%s",
+                    tile.file_name,
+                    query_pattern_type.value,
+                    candidate_pattern_type.value,
+                )
+
+                logger.info(
+                    "RERANK | %-45s | "
+                    "embedding=%.4f | "
+                    "pattern=%.4f | "
+                    "color=%.4f | "
+                    "texture=%.4f | "
+                    "edge=%.4f | "
+                    "final=%.4f",
+                    tile.file_name,
+                    hybrid.embedding,
+                    hybrid.pattern,
+                    hybrid.color,
+                    hybrid.texture,
+                    hybrid.edge,
+                    hybrid.final,
+                )
+
+                reranked.append(
+                    (
+                        hybrid.final,
+                        tile,
+                    )
+                )
+
+            reranked.sort(
+                key=lambda item: item[0],
+                reverse=True,
+            )
+
+            results: List[SearchResult] = []
+
+            for score, tile in reranked[:top_k]:
+
+                thumbnail_path = get_thumbnail_path(
+                    Path(tile.file_path),
+                    self._thumbnail_dir,
+                )
+
+                thumb_str = (
+                    str(thumbnail_path)
+                    if thumbnail_path.exists()
+                    else tile.file_path
+                )
+
+                similarity_percentage = max(
+                    0.0,
+                    min(100.0, score * 100.0),
+                )
 
                 results.append(
                     SearchResult(
@@ -178,7 +304,6 @@ class SearchTilesUseCase:
                     )
                 )
 
-            logger.info(f"Search query completed. Found {len(results)} matches.")
             return results
         except Exception as e:
             logger.error(f"Failed to execute tile search query: {e}")

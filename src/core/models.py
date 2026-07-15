@@ -4,8 +4,9 @@ Domain models for TileVision AI.
 Defines pure Python dataclasses representing business entities.
 No dependencies on framework or database code.
 """
+from src.ai.models import TileFeatures
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
@@ -14,34 +15,61 @@ from typing import Optional
 class TileImage:
     """
     Represents an indexed tile image entity in the catalog.
-    Includes retail metadata for showrooms and visual search tracking.
+
+    Business metadata is stored directly on this model.
+    AI-generated features are grouped into TileFeatures.
     """
+
+    # ------------------------------------------------------------------
+    # File Information
+    # ------------------------------------------------------------------
+
     file_path: str
     file_name: str
     file_size: int
     dimensions: str
-    
-    # Showroom Retail Metadata
+
+    # ------------------------------------------------------------------
+    # Showroom Metadata
+    # ------------------------------------------------------------------
+
     brand: str = "Unknown"
     category: str = "Unknown"
     color: str = "Unknown"
     size: str = "Unknown"
     product_code: str = "Unknown"
-    
-    # Image Details & Hashes
+
+    # ------------------------------------------------------------------
+    # Image Metadata
+    # ------------------------------------------------------------------
+
     width: int = 0
     height: int = 0
+
     sha256_hash: str = ""
     perceptual_hash: str = ""
+
+    # Temporary (will be removed after full migration)
     embedding_id: Optional[int] = None
-    
-    # DB Management
+    # ------------------------------------------------------------------
+    # AI Features
+    # ------------------------------------------------------------------
+
+    features: Optional[TileFeatures] = None
+
+    # ------------------------------------------------------------------
+    # Database
+    # ------------------------------------------------------------------
+
     id: Optional[int] = None
+
     created_time: Optional[datetime] = None
+
     updated_time: Optional[datetime] = None
+
     is_indexed: bool = False
 
-
+    
 @dataclass
 class LicenseInfo:
     """

@@ -1,129 +1,383 @@
 """
-OpenCLIP embedder module for TileVision AI.
+DINOv2 embedder module for TileVision AI.
 
-Handles loading OpenCLIP models and performing offline feature extraction (inference)
-to generate high-dimensional image embeddings.
+Uses Meta DINOv2 with multi-patch feature extraction.
+
+The final embedding remains the same dimension as the original
+DINOv2 model, allowing it to work directly with FAISS.
+
+DINOv2 Large:
+    1024 dimensions
+
+Pipeline:
+
+Image
+  │
+  ├── Full Image
+  ├── Center Crop
+  ├── Top Left
+  ├── Top Right
+  ├── Bottom Left
+  └── Bottom Right
+          │
+          ▼
+      DINOv2
+          │
+          ▼
+    Average Embeddings
+          │
+          ▼
+      L2 Normalize
+          │
+          ▼
+       1024D Vector
 """
 
+from __future__ import annotations
+
 import logging
-from pathlib import Path
 from typing import List
+
 import numpy as np
 from PIL import Image
+
 import torch
+from transformers import AutoImageProcessor, AutoModel
 
-try:
-    import open_clip
-except ImportError:
-    # Fallback/mock support for environments where open_clip is not pre-installed yet
-    open_clip = None
-
-logger = logging.getLogger("tilevision.ai.embedder")
+from src.ai.preprocess.image_preprocessor import ImagePreprocessor
 
 
-class OpenCLIPEmbedder:
-    """
-    Service wrapper around OpenCLIP models using PyTorch.
-    
-    Generates L2-normalized 512-dimensional (or model-specific) float32 embeddings.
-    """
+logger = logging.getLogger(
+    "tilevision.ai.embedder"
+)
 
-    def __init__(self, model_name: str, pretrained: str) -> None:
-        """
-        Initialize the embedder with model config.
 
-        Args:
-            model_name: Name of the CLIP model (e.g. "ViT-B-32-quickgelu").
-            pretrained: Path to local weights file or name of pretrained dataset.
-        """
-        self._model_name = model_name
-        self._pretrained = pretrained
-        self._device = "cuda" if torch.cuda.is_available() else "cpu"
+class DINOv2Embedder:
+
+    MODEL_NAME = "facebook/dinov2-large"
+
+    def __init__(self) -> None:
+
+        self._device = torch.device(
+            "cuda"
+            if torch.cuda.is_available()
+            else "cpu"
+        )
+
+        self._processor = None
         self._model = None
-        self._preprocess = None
-        
-        logger.info(f"OpenCLIPEmbedder initialized. Hardware device: {self._device.upper()}")
+
+        logger.info(
+            "DINOv2 Embedder initialized. Device: %s",
+            self._device.type.upper(),
+        )
+
+    # ========================================================
+    # Model loading
+    # ========================================================
 
     def load_model(self) -> None:
-        """
-        Load the CLIP model and preprocessing transforms.
-        
-        Supports loading local weight files for offline installations.
-        """
-        if open_clip is None:
-            logger.critical("open_clip package is not installed! Cannot load model.")
-            raise ImportError("open-clip-torch package is required for OpenCLIPEmbedder.")
 
-        logger.info(f"Loading CLIP model '{self._model_name}' (weights source: {self._pretrained})...")
-        try:
-            # If pretrained is a local file path, pass it directly
-            weights_path = Path(self._pretrained)
-            if weights_path.exists() and weights_path.is_file():
-                logger.info(f"Loading local model weights from file: {weights_path}")
-                model, _, preprocess = open_clip.create_model_and_transforms(
-                    self._model_name,
-                    pretrained=str(weights_path.resolve()),
-                    device=self._device,
-                )
+        if self._model is not None:
+            return
+
+        logger.info(
+            "Loading DINOv2 model..."
+        )
+
+        self._processor = (
+            AutoImageProcessor.from_pretrained(
+                self.MODEL_NAME
+            )
+        )
+
+        self._model = (
+            AutoModel.from_pretrained(
+                self.MODEL_NAME
+            )
+        )
+
+        self._model.to(
+            self._device
+        )
+
+        self._model.eval()
+
+        logger.info(
+            "DINOv2 model loaded successfully."
+        )
+
+    # ========================================================
+    # Single image embedding
+    # ========================================================
+
+    def _extract_single(
+        self,
+        image: Image.Image,
+    ) -> np.ndarray:
+
+        inputs = self._processor(
+            images=image,
+            return_tensors="pt",
+        )
+
+        inputs = {
+            key: value.to(self._device)
+            for key, value
+            in inputs.items()
+        }
+
+        with torch.inference_mode():
+
+            if self._device.type == "cuda":
+
+                with torch.autocast(
+                    device_type="cuda",
+                ):
+
+                    outputs = self._model(
+                        **inputs
+                    )
+
             else:
-                # Load via open_clip download manager (will download if internet is active,
-                # or load from ~/.cache/clip offline if already cached)
-                model, _, preprocess = open_clip.create_model_and_transforms(
-                    self._model_name,
-                    pretrained=self._pretrained,
-                    device=self._device,
+
+                outputs = self._model(
+                    **inputs
                 )
-            
-            self._model = model
-            self._preprocess = preprocess
-            
-            # Set model to evaluation mode
-            self._model.eval()
-            
-            logger.info("CLIP model successfully loaded.")
-        except Exception as e:
-            logger.critical(f"Failed to load CLIP model weights: {e}")
-            raise RuntimeError(f"Model load error: {e}") from e
 
-    def get_embedding(self, image_path: str) -> List[float]:
-        """
-        Generate L2-normalized feature vector for the given image.
+        # CLS token
+        embedding = (
+            outputs
+            .last_hidden_state[:, 0]
+            .cpu()
+            .numpy()[0]
+            .astype(np.float32)
+        )
 
-        Args:
-            image_path: Path to the image file.
+        # Normalize individual embedding
+        embedding /= (
+            np.linalg.norm(
+                embedding
+            )
+            + 1e-8
+        )
 
-        Returns:
-            A list of floats representing the normalized feature vector.
-        """
-        if self._model is None or self._preprocess is None:
+        return embedding
+
+    # ========================================================
+    # Generate patches
+    # ========================================================
+
+    @staticmethod
+    def _generate_patches(
+        image: Image.Image,
+    ) -> List[Image.Image]:
+
+        image = image.convert(
+            "RGB"
+        )
+
+        width, height = image.size
+
+        patches: List[Image.Image] = []
+
+        # ----------------------------------------------------
+        # 1. Full image
+        # ----------------------------------------------------
+
+        patches.append(
+            image
+        )
+
+        # Don't create tiny patches.
+        if width < 100 or height < 100:
+            return patches
+
+        # ----------------------------------------------------
+        # Patch size
+        #
+        # Use approximately 65% of image dimensions.
+        # This creates overlapping crops and retains context.
+        # ----------------------------------------------------
+
+        crop_width = max(
+            1,
+            int(width * 0.65),
+        )
+
+        crop_height = max(
+            1,
+            int(height * 0.65),
+        )
+
+        # ----------------------------------------------------
+        # 2. Top-left
+        # ----------------------------------------------------
+
+        patches.append(
+            image.crop(
+                (
+                    0,
+                    0,
+                    crop_width,
+                    crop_height,
+                )
+            )
+        )
+
+        # ----------------------------------------------------
+        # 3. Top-right
+        # ----------------------------------------------------
+
+        patches.append(
+            image.crop(
+                (
+                    width - crop_width,
+                    0,
+                    width,
+                    crop_height,
+                )
+            )
+        )
+
+        # ----------------------------------------------------
+        # 4. Bottom-left
+        # ----------------------------------------------------
+
+        patches.append(
+            image.crop(
+                (
+                    0,
+                    height - crop_height,
+                    crop_width,
+                    height,
+                )
+            )
+        )
+
+        # ----------------------------------------------------
+        # 5. Bottom-right
+        # ----------------------------------------------------
+
+        patches.append(
+            image.crop(
+                (
+                    width - crop_width,
+                    height - crop_height,
+                    width,
+                    height,
+                )
+            )
+        )
+
+        # ----------------------------------------------------
+        # 6. Center
+        # ----------------------------------------------------
+
+        left = (
+            width - crop_width
+        ) // 2
+
+        top = (
+            height - crop_height
+        ) // 2
+
+        patches.append(
+            image.crop(
+                (
+                    left,
+                    top,
+                    left + crop_width,
+                    top + crop_height,
+                )
+            )
+        )
+
+        return patches
+
+    # ========================================================
+    # Multi-patch embedding
+    # ========================================================
+
+    def extract(
+        self,
+        image_path: str,
+    ) -> np.ndarray:
+
+        if self._model is None:
             self.load_model()
 
-        path = Path(image_path)
-        if not path.exists():
-            raise FileNotFoundError(f"Image not found at path: {image_path}")
+        processed = (
+            ImagePreprocessor.preprocess(
+                image_path
+            )
+        )
 
-        try:
-            # Load and preprocess image
-            with Image.open(path) as img:
-                # Convert RGBA/grayscale to RGB
-                if img.mode != "RGB":
-                    img = img.convert("RGB")
-                
-                # Apply transforms and add batch dimension
-                image_tensor = self._preprocess(img).unsqueeze(0).to(self._device)
+        image = processed.pil
 
-            # Perform inference without gradient tracking
-            with torch.no_grad():
-                # Extract image features
-                image_features = self._model.encode_image(image_tensor)
-                
-                # L2 normalize the embedding
-                image_features /= image_features.norm(dim=-1, keepdim=True)
-                
-                # Move to CPU and convert to numpy list
-                embedding_np = image_features.cpu().numpy().flatten().astype(np.float32)
-                
-            return list(embedding_np.tolist())
-        except Exception as e:
-            logger.error(f"Failed to extract embedding for {image_path}: {e}")
-            raise RuntimeError(f"Embedding extraction error: {e}") from e
+        patches = (
+            self._generate_patches(
+                image
+            )
+        )
+
+        embeddings = []
+
+        for patch in patches:
+
+            embedding = (
+                self._extract_single(
+                    patch
+                )
+            )
+
+            embeddings.append(
+                embedding
+            )
+
+        # Stack:
+        #
+        # 6 x 1024
+        #
+        stacked = np.stack(
+            embeddings,
+            axis=0,
+        )
+
+        # Average all local + global representations
+        final_embedding = np.mean(
+            stacked,
+            axis=0,
+        ).astype(
+            np.float32
+        )
+
+        # Normalize final embedding
+        final_embedding /= (
+            np.linalg.norm(
+                final_embedding
+            )
+            + 1e-8
+        )
+
+        logger.debug(
+            "Multi-patch DINOv2 embedding: "
+            "patches=%d dimension=%d",
+            len(patches),
+            final_embedding.shape[0],
+        )
+
+        return final_embedding
+
+    # ========================================================
+    # Backward compatibility
+    # ========================================================
+
+    def get_embedding(
+        self,
+        image_path: str,
+    ) -> np.ndarray:
+
+        return self.extract(
+            image_path
+        )

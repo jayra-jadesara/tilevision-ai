@@ -9,8 +9,11 @@ from datetime import datetime
 import logging
 import sqlite3
 from typing import List, Optional
+import numpy as np
 
 from src.core.models import TileImage, LicenseInfo, IndexedFolderState, SearchHistoryEntry, ActivityLogEntry
+from src.ai.models import TileFeatures
+
 from src.data.db_context import DatabaseContext
 from src.data.repository_interface import (
     IImageRepository, ILicenseRepository, IIndexedFolderRepository,
@@ -54,8 +57,68 @@ class SQLiteImageRepository(IImageRepository):
 
     def _row_to_entity(self, row: sqlite3.Row) -> TileImage:
         """Helper to convert a sqlite3.Row to a TileImage model."""
+
         created_time = _parse_timestamp(row["created_time"])
         updated_time = _parse_timestamp(row["updated_time"])
+
+        # -------------------------------------------------------
+        # Reconstruct AI features from SQLite
+        # -------------------------------------------------------
+
+        features = None
+
+        has_complete_features = all(
+            row[name] is not None
+            for name in (
+                "embedding_blob",
+                "color_histogram",
+                "texture_histogram",
+                "edge_histogram",
+                "pattern_features",
+                "dominant_r",
+                "dominant_g",
+                "dominant_b",
+            )
+        )
+
+        if has_complete_features:
+            features = TileFeatures(
+                # DINOv2 embedding is stored as float32
+                embedding=self._deserialize_vector(
+                    row["embedding_blob"]
+                ),
+
+                # Histograms are stored as float16
+                color_histogram=self._deserialize_histogram(
+                    row["color_histogram"]
+                ),
+
+                texture_histogram=self._deserialize_histogram(
+                    row["texture_histogram"]
+                ),
+
+                edge_histogram=self._deserialize_histogram(
+                    row["edge_histogram"]
+                ),
+
+                # Pattern features are stored as float32
+                pattern_features=self._deserialize_vector(
+                    row["pattern_features"]
+                ),
+
+                dominant_color=(
+                    row["dominant_r"],
+                    row["dominant_g"],
+                    row["dominant_b"],
+                ),
+
+                width=row["width"],
+                height=row["height"],
+            )
+
+         # -------------------------------------------------------
+        # Build TileImage entity
+        # -------------------------------------------------------
 
         return TileImage(
             id=row["id"],
@@ -73,6 +136,7 @@ class SQLiteImageRepository(IImageRepository):
             sha256_hash=row["sha256_hash"],
             perceptual_hash=row["perceptual_hash"],
             embedding_id=row["embedding_id"],
+            features=features,
             created_time=created_time,
             updated_time=updated_time,
             is_indexed=bool(row["is_indexed"]),
@@ -90,11 +154,60 @@ class SQLiteImageRepository(IImageRepository):
         """
         query = """
         INSERT INTO tiles (
-            file_path, file_name, file_size, dimensions,
-            brand, category, color, size, product_code,
-            width, height, sha256_hash, perceptual_hash, embedding_id, is_indexed, updated_time
+
+            file_path,
+            file_name,
+            file_size,
+            dimensions,
+
+            brand,
+            category,
+            color,
+            size,
+            product_code,
+
+            width,
+            height,
+
+            sha256_hash,
+            perceptual_hash,
+
+            embedding_id,
+
+            embedding_blob,
+            embedding_dimension,
+            embedding_model,
+
+            color_histogram,
+            texture_histogram,
+            edge_histogram,
+            pattern_features,
+
+            dominant_r,
+            dominant_g,
+            dominant_b,
+
+            is_indexed,
+
+            updated_time
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        VALUES (
+            ?,?,?,?,?,?,
+            ?,?,?,?,
+            ?,?,
+            ?,?,
+            ?,
+
+            ?,?,
+            ?,
+
+            ?,?,
+            ?,
+            ?,
+            ?,?,
+            ?,
+            CURRENT_TIMESTAMP
+        )
         ON CONFLICT(file_path) DO UPDATE SET
             file_name=excluded.file_name,
             file_size=excluded.file_size,
@@ -109,6 +222,16 @@ class SQLiteImageRepository(IImageRepository):
             sha256_hash=excluded.sha256_hash,
             perceptual_hash=excluded.perceptual_hash,
             embedding_id=excluded.embedding_id,
+            embedding_blob=excluded.embedding_blob,
+            embedding_dimension=excluded.embedding_dimension,
+            embedding_model=excluded.embedding_model,
+            color_histogram=excluded.color_histogram,
+            texture_histogram=excluded.texture_histogram,
+            edge_histogram=excluded.edge_histogram,
+            pattern_features=excluded.pattern_features,
+            dominant_r=excluded.dominant_r,
+            dominant_g=excluded.dominant_g,
+            dominant_b=excluded.dominant_b,
             is_indexed=excluded.is_indexed,
             updated_time=CURRENT_TIMESTAMP
         RETURNING id;
@@ -116,6 +239,59 @@ class SQLiteImageRepository(IImageRepository):
         try:
             with self._db.session() as conn:
                 cursor = conn.cursor()
+                features = tile.features
+                embedding_blob = None
+
+                embedding_dimension = None
+
+                embedding_model = None
+
+                color_blob = None
+
+                texture_blob = None
+
+                edge_blob = None
+
+                pattern_features = None
+
+                r = g = b = 0
+
+                if features is not None:
+
+                    embedding_blob = self._serialize_vector(
+                        features.embedding
+                    )
+
+                    embedding_dimension = (
+                        len(features.embedding)
+                        if features.embedding is not None
+                        else None
+                    )
+
+                    embedding_model = (
+                        "facebook/dinov2-large"
+                    )
+
+                    color_blob = self._serialize_histogram(
+                        features.color_histogram
+                    )
+
+                    texture_blob = self._serialize_histogram(
+                        features.texture_histogram
+                    )
+
+                    edge_blob = self._serialize_histogram(
+                        features.edge_histogram
+                    )
+
+                    pattern_features = self._serialize_vector(
+                        features.pattern_features
+                    )
+
+                    r = int(features.dominant_color[0])
+                    g = int(features.dominant_color[1])
+                    b = int(features.dominant_color[2])
+                    
                 cursor.execute(
                     query,
                     (
@@ -123,16 +299,34 @@ class SQLiteImageRepository(IImageRepository):
                         tile.file_name,
                         tile.file_size,
                         tile.dimensions,
+
                         tile.brand,
                         tile.category,
                         tile.color,
                         tile.size,
                         tile.product_code,
+
                         tile.width,
                         tile.height,
+
                         tile.sha256_hash,
                         tile.perceptual_hash,
+
                         tile.embedding_id,
+
+                        embedding_blob,
+                        embedding_dimension,
+                        embedding_model,
+
+                        color_blob,
+                        texture_blob,
+                        edge_blob,
+                        pattern_features,
+
+                        r,
+                        g,
+                        b,
+
                         int(tile.is_indexed),
                     ),
                 )
@@ -292,6 +486,66 @@ class SQLiteImageRepository(IImageRepository):
         except sqlite3.Error as e:
             logger.error(f"Failed to fetch pending index tiles: {e}")
             return []
+
+    @staticmethod
+    def _serialize_vector(
+        vector: np.ndarray | None,
+    ) -> bytes | None:
+        """
+        Serialize a NumPy feature vector for SQLite BLOB storage.
+
+        Used for:
+        - DINOv2 embedding
+        - pattern features
+        """
+        if vector is None:
+            return None
+
+        vector = np.asarray(
+            vector,
+            dtype=np.float32,
+        )
+
+        return vector.tobytes()
+
+
+    @staticmethod
+    def _deserialize_vector(
+        blob: bytes | None,
+    ) -> np.ndarray | None:
+        """
+        Deserialize SQLite BLOB back into a float32 NumPy vector.
+        """
+        if blob is None:
+            return None
+
+        return np.frombuffer(
+            blob,
+            dtype=np.float32,
+        ).copy()
+    
+    @staticmethod
+    def _serialize_histogram(hist: np.ndarray | None) -> bytes | None:
+
+        if hist is None:
+            return None
+
+        return hist.astype(
+            np.float16
+        ).tobytes()
+
+    @staticmethod
+    def _deserialize_histogram(blob: bytes | None) -> np.ndarray | None:
+
+        if blob is None:
+            return None
+
+        return np.frombuffer(
+            blob,
+            dtype=np.float16,
+        ).astype(np.float32)
+
+
 
     # Allow-list of columns that may be queried via get_distinct_values().
     # Never interpolate the caller-supplied field name directly into SQL —

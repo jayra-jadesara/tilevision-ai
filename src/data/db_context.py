@@ -57,6 +57,16 @@ class DatabaseContext:
                 sha256_hash TEXT DEFAULT '',
                 perceptual_hash TEXT DEFAULT '',
                 embedding_id INTEGER,
+                embedding_blob BLOB,
+                embedding_dimension INTEGER DEFAULT 1024,
+                embedding_model TEXT DEFAULT 'facebook/dinov2-large',
+                color_histogram BLOB,
+                texture_histogram BLOB,
+                edge_histogram BLOB,
+                pattern_features BLOB,
+                dominant_r INTEGER DEFAULT 0,
+                dominant_g INTEGER DEFAULT 0,
+                dominant_b INTEGER DEFAULT 0,
                 created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 is_indexed INTEGER DEFAULT 0
@@ -107,14 +117,64 @@ class DatabaseContext:
         try:
             with self.session() as conn:
                 cursor = conn.cursor()
+
                 for query in queries:
                     cursor.execute(query)
+
+                self._migrate_schema(conn)
+
                 conn.commit()
             logger.info("Database schema initialized successfully.")
         except sqlite3.Error as e:
             logger.critical(f"Failed to initialize database schema: {e}")
             raise RuntimeError(f"Database initialization failure: {e}") from e
 
+    def _migrate_schema(self, conn: sqlite3.Connection) -> None:
+        """
+        Migrate existing databases to the latest schema.
+
+        Safe to execute on every application startup.
+        """
+
+        logger.info("Checking database schema...")
+
+        cursor = conn.cursor()
+
+        cursor.execute("PRAGMA table_info(tiles)")
+        existing_columns = {
+            row["name"] if isinstance(row, sqlite3.Row) else row[1]
+            for row in cursor.fetchall()
+        }
+
+        migrations = {
+            "embedding_blob": "BLOB",
+            "embedding_dimension": "INTEGER DEFAULT 1024",
+            "embedding_model": "TEXT DEFAULT 'facebook/dinov2-large'",
+            "color_histogram": "BLOB",
+            "texture_histogram": "BLOB",
+            "edge_histogram": "BLOB",
+            "pattern_features": "BLOB",
+            "dominant_r": "INTEGER DEFAULT 0",
+            "dominant_g": "INTEGER DEFAULT 0",
+            "dominant_b": "INTEGER DEFAULT 0",
+        }
+
+        for column, definition in migrations.items():
+
+            if column in existing_columns:
+                continue
+
+            logger.info("Adding column: %s", column)
+
+            cursor.execute(
+                f"""
+                ALTER TABLE tiles
+                ADD COLUMN {column} {definition}
+                """
+            )
+
+        logger.info("Database schema is up to date.")
+        
     @contextmanager
     def session(self) -> Generator[sqlite3.Connection, None, None]:
         """
