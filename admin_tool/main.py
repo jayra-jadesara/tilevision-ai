@@ -23,7 +23,7 @@ from cryptography.hazmat.primitives.serialization import (
 )
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -55,6 +55,7 @@ from src.licensing.validator import (
     compute_expiry_date,
     generate_license_key,
 )
+from src.utils.brand_assets import APP_ICON_PATH, logo_pixmap
 
 _SETTINGS_PATH = Path.home() / ".tilevision_ai_vendor" / "admin_settings.json"
 
@@ -71,6 +72,8 @@ class AdminLicenseWindow(QMainWindow):
 
         self.setWindowTitle("TileVision AI — Vendor License Manager")
         self.resize(1020, 780)
+        if APP_ICON_PATH.exists():
+            self.setWindowIcon(QIcon(str(APP_ICON_PATH)))
         self._load_settings()
         self._setup_ui()
         self._apply_styles()
@@ -85,9 +88,24 @@ class AdminLicenseWindow(QMainWindow):
         layout.setSpacing(12)
 
         header = QHBoxLayout()
-        title = QLabel("TileVision AI — Vendor License Manager")
+        header.setSpacing(12)
+
+        logo_label = QLabel()
+        logo_label.setObjectName("BrandLabel")
+        logo_scaled = logo_pixmap(44)
+        if not logo_scaled.isNull():
+            logo_label.setPixmap(logo_scaled)
+        header.addWidget(logo_label)
+
+        title_block = QVBoxLayout()
+        title_block.setSpacing(2)
+        title = QLabel("TileVision AI")
         title.setObjectName("Title")
-        header.addWidget(title)
+        subtitle = QLabel("Vendor License Manager")
+        subtitle.setObjectName("Subtitle")
+        title_block.addWidget(title)
+        title_block.addWidget(subtitle)
+        header.addLayout(title_block)
         header.addStretch()
 
         theme_label = QLabel("Theme")
@@ -602,6 +620,9 @@ class AdminLicenseWindow(QMainWindow):
 def main() -> int:
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    app.setApplicationName("TileVision AI — Vendor License Manager")
+    if APP_ICON_PATH.exists():
+        app.setWindowIcon(QIcon(str(APP_ICON_PATH)))
     window = AdminLicenseWindow()
     window.show()
     return app.exec()

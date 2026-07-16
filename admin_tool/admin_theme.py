@@ -24,6 +24,14 @@ def get_admin_qss(theme: str) -> str:
         color: {p['text_primary']};
         background: transparent;
     }}
+    #Subtitle {{
+        font-size: 12px;
+        color: {p['text_muted']};
+        background: transparent;
+    }}
+    #BrandLabel {{
+        background: transparent;
+    }}
     #StatValue {{
         font-size: 24px;
         font-weight: 700;
