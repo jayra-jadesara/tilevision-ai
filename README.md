@@ -12,14 +12,19 @@
 
 TileVision AI lets tile showrooms **instantly find visually similar tiles** from a local image catalog using AI embeddings and vector search — completely offline, no cloud, no API keys required.
 
+Search combines **DINOv2-large** semantic embeddings with handcrafted descriptors (LAB color, multi-scale LBP texture, edge orientation, pattern structure) and a hybrid reranker tuned per pattern family (speckled, marble, terrazzo, plain, textured).
+
+---
+
 ## Tech Stack
 
 | Layer | Technology |
 |---|---|
 | UI | PySide6 (Qt for Python) |
-| AI Embeddings | OpenCLIP (ViT-B/32) |
-| Vector Search | FAISS CPU |
-| Image Processing | Pillow, OpenCV |
+| AI Embeddings | Meta DINOv2-large (`facebook/dinov2-large`, 1024D) |
+| Handcrafted Descriptors | LAB color, multi-scale LBP, edge orientation, pattern structure |
+| Vector Search | FAISS CPU (IndexFlatIP, cosine via L2-normalized vectors) |
+| Image Processing | Pillow, OpenCV, scikit-image |
 | Database | SQLite 3 |
 | Language | Python 3.12+ |
 | Licensing | ECDSA offline hardware lock |
@@ -46,51 +51,50 @@ python dev_tools/create_dev_license.py
 python main.py
 ```
 
+Data is stored under `%USERPROFILE%\.tilevision_ai\` (database, FAISS index, thumbnails, config).
+
 ---
 
 ## Project Structure
 
 ```
-tilevision_ai/
+tilevision-ai/
 ├── main.py                          # Entry point
 ├── requirements.txt
 ├── src/
 │   ├── app.py                       # Composition Root (DI bootstrapper)
 │   ├── ai/
-│   │   ├── embedder.py              # OpenCLIP embedding wrapper
-│   │   └── vector_index.py          # FAISS index manager
+│   │   ├── embedder.py              # DINOv2 multi-view embedder (3 views, batched)
+│   │   ├── feature_extractor.py     # Unified preprocess + descriptor pipeline
+│   │   ├── reranker.py              # HybridReRanker (DINOv2 + descriptors)
+│   │   ├── pattern_classifier.py    # Rule-based pattern family classifier
+│   │   ├── candidate_filter.py      # LAB dominant-color pre-filter
+│   │   ├── vector_index.py          # FAISS index manager
+│   │   ├── feature_versions.py      # Pipeline version tracking
+│   │   └── descriptors/             # Color, texture, edge, pattern descriptors
 │   ├── config/
 │   │   └── settings.py              # JSON-backed application settings
 │   ├── core/
-│   │   ├── models.py                # Domain entities (TileImage, LicenseInfo)
+│   │   ├── models.py                # Domain entities (TileImage, SearchResult)
 │   │   └── use_cases/
-│   │       ├── index_images.py      # Feature 1: Folder Indexing logic
-│   │       ├── search_tiles.py      # Feature 2: Visual Search logic
-│   │       ├── monitor_folder.py    # Feature 3: Auto Watch Folder
+│   │       ├── index_images.py      # Folder indexing (batched DINOv2)
+│   │       ├── search_tiles.py      # Visual similarity search
+│   │       ├── monitor_folder.py    # Auto watch-folder indexing
+│   │       ├── find_duplicates.py   # Near-duplicate detection
 │   │       └── validate_license.py  # License check use case
 │   ├── data/
 │   │   ├── db_context.py            # SQLite connection manager
 │   │   ├── repository_interface.py  # Abstract repository interfaces
-│   │   ├── sqlite_repository.py     # SQLite implementations
-│   │   └── settings_store.py        # Settings data service
+│   │   └── sqlite_repository.py     # SQLite implementations
 │   ├── licensing/
 │   │   ├── hardware.py              # Windows hardware fingerprinting
 │   │   └── validator.py             # ECDSA license validator
-│   ├── presentation/
-│   │   ├── viewmodels/
-│   │   │   └── indexing_viewmodel.py # Feature 1: Indexing ViewModel
-│   │   ├── views/
-│   │   │   ├── main_window.py       # Main application window + sidebar nav
-│   │   │   ├── indexing_view.py     # Feature 1: Indexing UI panel
-│   │   │   └── license_view.py      # License activation dialog
-│   │   └── workers/
-│   │       └── indexing_worker.py   # QThread background indexing worker
-│   └── utils/
-│       ├── image_utils.py           # Hashing, thumbnails, validation
-│       └── logger.py                # Rotating file + console logger
+│   └── presentation/                # Views, ViewModels, workers
+├── tests/                           # Unit and integration tests
 └── dev_tools/
+    ├── create_dev_license.py        # Dev: seed a wildcard dev license
     ├── generate_license.py          # Vendor: generate real license keys
-    └── create_dev_license.py        # Dev: seed a wildcard dev license
+    └── eval_recall_precision.py     # Offline Recall@K / Precision@K evaluation
 ```
 
 ---
@@ -111,40 +115,82 @@ Presentation (Views + ViewModels)
   Domain Models (Pure Python)
 ```
 
-- **No layer references the layer above it.**
+### Indexing pipeline
+
+```
+scan folder → batch(4 images) → letterbox preprocess → batched DINOv2 (3 views)
+           → LAB color + LBP + edge + pattern descriptors → SQLite + FAISS
+```
+
+### Search pipeline
+
+```
+query image → extract features once → FAISS coarse retrieval
+           → SQLite hydrate → LAB candidate filter → HybridReRanker
+           → calibrated display % (self-match → 100%)
+```
+
 - All dependencies are constructor-injected in `src/app.py`.
 - ViewModels expose Qt Signals only — Views are purely reactive.
+- DINOv2 model and FAISS index are warmed up at startup (singleton per process).
 
 ---
 
-## Feature 1: Folder Indexing
+## Features
 
-- Select any folder via the Browse dialog.
+### Folder Indexing
+
 - Recursive scan for `.jpg`, `.jpeg`, `.png`, `.webp` files.
-- Generates OpenCLIP embeddings for each image.
-- Stores vectors in FAISS (CPU), metadata in SQLite.
+- Batched DINOv2 inference (4 images/batch, 3 views/image in one forward pass).
+- Letterbox resize (aspect-ratio preserved), border trim, alpha compositing.
+- Stores 1024D vectors in FAISS, metadata + descriptors in SQLite.
 - **Incremental indexing**: skips unchanged files via SHA-256 hash comparison.
-- Background thread with live **progress bar**, **ETA**, **file counter**.
-- Full **Pause**, **Resume**, **Cancel** support.
+- Background thread with progress bar, ETA, and Pause/Resume/Cancel.
+
+### Visual Similarity Search
+
+- Query any tile image against the indexed catalog.
+- Hybrid reranking with DINOv2-primary weights (embedding floor ≥ 50%).
+- Pattern-family-aware scoring (speckled, marble, terrazzo, plain, textured).
+- Metadata filters: brand, category, color, size.
+- Self-match detection (SHA-256 + perceptual hash).
+- Calibrated similarity percentages for display.
+
+### Re-indexing after pipeline updates
+
+The feature pipeline is versioned (`feature_version`, `pattern_feature_version`). After upgrading TileVision AI, **rebuild the FAISS index** if the app reports stale features:
+
+1. Delete the old index (e.g. `%USERPROFILE%\.tilevision_ai\index\tiles.index`), or use Settings → Rebuild FAISS Index.
+2. Run a full folder scan.
+
+---
+
+## Development Tools
+
+### Search quality evaluation
+
+```bash
+# Auto mode: each indexed tile is a query; relevant = same product_code
+python dev_tools/eval_recall_precision.py --catalog-auto --max-queries 50
+
+# Explicit ground-truth manifest (JSONL)
+python dev_tools/eval_recall_precision.py --manifest eval/queries.jsonl --output eval/results.json
+```
+
+### Run tests
+
+```bash
+python -m pytest tests/ -q
+```
 
 ---
 
 ## Licensing
 
 TileVision AI uses **offline hardware-locked ECDSA licensing**:
+
 - The public key is embedded in the binary.
 - Licenses are locked to a specific machine fingerprint (BIOS + CPU + Registry).
 - No internet connection required for validation.
 
 For production key generation, see `dev_tools/generate_license.py`.
-
----
-
-## Upcoming Features
-
-| Feature | Description |
-|---|---|
-| Feature 2 | Visual Similarity Search |
-| Feature 3 | Tile Catalog Browser |
-| Feature 4 | Auto Folder Watch |
-| Feature 5 | Export & Reporting |
