@@ -48,6 +48,7 @@ from src.core.models import SearchResult
 from src.presentation.viewmodels.search_viewmodel import SearchViewModel, SearchState
 from src.presentation.views.crop_dialog import CropDialog
 from src.theme.theme_manager import get_palette
+from src.utils.query_image_hints import confidence_message, should_suggest_crop
 
 logger = logging.getLogger("tilevision.presentation.views.search_view")
 
@@ -308,6 +309,11 @@ class SearchView(QWidget):
         root_layout.addWidget(self._build_query_panel())
         root_layout.addWidget(self._build_filter_bar())
         root_layout.addWidget(self._build_progress_bar())
+        self._confidence_banner = QLabel("")
+        self._confidence_banner.setObjectName("ConfidenceBanner")
+        self._confidence_banner.setWordWrap(True)
+        self._confidence_banner.setVisible(False)
+        root_layout.addWidget(self._confidence_banner)
         root_layout.addWidget(self._build_results_table(), stretch=1)
         root_layout.addWidget(self._build_status_line())
 
@@ -573,6 +579,23 @@ class SearchView(QWidget):
         logger.info(f"Query image selected: {image_path}")
         self._current_query_image_path = image_path
         self._crop_button.setEnabled(True)
+        self._confidence_banner.setVisible(False)
+
+        suggest_crop, crop_reason = should_suggest_crop(image_path)
+        if suggest_crop:
+            reply = QMessageBox.question(
+                self,
+                "Crop Recommended",
+                f"{crop_reason}\n\n"
+                "Crop to the tile area only for much better search accuracy.\n\n"
+                "Open Crop & Search now?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self._on_crop_clicked()
+                return
+
         self._viewmodel.search_by_image(image_path)
 
     def _on_crop_clicked(self) -> None:
@@ -587,6 +610,7 @@ class SearchView(QWidget):
         self._drop_zone.reset()
         self._current_query_image_path = None
         self._crop_button.setEnabled(False)
+        self._confidence_banner.setVisible(False)
         self._viewmodel.clear_results()
         
     def _on_history_clicked(self) -> None:
@@ -623,6 +647,7 @@ class SearchView(QWidget):
 
         if is_searching:
             self._stats_label.setVisible(False)
+            self._confidence_banner.setVisible(False)
             self._start_searching_animation()
         else:
             self._stop_searching_animation()
@@ -631,6 +656,15 @@ class SearchView(QWidget):
     def _on_results_ready(self, results: List[SearchResult]) -> None:
         self._current_results = results
         self._populate_table(results)
+        self._show_confidence_banner(results)
+
+    def _show_confidence_banner(self, results: List[SearchResult]) -> None:
+        message = confidence_message(results)
+        if message:
+            self._confidence_banner.setText(f"⚠  {message}")
+            self._confidence_banner.setVisible(True)
+        else:
+            self._confidence_banner.setVisible(False)
 
     @Slot(str)
     def _on_search_error(self, message: str) -> None:
@@ -842,5 +876,13 @@ class SearchView(QWidget):
                 border-radius: 2px;
             }}
             #SearchProgressBar::chunk {{ background-color: {p['accent_hover']}; }}
+            #ConfidenceBanner {{
+                background-color: {p['warning_bg']};
+                color: {p['warning_text']};
+                border: 1px solid {p['border_strong']};
+                border-radius: 8px;
+                padding: 10px 14px;
+                font-size: 12px;
+            }}
             """
         )
