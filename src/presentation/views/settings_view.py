@@ -157,6 +157,7 @@ class SettingsView(QWidget):
         self._tabs.setObjectName("SettingsTabs")
 
         general_page = QWidget()
+        general_page.setObjectName("SettingsGeneralPage")
         general_layout = QVBoxLayout(general_page)
         general_layout.setContentsMargins(0, 0, 0, 0)
         general_layout.setSpacing(16)
@@ -167,6 +168,7 @@ class SettingsView(QWidget):
         general_layout.addStretch()
 
         general_scroll = QScrollArea()
+        general_scroll.setObjectName("SettingsGeneralScroll")
         general_scroll.setWidgetResizable(True)
         general_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         general_scroll.setWidget(general_page)
@@ -547,6 +549,16 @@ class SettingsView(QWidget):
         self.setStyleSheet(
             get_shared_view_qss(self._theme)
             + f"""
+            #SettingsView {{
+                background-color: {p['bg_app']};
+            }}
+            #SettingsGeneralScroll, #SettingsGeneralScroll QWidget {{
+                background-color: {p['bg_app']};
+                border: none;
+            }}
+            #SettingsGeneralPage {{
+                background-color: {p['bg_app']};
+            }}
             QTabWidget::pane {{
                 border: none;
                 background-color: transparent;
@@ -572,18 +584,61 @@ class SettingsView(QWidget):
                 color: {p['text_primary']};
             }}
             QGroupBox {{
-                color: {p['text_primary']}; border: 1px solid {p['border']}; border-radius: 8px;
-                margin-top: 12px; padding-top: 12px; font-weight: 600;
+                background-color: {p['bg_panel']};
+                color: {p['text_primary']};
+                border: 1px solid {p['border']};
+                border-radius: 8px;
+                margin-top: 14px;
+                padding: 14px 12px 12px 12px;
+                font-weight: 600;
             }}
-            QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 6px; color: {p['accent_text']}; }}
-            QLabel {{ color: {p['text_secondary']}; }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 6px;
+                color: {p['accent_text']};
+            }}
+            QLabel {{
+                color: {p['text_secondary']};
+                background: transparent;
+            }}
+            #PageTitle {{
+                color: {p['text_primary']};
+            }}
+            #SectionNote {{
+                color: {p['text_muted']};
+                background: transparent;
+            }}
             #FoldersList {{
-                background-color: {p['bg_panel_alt']}; border: 1px solid {p['border']}; border-radius: 6px;
-                color: {p['text_secondary']}; min-height: 100px;
+                background-color: {p['bg_input']};
+                border: 1px solid {p['border_strong']};
+                border-radius: 6px;
+                color: {p['text_primary']};
+                min-height: 100px;
+                padding: 4px;
+            }}
+            #FoldersList::item {{
+                padding: 6px 8px;
+                border-radius: 4px;
+                color: {p['text_primary']};
+            }}
+            #FoldersList::item:selected {{
+                background-color: {p['highlight_bg']};
+                color: {p['text_primary']};
             }}
             QComboBox {{
-                background-color: {p['bg_input']}; border: 1px solid {p['border_strong']}; border-radius: 6px;
-                padding: 4px 8px; color: {p['text_primary']};
+                background-color: {p['bg_input']};
+                border: 1px solid {p['border_strong']};
+                border-radius: 6px;
+                padding: 4px 8px;
+                color: {p['text_primary']};
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {p['bg_panel']};
+                color: {p['text_primary']};
+                border: 1px solid {p['border_strong']};
+                selection-background-color: {p['highlight_bg']};
+                selection-color: {p['text_primary']};
             }}
             """
         )

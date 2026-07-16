@@ -493,6 +493,7 @@ class CatalogueProfilesPanel(QWidget):
             }}
             QGroupBox {{
                 color: {p['text_primary']};
+                background-color: {p['bg_panel']};
                 border: 1px solid {p['border']};
                 border-radius: 8px;
                 margin-top: 14px;
