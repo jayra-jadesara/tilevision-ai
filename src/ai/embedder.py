@@ -1,42 +1,22 @@
 """
 DINOv2 embedder module for TileVision AI.
 
-Uses Meta DINOv2 with multi-patch feature extraction.
+Uses Meta DINOv2 with a batched multi-scale strategy:
 
-The final embedding remains the same dimension as the original
-DINOv2 model, allowing it to work directly with FAISS.
+1. Full tile image   (global context)
+2. Center crop       (large region, ~65%)
+3. Detail crop       (fine pattern region, ~40%)
 
-DINOv2 Large:
-    1024 dimensions
+All views are embedded in a single forward pass, then fused with
+fixed weights into a 1024D L2-normalized vector compatible with FAISS.
 
-Pipeline:
-
-Image
-  │
-  ├── Full Image
-  ├── Center Crop
-  ├── Top Left
-  ├── Top Right
-  ├── Bottom Left
-  └── Bottom Right
-          │
-          ▼
-      DINOv2
-          │
-          ▼
-    Average Embeddings
-          │
-          ▼
-      L2 Normalize
-          │
-          ▼
-       1024D Vector
+DINOv2 Large: 1024 dimensions
 """
 
 from __future__ import annotations
 
 import logging
-from typing import List
+from typing import List, Tuple
 
 import numpy as np
 from PIL import Image
@@ -44,26 +24,25 @@ from PIL import Image
 import torch
 from transformers import AutoImageProcessor, AutoModel
 
+from src.ai.models import PreprocessedImage
 from src.ai.preprocess.image_preprocessor import ImagePreprocessor
 
+logger = logging.getLogger("tilevision.ai.embedder")
 
-logger = logging.getLogger(
-    "tilevision.ai.embedder"
-)
+# Weighted fusion of multi-scale views.  Global dominates; detail
+# boosts fine-grained pattern discrimination without overpowering semantics.
+_VIEW_WEIGHTS: Tuple[float, ...] = (0.50, 0.30, 0.20)
 
 
 class DINOv2Embedder:
 
     MODEL_NAME = "facebook/dinov2-large"
+    EMBEDDING_DIM = 1024
 
     def __init__(self) -> None:
-
         self._device = torch.device(
-            "cuda"
-            if torch.cuda.is_available()
-            else "cpu"
+            "cuda" if torch.cuda.is_available() else "cpu"
         )
-
         self._processor = None
         self._model = None
 
@@ -72,312 +51,139 @@ class DINOv2Embedder:
             self._device.type.upper(),
         )
 
-    # ========================================================
-    # Model loading
-    # ========================================================
-
     def load_model(self) -> None:
-
         if self._model is not None:
             return
 
-        logger.info(
-            "Loading DINOv2 model..."
-        )
+        logger.info("Loading DINOv2 model...")
 
-        self._processor = (
-            AutoImageProcessor.from_pretrained(
-                self.MODEL_NAME
-            )
-        )
-
-        self._model = (
-            AutoModel.from_pretrained(
-                self.MODEL_NAME
-            )
-        )
-
-        self._model.to(
-            self._device
-        )
-
+        self._processor = AutoImageProcessor.from_pretrained(self.MODEL_NAME)
+        self._model = AutoModel.from_pretrained(self.MODEL_NAME)
+        self._model.to(self._device)
         self._model.eval()
 
-        logger.info(
-            "DINOv2 model loaded successfully."
-        )
-
-    # ========================================================
-    # Single image embedding
-    # ========================================================
-
-    def _extract_single(
-        self,
-        image: Image.Image,
-    ) -> np.ndarray:
-
-        inputs = self._processor(
-            images=image,
-            return_tensors="pt",
-        )
-
-        inputs = {
-            key: value.to(self._device)
-            for key, value
-            in inputs.items()
-        }
-
-        with torch.inference_mode():
-
-            if self._device.type == "cuda":
-
-                with torch.autocast(
-                    device_type="cuda",
-                ):
-
-                    outputs = self._model(
-                        **inputs
-                    )
-
-            else:
-
-                outputs = self._model(
-                    **inputs
-                )
-
-        # CLS token
-        embedding = (
-            outputs
-            .last_hidden_state[:, 0]
-            .cpu()
-            .numpy()[0]
-            .astype(np.float32)
-        )
-
-        # Normalize individual embedding
-        embedding /= (
-            np.linalg.norm(
-                embedding
-            )
-            + 1e-8
-        )
-
-        return embedding
-
-    # ========================================================
-    # Generate patches
-    # ========================================================
+        logger.info("DINOv2 model loaded successfully.")
 
     @staticmethod
-    def _generate_patches(
-        image: Image.Image,
-    ) -> List[Image.Image]:
-
-        image = image.convert(
-            "RGB"
-        )
-
+    def _generate_views(image: Image.Image) -> List[Image.Image]:
+        """
+        Build global + center + detail views from a preprocessed PIL image.
+        """
+        image = image.convert("RGB")
         width, height = image.size
+        views: List[Image.Image] = [image]
 
-        patches: List[Image.Image] = []
+        if width < 64 or height < 64:
+            return views
 
-        # ----------------------------------------------------
-        # 1. Full image
-        # ----------------------------------------------------
-
-        patches.append(
-            image
-        )
-
-        # Don't create tiny patches.
-        if width < 100 or height < 100:
-            return patches
-
-        # ----------------------------------------------------
-        # Patch size
-        #
-        # Use approximately 65% of image dimensions.
-        # This creates overlapping crops and retains context.
-        # ----------------------------------------------------
-
-        crop_width = max(
-            1,
-            int(width * 0.65),
-        )
-
-        crop_height = max(
-            1,
-            int(height * 0.65),
-        )
-
-        # ----------------------------------------------------
-        # 2. Top-left
-        # ----------------------------------------------------
-
-        patches.append(
+        center_w = max(1, int(width * 0.65))
+        center_h = max(1, int(height * 0.65))
+        center_left = (width - center_w) // 2
+        center_top = (height - center_h) // 2
+        views.append(
             image.crop(
                 (
-                    0,
-                    0,
-                    crop_width,
-                    crop_height,
+                    center_left,
+                    center_top,
+                    center_left + center_w,
+                    center_top + center_h,
                 )
             )
         )
 
-        # ----------------------------------------------------
-        # 3. Top-right
-        # ----------------------------------------------------
-
-        patches.append(
+        detail_w = max(1, int(width * 0.40))
+        detail_h = max(1, int(height * 0.40))
+        detail_left = (width - detail_w) // 2
+        detail_top = (height - detail_h) // 2
+        views.append(
             image.crop(
                 (
-                    width - crop_width,
-                    0,
-                    width,
-                    crop_height,
+                    detail_left,
+                    detail_top,
+                    detail_left + detail_w,
+                    detail_top + detail_h,
                 )
             )
         )
 
-        # ----------------------------------------------------
-        # 4. Bottom-left
-        # ----------------------------------------------------
+        return views
 
-        patches.append(
-            image.crop(
-                (
-                    0,
-                    height - crop_height,
-                    crop_width,
-                    height,
-                )
-            )
-        )
+    def _extract_batch(self, images: List[Image.Image]) -> np.ndarray:
+        """
+        Run DINOv2 on a list of PIL images in one batched forward pass.
 
-        # ----------------------------------------------------
-        # 5. Bottom-right
-        # ----------------------------------------------------
-
-        patches.append(
-            image.crop(
-                (
-                    width - crop_width,
-                    height - crop_height,
-                    width,
-                    height,
-                )
-            )
-        )
-
-        # ----------------------------------------------------
-        # 6. Center
-        # ----------------------------------------------------
-
-        left = (
-            width - crop_width
-        ) // 2
-
-        top = (
-            height - crop_height
-        ) // 2
-
-        patches.append(
-            image.crop(
-                (
-                    left,
-                    top,
-                    left + crop_width,
-                    top + crop_height,
-                )
-            )
-        )
-
-        return patches
-
-    # ========================================================
-    # Multi-patch embedding
-    # ========================================================
-
-    def extract(
-        self,
-        image_path: str,
-    ) -> np.ndarray:
-
+        Returns:
+            (N, 1024) array of L2-normalized per-view embeddings.
+        """
         if self._model is None:
             self.load_model()
 
-        processed = (
-            ImagePreprocessor.preprocess(
-                image_path
-            )
+        inputs = self._processor(images=images, return_tensors="pt")
+        inputs = {key: value.to(self._device) for key, value in inputs.items()}
+
+        with torch.inference_mode():
+            if self._device.type == "cuda":
+                with torch.autocast(device_type="cuda"):
+                    outputs = self._model(**inputs)
+            else:
+                outputs = self._model(**inputs)
+
+        embeddings = (
+            outputs.last_hidden_state[:, 0]
+            .cpu()
+            .numpy()
+            .astype(np.float32)
         )
 
-        image = processed.pil
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True) + 1e-8
+        return embeddings / norms
 
-        patches = (
-            self._generate_patches(
-                image
-            )
-        )
+    @staticmethod
+    def _fuse_embeddings(
+        view_embeddings: np.ndarray,
+        weights: Tuple[float, ...] = _VIEW_WEIGHTS,
+    ) -> np.ndarray:
+        """
+        Weighted combination of per-view embeddings, then L2-normalize.
+        """
+        n_views = view_embeddings.shape[0]
+        w = np.asarray(weights[:n_views], dtype=np.float32)
+        w /= w.sum()
 
-        embeddings = []
+        fused = (view_embeddings * w[:, np.newaxis]).sum(axis=0).astype(np.float32)
+        fused /= np.linalg.norm(fused) + 1e-8
+        return fused
 
-        for patch in patches:
+    def extract_from_preprocessed(
+        self,
+        processed: PreprocessedImage,
+    ) -> np.ndarray:
+        """
+        Extract a multi-scale DINOv2 embedding from an already-preprocessed image.
 
-            embedding = (
-                self._extract_single(
-                    patch
-                )
-            )
-
-            embeddings.append(
-                embedding
-            )
-
-        # Stack:
-        #
-        # 6 x 1024
-        #
-        stacked = np.stack(
-            embeddings,
-            axis=0,
-        )
-
-        # Average all local + global representations
-        final_embedding = np.mean(
-            stacked,
-            axis=0,
-        ).astype(
-            np.float32
-        )
-
-        # Normalize final embedding
-        final_embedding /= (
-            np.linalg.norm(
-                final_embedding
-            )
-            + 1e-8
-        )
+        This is the primary entry point — avoids reloading/resizing the image.
+        """
+        views = self._generate_views(processed.pil)
+        view_embeddings = self._extract_batch(views)
+        final_embedding = self._fuse_embeddings(view_embeddings)
 
         logger.debug(
-            "Multi-patch DINOv2 embedding: "
-            "patches=%d dimension=%d",
-            len(patches),
+            "Multi-scale DINOv2 embedding: views=%d dimension=%d",
+            len(views),
             final_embedding.shape[0],
         )
-
         return final_embedding
 
-    # ========================================================
-    # Backward compatibility
-    # ========================================================
+    def extract(self, image_path: str) -> np.ndarray:
+        """
+        Extract embedding from a file path (loads + preprocesses once).
 
-    def get_embedding(
-        self,
-        image_path: str,
-    ) -> np.ndarray:
+        Prefer extract_from_preprocessed() when the caller already has
+        a PreprocessedImage to avoid duplicate I/O.
+        """
+        processed = ImagePreprocessor.preprocess(image_path)
+        return self.extract_from_preprocessed(processed)
 
-        return self.extract(
-            image_path
-        )
+    def get_embedding(self, image_path: str) -> np.ndarray:
+        """Backward-compatible alias for extract()."""
+        return self.extract(image_path)

@@ -42,8 +42,6 @@ import numpy as np
 from src.ai.embedder import DINOv2Embedder
 from src.ai.models import TileFeatures
 from src.ai.preprocess.image_preprocessor import ImagePreprocessor
-from src.ai.descriptors.pattern_descriptor import PatternDescriptor
-
 from src.ai.descriptors.color_descriptor import ColorDescriptor
 from src.ai.descriptors.texture_descriptor import TextureDescriptor
 from src.ai.descriptors.edge_descriptor import EdgeDescriptor
@@ -110,14 +108,10 @@ class FeatureExtractor:
             image_path,
         )
 
-        image = ImagePreprocessor.preprocess(
-            image_path,
-        )
+        image = ImagePreprocessor.preprocess(image_path)
 
         embedding = np.asarray(
-            self._embedder.extract(
-                image_path,
-            ),
+            self._embedder.extract_from_preprocessed(image),
             dtype=np.float32,
         )
 
