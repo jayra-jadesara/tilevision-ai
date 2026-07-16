@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from src.ai.feature_versions import FeatureVersionStatus
+from src.ai.gpu_info import GpuRuntimeInfo
 
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QFont, QIcon, QAction, QCloseEvent, QPixmap
@@ -144,6 +145,7 @@ class MainWindow(QMainWindow):
         indexing_use_case=None,
         indexed_folders_provider: Optional[Callable[[], List[str]]] = None,
         feature_version_provider: Optional[Callable[[], FeatureVersionStatus]] = None,
+        gpu_info_provider: Optional[Callable[[], GpuRuntimeInfo]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         """
@@ -191,6 +193,7 @@ class MainWindow(QMainWindow):
         self._indexing_use_case = indexing_use_case
         self._indexed_folders_provider = indexed_folders_provider
         self._feature_version_provider = feature_version_provider
+        self._gpu_info_provider = gpu_info_provider
         self._current_theme = getattr(self._settings, "theme", "dark") if self._settings is not None else "dark"
 
         self.setWindowTitle("TileVision AI — Visual Tile Search")
@@ -312,6 +315,7 @@ class MainWindow(QMainWindow):
                 indexed_folders_provider=self._indexed_folders_provider,
                 on_catalog_changed=self._on_catalog_changed,
                 feature_version_provider=self._feature_version_provider,
+                gpu_info_provider=self._gpu_info_provider,
                 theme=self._current_theme,
             )
             self._content_stack.addWidget(self._settings_view)  # index 3

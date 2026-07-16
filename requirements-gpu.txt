@@ -1,0 +1,10 @@
+# Optional GPU dependencies for TileVision AI
+# Install AFTER base requirements.txt on machines with NVIDIA GPU.
+#
+# Windows (CUDA 12.4):
+#   pip install -r requirements-gpu.txt --index-url https://download.pytorch.org/whl/cu124
+#
+# Or run: scripts/install_pytorch_cuda.ps1
+
+torch>=2.1.0
+torchvision>=0.16.0

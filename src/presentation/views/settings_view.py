@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.ai.feature_versions import CURRENT_FEATURE_VERSION, FeatureVersionStatus
+from src.ai.gpu_info import GpuRuntimeInfo
 from src.config.settings import AppSettings
 from src.core.use_cases.index_images import IndexImagesUseCase
 from src.presentation.workers.rebuild_index_worker import RebuildIndexWorker
@@ -58,6 +59,7 @@ class SettingsView(QWidget):
         indexed_folders_provider: Optional[Callable[[], List[str]]] = None,
         on_catalog_changed: Optional[Callable[[], None]] = None,
         feature_version_provider: Optional[Callable[[], FeatureVersionStatus]] = None,
+        gpu_info_provider: Optional[Callable[[], GpuRuntimeInfo]] = None,
         theme: str = "dark",
         parent: Optional[QWidget] = None,
     ) -> None:
@@ -92,6 +94,7 @@ class SettingsView(QWidget):
         self._indexed_folders_provider = indexed_folders_provider
         self._on_catalog_changed = on_catalog_changed
         self._feature_version_provider = feature_version_provider
+        self._gpu_info_provider = gpu_info_provider
         self._rebuild_worker: Optional[RebuildIndexWorker] = None
         self._rebuild_progress_dialog: Optional[QProgressDialog] = None
         self._setup_ui()
@@ -126,6 +129,15 @@ class SettingsView(QWidget):
             f"need re-index (v{CURRENT_FEATURE_VERSION})"
         )
 
+    def _gpu_summary_text(self) -> str:
+        if self._gpu_info_provider is None:
+            return "—"
+        try:
+            return self._gpu_info_provider().summary_for_ui()
+        except Exception as exc:
+            logger.warning("Failed to read GPU status: %s", exc)
+            return "Unknown"
+
     def _setup_ui(self) -> None:
         self.setObjectName("SettingsView")
         layout = QVBoxLayout(self)
@@ -151,6 +163,9 @@ class SettingsView(QWidget):
 
         self._feature_status_label = QLabel("—")
         form.addRow("Feature Index:", self._feature_status_label)
+
+        self._gpu_status_label = QLabel(self._gpu_summary_text())
+        form.addRow("AI Device:", self._gpu_status_label)
 
         if self._license_details.get("is_trial"):
             days = self._license_details.get("days_remaining", 0)

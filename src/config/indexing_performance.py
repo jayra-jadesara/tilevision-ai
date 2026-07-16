@@ -44,9 +44,18 @@ class IndexingPerformanceConfig:
         return self.preprocess_workers
 
     @classmethod
-    def from_settings(cls, settings: AppSettings) -> IndexingPerformanceConfig:
+    def from_settings(
+        cls,
+        settings: AppSettings,
+        *,
+        use_gpu: bool = False,
+    ) -> IndexingPerformanceConfig:
+        batch_size = max(1, int(settings.index_batch_size))
+        if use_gpu:
+            batch_size = max(batch_size, int(settings.gpu_index_batch_size))
+
         return cls(
-            batch_size=max(1, int(settings.index_batch_size)),
+            batch_size=batch_size,
             checkpoint_interval=max(1, int(settings.index_checkpoint_interval)),
             max_decode_edge=max(512, int(settings.max_decode_edge)),
             preprocess_workers=max(1, int(settings.preprocess_workers)),

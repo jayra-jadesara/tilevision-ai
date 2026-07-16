@@ -161,17 +161,20 @@ def build_application() -> int:
 
     # ── 7. Construct AI Layer ─────────────────────────────────────────────────
     logger.info("Initializing AI engine...")
-    indexing_perf = IndexingPerformanceConfig.from_settings(settings)
+    embedder = DINOv2Embedder(device_preference=settings.inference_device)
+    indexing_perf = IndexingPerformanceConfig.from_settings(
+        settings,
+        use_gpu=embedder.using_gpu,
+    )
     ImagePreprocessor.configure(max_decode_edge=indexing_perf.max_decode_edge)
     logger.info(
-        "Indexing performance: batch=%d checkpoint=%d max_decode=%d workers=%d",
+        "Indexing performance: device=%s batch=%d checkpoint=%d max_decode=%d workers=%d",
+        embedder.runtime_info.summary_for_ui(),
         indexing_perf.batch_size,
         indexing_perf.checkpoint_interval,
         indexing_perf.max_decode_edge,
         indexing_perf.preprocess_workers,
     )
-
-    embedder = DINOv2Embedder()
 
     feature_extractor = FeatureExtractor(
         embedder=embedder,
@@ -288,6 +291,7 @@ def build_application() -> int:
         indexing_use_case=index_images_use_case,
         indexed_folders_provider=lambda: [f.folder_path for f in indexed_folder_repository.get_all_folders()],
         feature_version_provider=image_repository.get_feature_version_status,
+        gpu_info_provider=lambda: embedder.runtime_info,
     )
     main_window.show()
 

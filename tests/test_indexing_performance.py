@@ -23,6 +23,20 @@ def test_adaptive_batch_size_shrinks_for_huge_files():
     assert perf.adaptive_batch_size(80 * 1024 * 1024) == 2
 
 
+def test_from_settings_uses_larger_batch_when_gpu_active(tmp_path):
+    from src.config.settings import AppSettings
+
+    settings = AppSettings(config_dir=tmp_path)
+    settings.index_batch_size = 12
+    settings.gpu_index_batch_size = 24
+
+    cpu_perf = IndexingPerformanceConfig.from_settings(settings, use_gpu=False)
+    gpu_perf = IndexingPerformanceConfig.from_settings(settings, use_gpu=True)
+
+    assert cpu_perf.batch_size == 12
+    assert gpu_perf.batch_size == 24
+
+
 def test_adaptive_preprocess_workers_shrinks_for_huge_files():
     perf = IndexingPerformanceConfig(preprocess_workers=4)
     assert perf.adaptive_preprocess_workers(5 * 1024 * 1024) == 4

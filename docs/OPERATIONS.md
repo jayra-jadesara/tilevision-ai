@@ -149,9 +149,69 @@ Metrics reported: **Recall@K**, **Precision@K**, **MRR**, **nDCG@K**
 
 ---
 
-## GPU Setup (optional, recommended)
+## GPU Setup (recommended for production)
 
-Install CUDA-compatible PyTorch, then restart TileVision AI. The app auto-detects CUDA and uses mixed precision.
+Your logs show `torch 2.13.0+cpu` — **CPU-only PyTorch**. The app already supports GPU; you need the CUDA wheel.
+
+### Step 1 — Check NVIDIA driver
+
+```powershell
+nvidia-smi
+```
+
+If this fails, install the latest driver from NVIDIA first.
+
+### Step 2 — Install CUDA PyTorch (Windows)
+
+From the project folder:
+
+```powershell
+cd C:\Users\HP\Projects\tilevision-ai
+powershell -ExecutionPolicy Bypass -File scripts\install_pytorch_cuda.ps1
+```
+
+Or manually:
+
+```powershell
+pip uninstall -y torch torchvision torchaudio
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+```
+
+### Step 3 — Verify
+
+```powershell
+python dev_tools/check_gpu.py
+```
+
+Expected: `Active: CUDA` and your GPU name.
+
+### Step 4 — Restart TileVision AI
+
+Settings → Overview → **AI Device** should show your GPU name and VRAM.
+
+Startup log should show:
+
+```
+CUDA GPU: NVIDIA ... (X.X GB VRAM)
+Indexing performance: device=... batch=24 ...
+```
+
+### GPU tuning (`config.json`)
+
+```json
+{
+  "inference_device": "auto",
+  "gpu_index_batch_size": 24,
+  "index_batch_size": 12
+}
+```
+
+- `auto` — use GPU when available (default)
+- `cuda` — force GPU (falls back to CPU with warning if missing)
+- `cpu` — force CPU
+- `gpu_index_batch_size` — larger batches on GPU (24 default vs 12 on CPU)
+
+**Accuracy:** GPU uses mixed precision (`autocast`) — same DINOv2-large model, no accuracy pipeline change. FAISS stays on CPU (fine for 2000–50K tiles).
 
 ---
 

@@ -55,6 +55,8 @@ class AppSettings:
             "preprocess_workers": 4,
             "large_file_mb_threshold": 10,
             "huge_file_mb_threshold": 50,
+            "inference_device": "auto",
+            "gpu_index_batch_size": 24,
         }
         
         self._settings: Dict[str, Any] = self._defaults.copy()
@@ -244,3 +246,25 @@ class AppSettings:
     @huge_file_mb_threshold.setter
     def huge_file_mb_threshold(self, value: int) -> None:
         self._settings["huge_file_mb_threshold"] = max(1, int(value))
+
+    @property
+    def inference_device(self) -> str:
+        """DINOv2 device: auto, cuda, or cpu."""
+        value = str(self._settings.get("inference_device", "auto")).lower()
+        return value if value in ("auto", "cuda", "cpu") else "auto"
+
+    @inference_device.setter
+    def inference_device(self, value: str) -> None:
+        normalized = str(value).lower()
+        self._settings["inference_device"] = (
+            normalized if normalized in ("auto", "cuda", "cpu") else "auto"
+        )
+
+    @property
+    def gpu_index_batch_size(self) -> int:
+        """Batch size used when CUDA is active (larger = faster indexing)."""
+        return int(self._settings.get("gpu_index_batch_size", 24))
+
+    @gpu_index_batch_size.setter
+    def gpu_index_batch_size(self, value: int) -> None:
+        self._settings["gpu_index_batch_size"] = max(1, int(value))

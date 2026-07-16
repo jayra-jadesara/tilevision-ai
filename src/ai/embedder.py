@@ -27,6 +27,7 @@ from transformers import AutoImageProcessor, AutoModel
 
 from src.ai.models import PreprocessedImage
 from src.ai.inference_guard import synchronized_inference
+from src.ai.gpu_info import DevicePreference, detect_gpu_runtime
 from src.ai.preprocess.image_preprocessor import ImagePreprocessor
 
 logger = logging.getLogger("tilevision.ai.embedder")
@@ -41,17 +42,26 @@ class DINOv2Embedder:
     MODEL_NAME = "facebook/dinov2-large"
     EMBEDDING_DIM = 1024
 
-    def __init__(self) -> None:
-        self._device = torch.device(
-            "cuda" if torch.cuda.is_available() else "cpu"
-        )
+    def __init__(self, *, device_preference: DevicePreference = "auto") -> None:
+        self._device_preference: DevicePreference = device_preference
+        self._runtime = detect_gpu_runtime(preference=device_preference)
+        self._device = torch.device(self._runtime.active_device)
         self._processor = None
         self._model = None
 
+        logger.info(self._runtime.summary_for_log())
         logger.info(
             "DINOv2 Embedder initialized. Device: %s",
             self._device.type.upper(),
         )
+
+    @property
+    def using_gpu(self) -> bool:
+        return self._device.type == "cuda"
+
+    @property
+    def runtime_info(self):
+        return self._runtime
 
     def load_model(self) -> None:
         if self._model is not None:
@@ -64,12 +74,43 @@ class DINOv2Embedder:
         self._model.to(self._device)
         self._model.eval()
 
-        if self._device.type == "cpu":
+        if self._device.type == "cuda":
+            torch.backends.cudnn.benchmark = True
+            logger.info(
+                "CUDA GPU: %s (%.1f GB VRAM)",
+                self._runtime.device_name,
+                self._runtime.vram_gb or 0.0,
+            )
+        else:
             thread_count = min(8, os.cpu_count() or 4)
             torch.set_num_threads(thread_count)
             logger.info("CPU inference threads: %d", thread_count)
 
         logger.info("DINOv2 model loaded successfully.")
+
+    def _forward_batch(self, images: List[Image.Image]) -> np.ndarray:
+        """Single DINOv2 forward pass."""
+        inputs = self._processor(images=images, return_tensors="pt")
+        inputs = {
+            key: value.to(self._device, non_blocking=True)
+            for key, value in inputs.items()
+        }
+
+        with torch.inference_mode():
+            if self._device.type == "cuda":
+                with torch.autocast(device_type="cuda"):
+                    outputs = self._model(**inputs)
+            else:
+                outputs = self._model(**inputs)
+
+        embeddings = (
+            outputs.last_hidden_state[:, 0]
+            .cpu()
+            .numpy()
+            .astype(np.float32)
+        )
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True) + 1e-8
+        return embeddings / norms
 
     @staticmethod
     def _generate_views(image: Image.Image) -> List[Image.Image]:
@@ -126,25 +167,23 @@ class DINOv2Embedder:
             self.load_model()
 
         with synchronized_inference():
-            inputs = self._processor(images=images, return_tensors="pt")
-            inputs = {key: value.to(self._device) for key, value in inputs.items()}
+            try:
+                return self._forward_batch(images)
+            except RuntimeError as exc:
+                message = str(exc).lower()
+                is_oom = "out of memory" in message or "cuda error" in message
+                if not is_oom or self._device.type != "cuda" or len(images) <= 1:
+                    raise
 
-            with torch.inference_mode():
-                if self._device.type == "cuda":
-                    with torch.autocast(device_type="cuda"):
-                        outputs = self._model(**inputs)
-                else:
-                    outputs = self._model(**inputs)
-
-            embeddings = (
-                outputs.last_hidden_state[:, 0]
-                .cpu()
-                .numpy()
-                .astype(np.float32)
-            )
-
-        norms = np.linalg.norm(embeddings, axis=1, keepdims=True) + 1e-8
-        return embeddings / norms
+                logger.warning(
+                    "CUDA OOM on batch of %d views — splitting and retrying.",
+                    len(images),
+                )
+                torch.cuda.empty_cache()
+                mid = len(images) // 2
+                left = self._extract_batch(images[:mid])
+                right = self._extract_batch(images[mid:])
+                return np.vstack([left, right])
 
     @staticmethod
     def _fuse_embeddings(
