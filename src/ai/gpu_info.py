@@ -50,12 +50,50 @@ class GpuRuntimeInfo:
         return f"CPU mode: {self.cpu_fallback_reason} (torch {self.torch_version})"
 
 
+def _detect_windows_graphics() -> list[str]:
+    """Return display adapter names on Windows (empty on other OS)."""
+    import subprocess
+    import sys
+
+    if sys.platform != "win32":
+        return []
+
+    try:
+        result = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                "Get-CimInstance Win32_VideoController | "
+                "Select-Object -ExpandProperty Name",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if result.returncode != 0:
+            return []
+        return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    except Exception:
+        return []
+
+
+def _has_nvidia_adapter(adapters: list[str]) -> bool:
+    return any("nvidia" in name.lower() for name in adapters)
+
+
 def _cpu_torch_reason() -> str:
+    adapters = _detect_windows_graphics()
+    if adapters and not _has_nvidia_adapter(adapters):
+        names = ", ".join(adapters[:2])
+        return f"no NVIDIA GPU detected ({names}) — CUDA requires NVIDIA hardware"
+
     version = torch.__version__.lower()
     if "+cpu" in version or "cpu" in version.split("+")[-1:]:
-        return "CPU-only PyTorch installed — run scripts/install_pytorch_cuda.ps1"
+        return "CPU-only PyTorch — install CUDA wheel after NVIDIA driver"
     if not torch.cuda.is_available():
-        return "CUDA not available — check NVIDIA driver and CUDA PyTorch wheel"
+        return "CUDA not available — install NVIDIA driver and CUDA PyTorch"
     return "CUDA unavailable"
 
 

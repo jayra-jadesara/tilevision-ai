@@ -12,7 +12,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.ai.gpu_info import detect_gpu_runtime
+from src.ai.gpu_info import (
+    _detect_windows_graphics,
+    _has_nvidia_adapter,
+    detect_gpu_runtime,
+)
 
 
 def main() -> int:
@@ -30,11 +34,19 @@ def main() -> int:
     print(f"Active:      {info.active_device.upper()}")
     print(f"UI summary:  {info.summary_for_ui()}")
 
+    adapters = _detect_windows_graphics()
+    if adapters:
+        print("Graphics:   ", ", ".join(adapters))
+
     if not info.using_gpu:
         print()
-        print("To enable GPU on Windows:")
-        print("  powershell -ExecutionPolicy Bypass -File scripts/install_pytorch_cuda.ps1")
-        print("Then restart TileVision AI and run this script again.")
+        if adapters and not _has_nvidia_adapter(adapters):
+            print("This PC has AMD/Intel graphics only. CUDA GPU is not supported here.")
+            print("TileVision will use CPU. For GPU speed, use a PC with an NVIDIA GPU.")
+        else:
+            print("To enable GPU on Windows:")
+            print("  powershell -ExecutionPolicy Bypass -File scripts/install_pytorch_cuda.ps1")
+            print("Then restart TileVision AI and run this script again.")
         return 1
 
     print()

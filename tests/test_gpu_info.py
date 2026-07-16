@@ -18,6 +18,7 @@ def test_cpu_wheel_reports_install_hint(monkeypatch):
         version=SimpleNamespace(cuda=None),
     )
     monkeypatch.setattr(gpu_info, "torch", fake_torch)
+    monkeypatch.setattr(gpu_info, "_detect_windows_graphics", lambda: [])
 
     info = gpu_info.detect_gpu_runtime(preference="auto")
 
@@ -37,12 +38,31 @@ def test_cuda_auto_selects_gpu(monkeypatch):
         version=SimpleNamespace(cuda="12.4"),
     )
     monkeypatch.setattr(gpu_info, "torch", fake_torch)
+    monkeypatch.setattr(gpu_info, "_detect_windows_graphics", lambda: [])
 
     info = gpu_info.detect_gpu_runtime(preference="auto")
 
     assert info.using_gpu
     assert info.device_name == "NVIDIA Test GPU"
     assert "NVIDIA Test GPU" in info.summary_for_ui()
+
+
+def test_non_nvidia_adapter_message(monkeypatch):
+    fake_torch = SimpleNamespace(
+        __version__="2.13.0+cpu",
+        cuda=SimpleNamespace(is_available=lambda: False, device_count=lambda: 0),
+        version=SimpleNamespace(cuda=None),
+    )
+    monkeypatch.setattr(gpu_info, "torch", fake_torch)
+    monkeypatch.setattr(
+        gpu_info,
+        "_detect_windows_graphics",
+        lambda: ["AMD Radeon R5 M330", "Intel(R) HD Graphics 520"],
+    )
+
+    info = gpu_info.detect_gpu_runtime(preference="auto")
+
+    assert "no NVIDIA GPU" in info.cpu_fallback_reason
 
 
 def test_forced_cpu_even_when_cuda_available(monkeypatch):
@@ -57,6 +77,7 @@ def test_forced_cpu_even_when_cuda_available(monkeypatch):
         version=SimpleNamespace(cuda="12.4"),
     )
     monkeypatch.setattr(gpu_info, "torch", fake_torch)
+    monkeypatch.setattr(gpu_info, "_detect_windows_graphics", lambda: [])
 
     info = gpu_info.detect_gpu_runtime(preference="cpu")
 
