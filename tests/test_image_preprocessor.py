@@ -49,6 +49,20 @@ def test_uniform_white_border_is_trimmed(tmp_path):
     assert center.mean() < 240
 
 
+def test_scene_photo_detection_on_wide_image(tmp_path):
+    path = tmp_path / "room.jpg"
+    Image.new("RGB", (800, 400), color=(200, 200, 200)).save(path)
+    with Image.open(path) as img:
+        assert ImagePreprocessor._looks_like_scene_photo(img.convert("RGB"))
+
+
+def test_preprocess_for_query_runs_without_error(tmp_path):
+    path = tmp_path / "tile.jpg"
+    Image.new("RGB", (256, 256), color=(180, 180, 180)).save(path)
+    processed = ImagePreprocessor.preprocess_for_query(path)
+    assert processed.pil.size == (TARGET_SIZE, TARGET_SIZE)
+
+
 def test_small_image_still_produces_valid_output(tmp_path):
     path = tmp_path / "tiny.jpg"
     Image.new("RGB", (16, 16), color=(10, 20, 30)).save(path)

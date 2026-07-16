@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QProgressDialog,
 )
 
+from src.ai.feature_versions import CURRENT_FEATURE_VERSION, FeatureVersionStatus
 from src.config.settings import AppSettings
 from src.core.use_cases.index_images import IndexImagesUseCase
 from src.presentation.workers.rebuild_index_worker import RebuildIndexWorker
@@ -56,6 +57,7 @@ class SettingsView(QWidget):
         indexing_use_case: Optional[IndexImagesUseCase] = None,
         indexed_folders_provider: Optional[Callable[[], List[str]]] = None,
         on_catalog_changed: Optional[Callable[[], None]] = None,
+        feature_version_provider: Optional[Callable[[], FeatureVersionStatus]] = None,
         theme: str = "dark",
         parent: Optional[QWidget] = None,
     ) -> None:
@@ -89,10 +91,40 @@ class SettingsView(QWidget):
         self._indexing_use_case = indexing_use_case
         self._indexed_folders_provider = indexed_folders_provider
         self._on_catalog_changed = on_catalog_changed
+        self._feature_version_provider = feature_version_provider
         self._rebuild_worker: Optional[RebuildIndexWorker] = None
         self._rebuild_progress_dialog: Optional[QProgressDialog] = None
         self._setup_ui()
         self._apply_styles()
+        self.refresh_feature_status()
+
+    def refresh_feature_status(self) -> None:
+        """Update the feature-version row in the overview section."""
+        if self._feature_version_provider is None:
+            self._feature_status_label.setText("—")
+            return
+
+        try:
+            status = self._feature_version_provider()
+        except Exception as exc:
+            logger.warning("Failed to read feature version status: %s", exc)
+            self._feature_status_label.setText("Unknown")
+            return
+
+        if status.indexed_count == 0:
+            self._feature_status_label.setText("No tiles indexed yet")
+            return
+
+        if status.is_compatible:
+            self._feature_status_label.setText(
+                f"Up to date (v{CURRENT_FEATURE_VERSION}, {status.indexed_count} tiles)"
+            )
+            return
+
+        self._feature_status_label.setText(
+            f"Outdated — {status.stale_count} of {status.indexed_count} tiles "
+            f"need re-index (v{CURRENT_FEATURE_VERSION})"
+        )
 
     def _setup_ui(self) -> None:
         self.setObjectName("SettingsView")
@@ -116,6 +148,9 @@ class SettingsView(QWidget):
 
         catalog_count = self._catalog_count_provider() if self._catalog_count_provider else "—"
         form.addRow("Indexed Tiles:", QLabel(str(catalog_count)))
+
+        self._feature_status_label = QLabel("—")
+        form.addRow("Feature Index:", self._feature_status_label)
 
         if self._license_details.get("is_trial"):
             days = self._license_details.get("days_remaining", 0)
@@ -430,6 +465,7 @@ class SettingsView(QWidget):
 
         if self._on_catalog_changed is not None:
             self._on_catalog_changed()
+        self.refresh_feature_status()
 
         message = f"Rebuild complete. {total_reembedded} image(s) re-indexed."
         if total_failed:

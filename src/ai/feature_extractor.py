@@ -223,17 +223,23 @@ class FeatureExtractor:
     def extract(
         self,
         image_path: str,
+        *,
+        for_query: bool = False,
     ) -> TileFeatures:
 
         logger.debug(
-            "Extracting AI features: %s",
+            "Extracting AI features: %s (for_query=%s)",
             image_path,
+            for_query,
         )
 
         total_start = time.perf_counter()
 
         t0 = time.perf_counter()
-        image = ImagePreprocessor.preprocess(image_path)
+        if for_query:
+            image = ImagePreprocessor.preprocess_for_query(image_path)
+        else:
+            image = ImagePreprocessor.preprocess(image_path)
         preprocess_elapsed = time.perf_counter() - t0
 
         features = self.extract_from_preprocessed(image)

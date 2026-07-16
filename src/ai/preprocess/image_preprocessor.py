@@ -216,6 +216,55 @@ class ImagePreprocessor:
         return Image.fromarray(corrected_rgb)
 
     @classmethod
+    def _looks_like_scene_photo(cls, image: Image.Image) -> bool:
+        """Heuristic: non-square framing or strong border/center difference."""
+        width, height = image.size
+        if width < 48 or height < 48:
+            return False
+
+        aspect = width / max(height, 1)
+        if aspect < 0.88 or aspect > 1.14:
+            return True
+
+        rgb = np.asarray(image.convert("RGB"), dtype=np.float32)
+        margin_x = max(1, int(width * 0.12))
+        margin_y = max(1, int(height * 0.12))
+        if margin_x * 2 >= width or margin_y * 2 >= height:
+            return False
+
+        center = rgb[margin_y : height - margin_y, margin_x : width - margin_x]
+        if center.size == 0:
+            return False
+
+        border_strips = [
+            rgb[:margin_y, :],
+            rgb[height - margin_y :, :],
+            rgb[:, :margin_x],
+            rgb[:, width - margin_x :],
+        ]
+        border = np.concatenate(
+            [strip.reshape(-1, 3) for strip in border_strips],
+            axis=0,
+        )
+        center_mean = center.reshape(-1, 3).mean(axis=0)
+        border_mean = border.mean(axis=0)
+        return float(np.linalg.norm(center_mean - border_mean)) >= 22.0
+
+    @classmethod
+    def focus_center_region(
+        cls,
+        image: Image.Image,
+        ratio: float = 0.72,
+    ) -> Image.Image:
+        """Crop to the central region — common tile location in room photos."""
+        width, height = image.size
+        crop_w = max(1, int(width * ratio))
+        crop_h = max(1, int(height * ratio))
+        left = (width - crop_w) // 2
+        top = (height - crop_h) // 2
+        return image.crop((left, top, left + crop_w, top + crop_h))
+
+    @classmethod
     def resize_letterbox(
         cls,
         image: Image.Image,
@@ -273,6 +322,44 @@ class ImagePreprocessor:
         image = cls.to_rgb(image)
         image = cls.trim_uniform_borders(image)
         image = cls.crop_to_content_region(image)
+        image = cls.normalize_lighting(image)
+        image = cls.resize_letterbox(image)
+
+        rgb = cls.to_numpy(image)
+        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+
+        return PreprocessedImage(
+            pil=image,
+            rgb=rgb,
+            bgr=bgr,
+            gray=gray,
+            width=original_width,
+            height=original_height,
+        )
+
+    @classmethod
+    def preprocess_for_query(
+        cls,
+        image_path: str | Path,
+    ) -> PreprocessedImage:
+        """
+        Search-only preprocessing with extra handling for scene/room photos.
+
+        Does not change the indexing pipeline or feature_version — only
+        applied at query time to improve room-photo searches.
+        """
+        image = cls.load(image_path)
+        original_width, original_height = image.size
+
+        image = cls.to_rgb(image)
+        image = cls.trim_uniform_borders(image)
+        image = cls.crop_to_content_region(image, min_margin_ratio=0.05)
+
+        if cls._looks_like_scene_photo(image):
+            logger.debug("Scene photo detected — applying center focus crop.")
+            image = cls.focus_center_region(image)
+
         image = cls.normalize_lighting(image)
         image = cls.resize_letterbox(image)
 

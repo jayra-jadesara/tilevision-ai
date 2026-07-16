@@ -113,6 +113,10 @@ class SearchTilesUseCase:
             total_vectors,
         )
 
+    def get_index_health(self):
+        """Return feature-version compatibility status for the indexed catalog."""
+        return self._repo.get_feature_version_status()
+
     def execute(
         self,
         query_image_path: str,
@@ -152,9 +156,10 @@ class SearchTilesUseCase:
 
         version_status = self._repo.get_feature_version_status()
         if not version_status.is_compatible and version_status.stale_count > 0:
-            logger.warning(
-                "Search running against stale indexed features: %s",
-                version_status.message,
+            raise RuntimeError(
+                "Indexed features are outdated. "
+                f"{version_status.stale_count} of {version_status.indexed_count} "
+                "tiles need re-indexing. Use Settings → Rebuild FAISS Index."
             )
 
         try:
@@ -186,7 +191,8 @@ class SearchTilesUseCase:
                 logger.info("Computing embedding for query image...")
                 with timer.measure("feature_extract"):
                     query_features = self._feature_extractor.extract(
-                        str(query_path)
+                        str(query_path),
+                        for_query=True,
                     )
                 extract_timings = self._feature_extractor.last_timings
                 timer.timings.record("preprocessing", extract_timings.preprocessing)

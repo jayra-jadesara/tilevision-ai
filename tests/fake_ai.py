@@ -9,6 +9,7 @@ from PIL import Image
 
 from src.ai.descriptors.color_descriptor import ColorDescriptor
 from src.ai.feature_extractor import ExtractTimings
+from src.ai.feature_versions import CURRENT_EMBEDDING_DIMENSION
 from src.ai.models import TileFeatures
 
 
@@ -28,7 +29,12 @@ class FakeEmbedder:
         r = sum(p[0] for p in pixels) / (len(pixels) * 255.0)
         g = sum(p[1] for p in pixels) / (len(pixels) * 255.0)
         b = sum(p[2] for p in pixels) / (len(pixels) * 255.0)
-        return np.array([r, g, b, 1.0], dtype=np.float32)
+        base = np.array([r, g, b, 1.0], dtype=np.float32)
+        if base.size >= CURRENT_EMBEDDING_DIMENSION:
+            return base[:CURRENT_EMBEDDING_DIMENSION]
+        padded = np.zeros(CURRENT_EMBEDDING_DIMENSION, dtype=np.float32)
+        padded[: base.size] = base
+        return padded
 
     def extract_from_preprocessed(self, processed) -> np.ndarray:
         return self._rgb_embedding(processed.pil)
@@ -86,7 +92,7 @@ class FakeFeatureExtractor:
     def load_model(self) -> None:
         self._embedder.load_model()
 
-    def extract(self, image_path: str) -> TileFeatures:
+    def extract(self, image_path: str, *, for_query: bool = False) -> TileFeatures:
         embedding = self._embedder.extract(image_path)
         return make_tile_features(embedding)
 

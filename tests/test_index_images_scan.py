@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 faiss = pytest.importorskip("faiss")
 
+from src.ai.feature_versions import CURRENT_EMBEDDING_DIMENSION
 from src.ai.vector_index import FaissIndexManager
 from src.core.use_cases.index_images import IndexImagesUseCase
 from src.data.db_context import DatabaseContext
@@ -27,7 +28,10 @@ def env(tmp_path):
     repo = SQLiteImageRepository(db_context)
     embedder = FakeEmbedder()
     feature_extractor = FakeFeatureExtractor(embedder=embedder)
-    vector_index = FaissIndexManager(str(tmp_path / "index" / "tiles.index"), dimension=4)
+    vector_index = FaissIndexManager(
+        str(tmp_path / "index" / "tiles.index"),
+        dimension=CURRENT_EMBEDDING_DIMENSION,
+    )
 
     use_case = IndexImagesUseCase(
         image_repository=repo,
@@ -257,7 +261,10 @@ def test_folder_is_recorded_after_successful_scan(tmp_path):
     folder_repo = SQLiteIndexedFolderRepository(db_context)
     embedder = FakeEmbedder()
     feature_extractor = FakeFeatureExtractor(embedder=embedder)
-    vector_index = FaissIndexManager(str(tmp_path / "index" / "tiles.index"), dimension=4)
+    vector_index = FaissIndexManager(
+        str(tmp_path / "index" / "tiles.index"),
+        dimension=CURRENT_EMBEDDING_DIMENSION,
+    )
 
     use_case = IndexImagesUseCase(
         image_repository=repo,
@@ -292,7 +299,10 @@ def test_folder_not_recorded_when_scan_is_cancelled(tmp_path):
     folder_repo = SQLiteIndexedFolderRepository(db_context)
     embedder = FakeEmbedder()
     feature_extractor = FakeFeatureExtractor(embedder=embedder)
-    vector_index = FaissIndexManager(str(tmp_path / "index" / "tiles.index"), dimension=4)
+    vector_index = FaissIndexManager(
+        str(tmp_path / "index" / "tiles.index"),
+        dimension=CURRENT_EMBEDDING_DIMENSION,
+    )
 
     use_case = IndexImagesUseCase(
         image_repository=repo,

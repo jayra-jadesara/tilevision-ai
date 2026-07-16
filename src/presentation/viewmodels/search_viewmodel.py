@@ -165,6 +165,21 @@ class SearchViewModel(QObject):
             logger.warning("Search already in progress; ignoring new search request.")
             return
 
+        try:
+            health = self._use_case.get_index_health()
+            if not health.is_compatible and health.stale_count > 0:
+                self._set_state(SearchState.ERROR)
+                self.search_error.emit(
+                    "Indexed features are outdated. "
+                    f"{health.stale_count} of {health.indexed_count} tiles "
+                    "need re-indexing.\n\n"
+                    "Go to Settings → Rebuild FAISS Index, then search again."
+                )
+                self.status_message.emit("Search blocked: index is outdated.")
+                return
+        except Exception as exc:
+            logger.warning("Could not verify feature index health: %s", exc)
+
         path = Path(image_path)
         if not path.exists() or not path.is_file():
             self._set_state(SearchState.ERROR)

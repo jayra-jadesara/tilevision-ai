@@ -8,6 +8,7 @@ decoupling of the business logic from data storage implementations.
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
 
+from src.ai.feature_versions import FeatureVersionStatus
 from src.core.models import TileImage, LicenseInfo, IndexedFolderState, SearchHistoryEntry, ActivityLogEntry
 
 
@@ -129,6 +130,16 @@ class IImageRepository(ABC):
 
         Returns:
             Matching tile primary keys.
+        """
+        pass
+
+    @abstractmethod
+    def get_feature_version_status(self) -> FeatureVersionStatus:
+        """
+        Check whether indexed tiles use the current feature pipeline versions.
+
+        Returns:
+            FeatureVersionStatus with compatibility flag and stale counts.
         """
         pass
 

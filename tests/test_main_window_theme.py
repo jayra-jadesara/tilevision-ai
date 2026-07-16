@@ -57,6 +57,7 @@ def qapp():
 @pytest.fixture()
 def main_window(qapp, tmp_path):
     settings = AppSettings(config_dir=tmp_path)
+    settings.theme = "dark"
     ivm = IndexingViewModel(use_case=_FakeIndexUseCase())
     window = MainWindow(indexing_viewmodel=ivm, settings=settings, catalog_count_provider=lambda: 0)
     yield window

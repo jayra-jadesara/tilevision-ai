@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 faiss = pytest.importorskip("faiss")
 
+from src.ai.feature_versions import CURRENT_EMBEDDING_DIMENSION
 from src.ai.vector_index import FaissIndexManager
 from src.core.models import TileImage
 from src.core.use_cases.search_tiles import SearchTilesUseCase
@@ -27,7 +28,10 @@ def env(tmp_path):
     repo = SQLiteImageRepository(db_context)
     embedder = FakeEmbedder()
     feature_extractor = FakeFeatureExtractor(embedder=embedder)
-    vector_index = FaissIndexManager(str(tmp_path / "index" / "tiles.index"), dimension=4)
+    vector_index = FaissIndexManager(
+        str(tmp_path / "index" / "tiles.index"),
+        dimension=CURRENT_EMBEDDING_DIMENSION,
+    )
     vector_index.load_index()
 
     use_case = SearchTilesUseCase(
@@ -159,6 +163,24 @@ def test_filter_with_no_matching_tiles_returns_empty(env):
         str(query_path), top_k=20, filters={"brand": "Somany"}
     )
     assert results == []
+
+
+def test_search_blocked_when_index_is_stale(env):
+    """Phase 14: stale feature versions must block search until rebuild."""
+    tile_id = _add_tile(env, "a.jpg", (200, 0, 0), "Kajaria", "Floor", "Red")
+    env["repo"].mark_as_indexed(tile_id, True)
+    with env["repo"]._db.session() as conn:
+        conn.execute(
+            "UPDATE tiles SET feature_version = 1 WHERE id = ?",
+            (tile_id,),
+        )
+        conn.commit()
+
+    query_path = env["tmp_path"] / "query.jpg"
+    Image.new("RGB", (16, 16), color=(200, 0, 0)).save(query_path)
+
+    with pytest.raises(RuntimeError, match="outdated"):
+        env["use_case"].execute(str(query_path), top_k=20)
 
 
 def test_get_filter_options_returns_distinct_sorted_values(env):

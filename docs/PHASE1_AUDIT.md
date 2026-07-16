@@ -99,12 +99,12 @@ query image
 
 ---
 
-## Thread Safety (Gap — Phase 15)
+## Thread Safety (Phase 15 — Fixed)
 
 - Indexing runs on `QThread` (`indexing_worker.py`)
 - Search runs on `QThread` (`search_worker.py`)
 - Folder monitor can trigger indexing during search
-- **No explicit lock** on DINOv2 model or FAISS mutations — addressed in Phase 15 fix.
+- **Fixed** — `inference_guard.py` RLock serializes DINOv2 forward passes and FAISS load/mutate/clear.
 
 ---
 
@@ -142,7 +142,7 @@ query image
 7. ✅ Search filters + metadata parsing
 8. ✅ FAISS pool sizing 50–200 (Phase 7)
 9. ✅ Soft color filter (Phase 8)
-10. ✅ Stale index UI banner (Phase 14)
-11. ✅ Thread locks (Phase 15)
-12. ✅ Content-region crop + lighting normalize (Phase 3)
-13. 🔄 Full accuracy evaluation run on your catalog (Phase 16)
+10. ✅ Stale index UI banner + Settings status + search block (Phase 14)
+11. ✅ Thread locks on DINOv2 + FAISS load/mutate (Phase 15)
+12. ✅ Content-region crop + lighting normalize + query scene focus (Phase 3)
+13. ✅ Full accuracy evaluation manifest + 90% PASS target (Phase 16)

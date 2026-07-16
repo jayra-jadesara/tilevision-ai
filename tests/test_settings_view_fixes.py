@@ -81,14 +81,14 @@ def test_overview_no_longer_displays_raw_file_paths(qapp, tmp_path):
     settings = AppSettings(config_dir=tmp_path)
     sv = SettingsView(settings=settings, db_path_provider=lambda: Path("/some/db/path.db"))
 
-    # The Overview section should not leak the raw thumbnail cache dir or
-    # database path to the user (Settings page label text check).
-    all_text = " ".join(
-        child.text() for child in sv.findChildren(type(sv)) if hasattr(child, "text")
-    )
-    # Simpler/more robust: walk all QLabel descendants directly.
-    from PySide6.QtWidgets import QLabel
-    label_texts = [lbl.text() for lbl in sv.findChildren(QLabel)]
+    # Overview labels must not leak raw thumbnail cache dir or database paths.
+    from PySide6.QtWidgets import QGroupBox, QLabel
+
+    overview_boxes = [
+        box for box in sv.findChildren(QGroupBox) if box.title() == "Overview"
+    ]
+    assert len(overview_boxes) == 1
+    label_texts = [lbl.text() for lbl in overview_boxes[0].findChildren(QLabel)]
     assert not any("thumbnails" in t.lower() for t in label_texts)
     assert not any("path.db" in t for t in label_texts)
 

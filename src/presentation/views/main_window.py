@@ -311,6 +311,7 @@ class MainWindow(QMainWindow):
                 indexing_use_case=self._indexing_use_case,
                 indexed_folders_provider=self._indexed_folders_provider,
                 on_catalog_changed=self._on_catalog_changed,
+                feature_version_provider=self._feature_version_provider,
                 theme=self._current_theme,
             )
             self._content_stack.addWidget(self._settings_view)  # index 3
@@ -464,6 +465,9 @@ class MainWindow(QMainWindow):
         self.refresh_stale_feature_banner()
         if self._search_viewmodel is not None:
             self._search_viewmodel.load_filter_options()
+        settings = getattr(self, "_settings_view", None)
+        if settings is not None and hasattr(settings, "refresh_feature_status"):
+            settings.refresh_feature_status()
 
     def refresh_stale_feature_banner(self) -> None:
         """Show or hide the stale-feature warning banner."""

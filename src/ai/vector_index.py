@@ -59,17 +59,18 @@ class FaissIndexManager:
         # Ensure parent folder exists
         self._index_path.parent.mkdir(parents=True, exist_ok=True)
 
-        if self._index_path.exists() and self._index_path.stat().st_size > 0:
-            logger.info(f"Loading existing FAISS index from: {self._index_path}")
-            try:
-                self._index = faiss.read_index(str(self._index_path))
-                logger.info(f"FAISS index loaded. Total vectors: {self._index.ntotal}")
-            except Exception as e:
-                logger.error(f"Failed to load FAISS index from file: {e}. Creating new index.")
+        with synchronized_inference():
+            if self._index_path.exists() and self._index_path.stat().st_size > 0:
+                logger.info(f"Loading existing FAISS index from: {self._index_path}")
+                try:
+                    self._index = faiss.read_index(str(self._index_path))
+                    logger.info(f"FAISS index loaded. Total vectors: {self._index.ntotal}")
+                except Exception as e:
+                    logger.error(f"Failed to load FAISS index from file: {e}. Creating new index.")
+                    self._create_new_index()
+            else:
+                logger.info("No index file found. Initializing a new FAISS index.")
                 self._create_new_index()
-        else:
-            logger.info("No index file found. Initializing a new FAISS index.")
-            self._create_new_index()
 
     def _create_new_index(self) -> None:
         """Initialize a new IndexIDMap with a flat Inner Product (Cosine Similarity) index."""
@@ -267,10 +268,11 @@ class FaissIndexManager:
 
     def clear_all(self) -> None:
         """Reset the index and delete the binary file."""
-        self._create_new_index()
-        try:
-            if self._index_path.exists():
-                self._index_path.unlink()
-            logger.info("Cleared FAISS index database file from disk.")
-        except Exception as e:
-            logger.error(f"Failed to delete FAISS index binary: {e}")
+        with synchronized_inference():
+            self._create_new_index()
+            try:
+                if self._index_path.exists():
+                    self._index_path.unlink()
+                logger.info("Cleared FAISS index database file from disk.")
+            except Exception as e:
+                logger.error(f"Failed to delete FAISS index binary: {e}")
