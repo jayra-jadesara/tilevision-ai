@@ -76,7 +76,7 @@ _STEPS: List[_HelpStep] = [
         "step4_view_similar_tiles.png",
     ),
     _HelpStep(
-        5, "🖱️", "Double-Click to Open",
+        5, "", "Double-Click to Open",
         "Double-click any result to open the full photo. Right-click for more — "
         "open its folder, or copy the file path.",
         "step5_double_click_to_open.png",
@@ -198,7 +198,7 @@ class HelpView(QDialog):
                 label.setPixmap(scaled)
                 return label
 
-        placeholder = QLabel("🖼️  Screenshot coming soon")
+        placeholder = QLabel("Screenshot coming soon")
         placeholder.setObjectName("ScreenshotPlaceholder")
         placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         placeholder.setFixedHeight(70)

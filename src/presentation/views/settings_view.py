@@ -169,11 +169,11 @@ class SettingsView(QWidget):
 
         if self._license_details.get("is_trial"):
             days = self._license_details.get("days_remaining", 0)
-            license_text = f"🕐 Trial — {days} day(s) remaining"
+            license_text = f"Trial — {days} day(s) remaining"
         elif self._license_details:
-            license_text = f"🔐 {self._license_details.get('license_type', 'Licensed')} — {self._license_details.get('customer_name', '')}"
+            license_text = f"{self._license_details.get('license_type', 'Licensed')} — {self._license_details.get('customer_name', '')}"
         else:
-            license_text = "🔓 Unlicensed"
+            license_text = "Unlicensed"
         form.addRow("License:", QLabel(license_text))
 
         return box
@@ -198,11 +198,11 @@ class SettingsView(QWidget):
         layout.addWidget(self._folders_list)
 
         button_row = QHBoxLayout()
-        add_button = QPushButton("➕  Add Folder")
+        add_button = QPushButton("Add Folder")
         add_button.clicked.connect(self._on_add_folder)
         button_row.addWidget(add_button)
 
-        remove_button = QPushButton("➖  Remove Selected")
+        remove_button = QPushButton("Remove Selected")
         remove_button.clicked.connect(self._on_remove_folder)
         button_row.addWidget(remove_button)
         button_row.addStretch()
@@ -260,26 +260,26 @@ class SettingsView(QWidget):
         layout.addWidget(note)
 
         row1 = QHBoxLayout()
-        self._backup_button = QPushButton("💾  Backup Database")
+        self._backup_button = QPushButton("Backup Database")
         self._backup_button.clicked.connect(self._on_backup_database)
         self._backup_button.setEnabled(self._db_path_provider is not None)
         row1.addWidget(self._backup_button)
 
-        self._export_logs_button = QPushButton("📤  Export Logs")
+        self._export_logs_button = QPushButton("Export Logs")
         self._export_logs_button.clicked.connect(self._on_export_logs)
         row1.addWidget(self._export_logs_button)
         row1.addStretch()
         layout.addLayout(row1)
 
         row2 = QHBoxLayout()
-        self._rebuild_button = QPushButton("🔄  Rebuild FAISS Index")
+        self._rebuild_button = QPushButton("Rebuild FAISS Index")
         self._rebuild_button.clicked.connect(self._on_rebuild_faiss)
         self._rebuild_button.setEnabled(
             self._indexing_use_case is not None and self._indexed_folders_provider is not None
         )
         row2.addWidget(self._rebuild_button)
 
-        self._clear_cache_button = QPushButton("🧹  Clear Cache")
+        self._clear_cache_button = QPushButton("Clear Cache")
         self._clear_cache_button.clicked.connect(self._on_clear_cache)
         row2.addWidget(self._clear_cache_button)
         row2.addStretch()

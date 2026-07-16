@@ -178,7 +178,7 @@ class CropDialog(QDialog):
         cancel_button.clicked.connect(self.reject)
         button_row.addWidget(cancel_button)
 
-        self._use_selection_button = QPushButton("✂️  Search This Region")
+        self._use_selection_button = QPushButton("Search This Region")
         self._use_selection_button.setObjectName("PrimaryButton")
         self._use_selection_button.setEnabled(False)
         self._use_selection_button.clicked.connect(self._on_use_selection)

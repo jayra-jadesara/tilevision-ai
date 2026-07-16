@@ -97,7 +97,7 @@ class DropZone(QFrame):
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.setSpacing(8)
 
-        self._icon_label = QLabel("🖼️")
+        self._icon_label = QLabel("Tile Image")
         self._icon_label.setObjectName("DropZoneIcon")
         self._icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._icon_label)
@@ -346,24 +346,24 @@ class SearchView(QWidget):
         button_col.setSpacing(8)
         button_col.addStretch()
 
-        self._export_button = QPushButton("⬇  Export Catalogue")
+        self._export_button = QPushButton("Export Catalogue")
         self._export_button.setObjectName("SecondaryButton")
         self._export_button.clicked.connect(self._on_export_clicked)
         button_col.addWidget(self._export_button)
 
-        self._crop_button = QPushButton("✂️  Crop & Search")
+        self._crop_button = QPushButton("Crop and Search")
         self._crop_button.setObjectName("SecondaryButton")
         self._crop_button.clicked.connect(self._on_crop_clicked)
         self._crop_button.setEnabled(False)
         button_col.addWidget(self._crop_button)
 
-        self._clear_button = QPushButton("✕  Clear")
+        self._clear_button = QPushButton("Clear")
         self._clear_button.setObjectName("SecondaryButton")
         self._clear_button.clicked.connect(self._on_clear_clicked)
         self._clear_button.setEnabled(False)
         button_col.addWidget(self._clear_button)
 
-        self._history_button = QPushButton("🕐  Recent Searches")
+        self._history_button = QPushButton("Recent Searches")
         self._history_button.setObjectName("SecondaryButton")
         self._history_button.clicked.connect(self._on_history_clicked)
         button_col.addWidget(self._history_button)
@@ -505,7 +505,7 @@ class SearchView(QWidget):
         self._results_table.cellClicked.connect(self._on_table_clicked)
         self._results_table.customContextMenuRequested.connect(self._on_results_context_menu)
 
-        self._empty_state_icon = QLabel("🔍")
+        self._empty_state_icon = QLabel("")
         self._empty_state_icon.setObjectName("EmptyStateIcon")
         self._empty_state_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -664,7 +664,7 @@ class SearchView(QWidget):
     def _show_confidence_banner(self, results: List[SearchResult]) -> None:
         message = confidence_message(results)
         if message:
-            self._confidence_banner.setText(f"⚠  {message}")
+            self._confidence_banner.setText(f"Warning: {message}")
             self._confidence_banner.setVisible(True)
         else:
             self._confidence_banner.setVisible(False)
@@ -728,7 +728,7 @@ class SearchView(QWidget):
             self._results_table.setItem(row, 3, QTableWidgetItem(tile.brand or "—"))
             self._results_table.setItem(row, 4, QTableWidgetItem(tile.category or "—"))
 
-            preview_item = QTableWidgetItem("👁 View")
+            preview_item = QTableWidgetItem("View")
             preview_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             preview_item.setToolTip("Preview Tile")
             self._results_table.setItem(row, 5, preview_item)
@@ -762,9 +762,9 @@ class SearchView(QWidget):
             return
 
         menu = QMenu(self)
-        open_image_action = menu.addAction("🖼️  Open Image")
+        open_image_action = menu.addAction("Open Image")
         open_folder_action = menu.addAction("📂  Open Containing Folder")
-        copy_path_action = menu.addAction("📋  Copy Path")
+        copy_path_action = menu.addAction("Copy Path")
 
         chosen = menu.exec(self._results_table.viewport().mapToGlobal(position))
         if chosen == open_image_action:

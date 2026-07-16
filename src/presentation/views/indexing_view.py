@@ -111,7 +111,7 @@ class IndexingView(QWidget):
         layout.setContentsMargins(0, 0, 0, 8)
         layout.setSpacing(4)
 
-        title = QLabel("📁  Folder Indexing")
+        title = QLabel("Folder Indexing")
         title.setObjectName("PageTitle")
         font = QFont()
         font.setPointSize(20)
@@ -136,7 +136,7 @@ class IndexingView(QWidget):
 
     def _build_folder_selector(self) -> QGroupBox:
         """Build the folder selector group box with path display and browse button."""
-        group = QGroupBox("📂  Tile Image Folder")
+        group = QGroupBox("Tile Image Folder")
         group.setObjectName("SectionGroup")
         outer_layout = QVBoxLayout(group)
         outer_layout.setContentsMargins(16, 12, 16, 12)
@@ -187,7 +187,7 @@ class IndexingView(QWidget):
 
     def _build_progress_section(self) -> QGroupBox:
         """Build the progress bar with file counter and ETA display."""
-        group = QGroupBox("⚙ Indexing Progress")
+        group = QGroupBox("Indexing Progress")
         group.setObjectName("SectionGroup")
         layout = QVBoxLayout(group)
         layout.setContentsMargins(16, 12, 16, 12)
@@ -236,18 +236,18 @@ class IndexingView(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        self._start_button = QPushButton("▶  Start Indexing")
+        self._start_button = QPushButton("Start Indexing")
         self._start_button.setObjectName("StartButton")
         self._start_button.setFixedHeight(44)
         self._start_button.setToolTip("Start scanning the selected folder and indexing all tile images")
 
-        self._pause_resume_button = QPushButton("⏸  Pause")
+        self._pause_resume_button = QPushButton("Pause")
         self._pause_resume_button.setObjectName("PauseButton")
         self._pause_resume_button.setFixedHeight(44)
         self._pause_resume_button.setEnabled(False)
         self._pause_resume_button.setToolTip("Pause or resume the indexing process")
 
-        self._cancel_button = QPushButton("✕  Cancel")
+        self._cancel_button = QPushButton("Cancel")
         self._cancel_button.setObjectName("CancelButton")
         self._cancel_button.setFixedHeight(44)
         self._cancel_button.setEnabled(False)
@@ -260,7 +260,7 @@ class IndexingView(QWidget):
 
     def _build_stats_panel(self) -> QGroupBox:
         """Build summary statistics box showing indexed/skipped counts."""
-        group = QGroupBox("📊  Results Summary")
+        group = QGroupBox("Results Summary")
         group.setObjectName("SectionGroup")
         layout = QGridLayout(group)
         layout.setContentsMargins(16, 12, 16, 12)
@@ -268,12 +268,13 @@ class IndexingView(QWidget):
 
         def _make_stat_block(icon: str, label_text: str, obj_name: str) -> tuple:
             """Helper to build a labelled stat value widget pair."""
-            icon_label = QLabel(icon)
-            icon_label.setObjectName("StatIcon")
-            icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            font = QFont()
-            font.setPointSize(22)
-            icon_label.setFont(font)
+            icon_label = QLabel(icon) if icon else None
+            if icon_label is not None:
+                icon_label.setObjectName("StatIcon")
+                icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                font = QFont()
+                font.setPointSize(22)
+                icon_label.setFont(font)
 
             value_label = QLabel("—")
             value_label.setObjectName(obj_name)
@@ -290,26 +291,27 @@ class IndexingView(QWidget):
             return icon_label, value_label, desc_label
 
         # New stat
-        ic1, self._new_value_label, dc1 = _make_stat_block("🆕", "New", "IndexedStatValue")
-        layout.addWidget(ic1, 0, 0)
+        ic1, self._new_value_label, dc1 = _make_stat_block("", "New", "IndexedStatValue")
+        if ic1 is not None:
+            layout.addWidget(ic1, 0, 0)
         layout.addWidget(self._new_value_label, 1, 0)
         layout.addWidget(dc1, 2, 0)
 
-        # Modified stat
-        ic2, self._modified_value_label, dc2 = _make_stat_block("✏️", "Modified", "ModifiedStatValue")
-        layout.addWidget(ic2, 0, 1)
+        ic2, self._modified_value_label, dc2 = _make_stat_block("", "Modified", "ModifiedStatValue")
+        if ic2 is not None:
+            layout.addWidget(ic2, 0, 1)
         layout.addWidget(self._modified_value_label, 1, 1)
         layout.addWidget(dc2, 2, 1)
 
-        # Deleted stat
-        ic3, self._deleted_value_label, dc3 = _make_stat_block("🗑", "Deleted", "DeletedStatValue")
-        layout.addWidget(ic3, 0, 2)
+        ic3, self._deleted_value_label, dc3 = _make_stat_block("", "Deleted", "DeletedStatValue")
+        if ic3 is not None:
+            layout.addWidget(ic3, 0, 2)
         layout.addWidget(self._deleted_value_label, 1, 2)
         layout.addWidget(dc3, 2, 2)
 
-        # Skipped stat
-        ic4, self._skipped_value_label, dc4 = _make_stat_block("⏭", "Skipped (Unchanged)", "SkippedStatValue")
-        layout.addWidget(ic4, 0, 3)
+        ic4, self._skipped_value_label, dc4 = _make_stat_block("", "Skipped (Unchanged)", "SkippedStatValue")
+        if ic4 is not None:
+            layout.addWidget(ic4, 0, 3)
         layout.addWidget(self._skipped_value_label, 1, 3)
         layout.addWidget(dc4, 2, 3)
 
@@ -327,7 +329,7 @@ class IndexingView(QWidget):
 
     def _build_status_log(self) -> QGroupBox:
         """Build the scrollable live status / log text panel."""
-        group = QGroupBox("📋  Activity Log")
+        group = QGroupBox("Activity Log")
         group.setObjectName("SectionGroup")
         layout = QVBoxLayout(group)
         layout.setContentsMargins(12, 8, 12, 8)
@@ -424,12 +426,12 @@ class IndexingView(QWidget):
         if state == IndexingState.RUNNING:
             self._start_button.setEnabled(False)
             self._pause_resume_button.setEnabled(True)
-            self._pause_resume_button.setText("⏸  Pause")
+            self._pause_resume_button.setText("Pause")
             self._cancel_button.setEnabled(True)
             self._browse_button.setEnabled(False)
 
         elif state == IndexingState.PAUSED:
-            self._pause_resume_button.setText("▶  Resume")
+            self._pause_resume_button.setText("Resume")
 
         elif state == IndexingState.CANCELLING:
             # Background thread is still finishing its current file — keep
@@ -438,27 +440,27 @@ class IndexingView(QWidget):
             self._pause_resume_button.setEnabled(False)
             self._cancel_button.setEnabled(False)
             self._browse_button.setEnabled(False)
-            self._current_file_label.setText("⏳ Cancelling — finishing current file...")
+            self._current_file_label.setText("Cancelling — finishing current file...")
 
         elif state in (IndexingState.IDLE, IndexingState.FINISHED, IndexingState.CANCELLED):
             self._start_button.setEnabled(True)
             self._pause_resume_button.setEnabled(False)
-            self._pause_resume_button.setText("⏸  Pause")
+            self._pause_resume_button.setText("Pause")
             self._cancel_button.setEnabled(False)
             self._browse_button.setEnabled(True)
 
             if state == IndexingState.FINISHED:
                 self._progress_bar.setValue(100)
-                self._current_file_label.setText("✅ Indexing completed successfully.")
+                self._current_file_label.setText("Indexing completed successfully.")
             elif state == IndexingState.CANCELLED:
-                self._current_file_label.setText("⛔ Indexing was cancelled.")
+                self._current_file_label.setText("Indexing was cancelled.")
 
         elif state == IndexingState.ERROR:
             self._start_button.setEnabled(True)
             self._pause_resume_button.setEnabled(False)
             self._cancel_button.setEnabled(False)
             self._browse_button.setEnabled(True)
-            self._current_file_label.setText("❌ An error occurred. Check the activity log.")
+            self._current_file_label.setText("An error occurred. Check the activity log.")
 
     @Slot(object)
     def _on_indexing_completed(self, result) -> None:
@@ -474,7 +476,7 @@ class IndexingView(QWidget):
         self._skipped_value_label.setText(f"{result.skipped_count:,}")
 
         if not result.has_any_changes and result.is_completed:
-            self._time_saved_label.setText("✅ Everything is already indexed.")
+            self._time_saved_label.setText("Everything is already indexed.")
         elif result.time_saved_seconds >= 1:
             self._time_saved_label.setText(
                 f"⏱  Saved ~{self._format_duration(result.time_saved_seconds)} by skipping unchanged files."
@@ -537,7 +539,7 @@ class IndexingView(QWidget):
         self._last_indexed_info_label.setText(
             f"Last Indexed: {self._format_last_indexed(status.last_indexed_at)}"
         )
-        self._current_file_label.setText("✅ Ready — click Start Indexing to check for changes.")
+        self._current_file_label.setText("Ready — click Start Indexing to check for changes.")
 
     @staticmethod
     def _format_last_indexed(when) -> str:

@@ -111,7 +111,7 @@ class LicenseView(QDialog):
         layout.addStretch()
 
         # ── Activate Button
-        self._activate_button = QPushButton("🔓  Activate License")
+        self._activate_button = QPushButton("Activate License")
         self._activate_button.setObjectName("ActivateButton")
         self._activate_button.setFixedHeight(48)
         self._activate_button.clicked.connect(self._on_activate_clicked)
@@ -180,7 +180,7 @@ class LicenseView(QDialog):
         self._hw_id_edit.setReadOnly(True)
         self._hw_id_edit.setPlaceholderText("Computing hardware fingerprint...")
 
-        copy_button = QPushButton("📋 Copy")
+        copy_button = QPushButton("Copy")
         copy_button.setObjectName("CopyButton")
         copy_button.setFixedWidth(90)
         copy_button.setFixedHeight(32)
@@ -232,7 +232,7 @@ class LicenseView(QDialog):
             logger.error(f"Failed to load hardware fingerprint: {e}")
             self._hw_id_edit.setText("ERROR: Unable to read hardware ID")
             self._show_status(
-                "⚠️ Warning: Could not read hardware fingerprint. Contact support.", error=True
+                "Warning: Warning: Could not read hardware fingerprint. Contact support.", error=True
             )
 
     @Slot()
@@ -242,10 +242,10 @@ class LicenseView(QDialog):
         if hw_id and not hw_id.startswith("ERROR"):
             clipboard: QClipboard = QGuiApplication.clipboard()
             clipboard.setText(hw_id)
-            self._show_status("✅ Hardware fingerprint copied to clipboard.", error=False)
+            self._show_status("Hardware fingerprint copied to clipboard.", error=False)
             logger.info("Hardware fingerprint copied to clipboard.")
         else:
-            self._show_status("⚠️ Nothing to copy — fingerprint is unavailable.", error=True)
+            self._show_status("Warning: Nothing to copy — fingerprint is unavailable.", error=True)
 
     @Slot()
     def _on_activate_clicked(self) -> None:
@@ -256,7 +256,7 @@ class LicenseView(QDialog):
         license_key = self._license_key_edit.text().strip()
 
         if not license_key:
-            self._show_status("⚠️ Please enter a license key before activating.", error=True)
+            self._show_status("Warning: Please enter a license key before activating.", error=True)
             return
 
         logger.info("License activation attempt started.")
@@ -270,12 +270,12 @@ class LicenseView(QDialog):
             is_valid = False
 
         self._activate_button.setEnabled(True)
-        self._activate_button.setText("🔓  Activate License")
+        self._activate_button.setText("Activate License")
 
         if is_valid:
             logger.info("License successfully activated.")
             self._is_activated = True
-            self._show_status("✅ License activated successfully! Welcome to TileVision AI.", error=False)
+            self._show_status("License activated successfully! Welcome to TileVision AI.", error=False)
             # Small delay feedback before closing
             QMessageBox.information(
                 self,
@@ -286,7 +286,7 @@ class LicenseView(QDialog):
         else:
             logger.warning("License key validation failed.")
             self._show_status(
-                "❌ Invalid license key. Please check the key and try again, or contact support.",
+                "Invalid license key. Please check the key and try again, or contact support.",
                 error=True,
             )
             self._license_key_edit.selectAll()

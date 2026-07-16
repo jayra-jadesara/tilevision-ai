@@ -77,51 +77,15 @@ class DashboardDataProviders:
 
 
 class NavButton(QPushButton):
-    """
-    A custom navigation sidebar button with icon and label.
+    """Sidebar navigation button — text only, professional ceramic-industry style."""
 
-    Provides consistent active/inactive styling for sidebar navigation.
-    """
-
-    def __init__(self, icon_text: str, label: str, parent: Optional[QWidget] = None) -> None:
-        """
-        Initialize a navigation button.
-
-        Args:
-            icon_text: Emoji or text icon displayed above the label.
-            label: Button label text.
-            parent: Optional Qt parent widget.
-        """
-        super().__init__(parent)
+    def __init__(self, label: str, parent: Optional[QWidget] = None) -> None:
+        super().__init__(label, parent)
         self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setObjectName("NavButton")
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 12, 8, 12)
-        layout.setSpacing(4)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        icon_label = QLabel(icon_text)
-        icon_label.setObjectName("NavIcon")
-        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon_font = QFont()
-        icon_font.setPointSize(18)
-        icon_label.setFont(icon_font)
-
-        text_label = QLabel(label)
-        text_label.setObjectName("NavLabel")
-        text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        layout.addWidget(icon_label)
-        layout.addWidget(text_label)
-
-        # Prevent the internal labels from consuming mouse events (let button handle them)
-        icon_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        text_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-
         self.setFixedWidth(100)
-        self.setMinimumHeight(80)
+        self.setMinimumHeight(44)
 
 
 class MainWindow(QMainWindow):
@@ -352,7 +316,7 @@ class MainWindow(QMainWindow):
         else:
             # Fallback if the logo asset is ever missing — never crash on a
             # missing image, just fall back to the original text mark.
-            logo_label.setText("TV\nAI")
+            logo_label.setText("TileVision")
             logo_font = QFont()
             logo_font.setPointSize(14)
             logo_font.setBold(True)
@@ -368,34 +332,33 @@ class MainWindow(QMainWindow):
         layout.addSpacing(8)
 
         # ── Navigation Buttons
-        self._nav_index_button = NavButton("📁", "Index")
+        self._nav_index_button = NavButton("Index")
         self._nav_index_button.clicked.connect(lambda: self._navigate(0))
         layout.addWidget(self._nav_index_button)
 
-        # Placeholder nav buttons (for future features)
-        self._nav_search_button = NavButton("🔍", "Search")
+        self._nav_search_button = NavButton("Search")
         self._nav_search_button.setEnabled(False)
-        self._nav_search_button.setToolTip("Visual Search — Coming in Feature 2")
+        self._nav_search_button.setToolTip("Visual tile similarity search")
         self._nav_search_button.clicked.connect(lambda: self._navigate(1))
         layout.addWidget(self._nav_search_button)
 
-        self._nav_duplicates_button = NavButton("🧬", "Duplicates")
+        self._nav_duplicates_button = NavButton("Duplicates")
         self._nav_duplicates_button.setEnabled(False)
-        self._nav_duplicates_button.setToolTip("Duplicate Detection")
+        self._nav_duplicates_button.setToolTip("Duplicate tile detection")
         self._nav_duplicates_button.clicked.connect(self._on_duplicates_clicked)
         layout.addWidget(self._nav_duplicates_button)
 
-        self._nav_catalog_button = NavButton("🏠", "Dashboard")
+        self._nav_catalog_button = NavButton("Dashboard")
         self._nav_catalog_button.setEnabled(False)
-        self._nav_catalog_button.setToolTip("Dashboard")
+        self._nav_catalog_button.setToolTip("Showroom overview")
         layout.addWidget(self._nav_catalog_button)
 
-        self._nav_settings_button = NavButton("⚙️", "Settings")
+        self._nav_settings_button = NavButton("Settings")
         self._nav_settings_button.setEnabled(False)
-        self._nav_settings_button.setToolTip("Settings — Coming soon")
+        self._nav_settings_button.setToolTip("Application settings")
         layout.addWidget(self._nav_settings_button)
 
-        self._nav_help_button = NavButton("❓", "Help")
+        self._nav_help_button = NavButton("Help")
         self._nav_help_button.setToolTip("Help & User Guide")
         self._nav_help_button.setCheckable(False)  # opens a modal, not a nav page
         self._nav_help_button.clicked.connect(self._on_help_clicked)
@@ -435,16 +398,16 @@ class MainWindow(QMainWindow):
     def _format_license_status(self) -> str:
         """Build the status bar license indicator text from license_details."""
         if not self._license_details:
-            return "🔓 Unlicensed"
+            return "Unlicensed"
 
         if self._license_details.get("is_trial"):
             days = self._license_details.get("days_remaining", 0)
             if days <= 3:
-                return f"⏳ Trial: {days} day(s) left"
-            return f"🕐 Trial: {days} days left"
+                return f"Trial: {days} day(s) left"
+            return f"Trial: {days} days left"
 
         license_type = self._license_details.get("license_type", "Licensed")
-        return f"🔐 {license_type}"
+        return license_type
 
     # ── Signals ───────────────────────────────────────────────────────────────
 
@@ -491,7 +454,7 @@ class MainWindow(QMainWindow):
             return
 
         self._stale_banner.setText(
-            "⚠️ Indexed features are outdated "
+            "Warning: Indexed features are outdated "
             f"({status.stale_count} of {status.indexed_count} tiles). "
             "Re-scan your folders or use Settings → Rebuild FAISS Index "
             "for accurate search results."

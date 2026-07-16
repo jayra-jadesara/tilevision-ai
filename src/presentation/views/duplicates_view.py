@@ -100,7 +100,7 @@ class _DuplicateGroupWidget(QFrame):
 
         # Duplicate % + Exact/Near badge (Task B)
         pct = self._compute_duplicate_percent(tile)
-        badge_text = f"{'🟢 Exact' if self._is_exact else '🟡 Near'} · {pct:.0f}%"
+        badge_text = f"{'Exact' if self._is_exact else 'Near'} · {pct:.0f}%"
         badge_label = QLabel(badge_text)
         badge_label.setObjectName("DuplicateBadgeExact" if self._is_exact else "DuplicateBadgeNear")
         badge_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -114,7 +114,7 @@ class _DuplicateGroupWidget(QFrame):
         card_layout.addWidget(name_label)
 
         button_row = QHBoxLayout()
-        open_button = QPushButton("🖼️")
+        open_button = QPushButton("Open")
         open_button.setToolTip("Open Image")
         open_button.setFixedWidth(28)
         open_button.clicked.connect(lambda: self._open_image(tile))
@@ -126,7 +126,7 @@ class _DuplicateGroupWidget(QFrame):
         folder_button.clicked.connect(lambda: self._open_folder(tile))
         button_row.addWidget(folder_button)
 
-        delete_button = QPushButton("🗑")
+        delete_button = QPushButton("Delete")
         delete_button.setObjectName("DeleteButton")
         delete_button.setToolTip("Delete this duplicate")
         delete_button.setFixedWidth(28)
@@ -203,7 +203,7 @@ class DuplicatesView(QDialog):
         layout.setContentsMargins(20, 16, 20, 16)
         layout.setSpacing(12)
 
-        title = QLabel("🔍  Duplicate & Near-Duplicate Tile Detection")
+        title = QLabel("Duplicate and Near-Duplicate Tile Detection")
         title.setObjectName("Title")
         layout.addWidget(title)
 
@@ -218,7 +218,7 @@ class DuplicatesView(QDialog):
         options_row.addWidget(self._exact_only_radio)
         options_row.addStretch()
 
-        self._scan_button = QPushButton("▶  Scan for Duplicates")
+        self._scan_button = QPushButton("Scan for Duplicates")
         self._scan_button.setObjectName("ScanButton")
         self._scan_button.clicked.connect(self._on_scan_clicked)
         options_row.addWidget(self._scan_button)
@@ -262,7 +262,7 @@ class DuplicatesView(QDialog):
 
         total_groups = len(exact_groups) + len(near_groups)
         if total_groups == 0:
-            self._status_label.setText("✅ No duplicates found in your catalog.")
+            self._status_label.setText("No duplicates found in your catalog.")
         else:
             self._status_label.setText(
                 f"Found {len(exact_groups)} exact duplicate group(s) and "

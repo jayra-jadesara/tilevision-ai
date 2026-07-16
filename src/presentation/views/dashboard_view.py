@@ -39,15 +39,16 @@ logger = logging.getLogger("tilevision.presentation.views.dashboard_view")
 class _StatCard(QFrame):
     """A single stat tile (e.g. '1,204 Total Images')."""
 
-    def __init__(self, icon: str, value: str, label: str, parent=None) -> None:
+    def __init__(self, value: str, label: str, icon: str = "", parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("StatCard")
         layout = QVBoxLayout(self)
         layout.setSpacing(2)
 
-        icon_label = QLabel(icon)
-        icon_label.setObjectName("StatIcon")
-        layout.addWidget(icon_label)
+        if icon:
+            icon_label = QLabel(icon)
+            icon_label.setObjectName("StatIcon")
+            layout.addWidget(icon_label)
 
         value_label = QLabel(value)
         value_label.setObjectName("StatValue")
@@ -192,32 +193,32 @@ class DashboardView(QWidget):
         grid.setSpacing(12)
 
         tile_count = self._catalog_count_provider() if self._catalog_count_provider else 0
-        self._tiles_card = _StatCard("🖼️", f"{tile_count:,}", "Total Images")
+        self._tiles_card = _StatCard(f"{tile_count:,}", "Total Images")
         grid.addWidget(self._tiles_card, 0, 0)
 
         folder_count = self._indexed_folder_count_provider() if self._indexed_folder_count_provider else 0
-        self._folders_card = _StatCard("📂", f"{folder_count:,}", "Indexed Folders")
+        self._folders_card = _StatCard(f"{folder_count:,}", "Indexed Folders")
         grid.addWidget(self._folders_card, 0, 1)
 
-        self._db_size_card = _StatCard("🗄️", self._format_size(self._database_size_provider), "Database Size")
+        self._db_size_card = _StatCard(self._format_size(self._database_size_provider), "Database Size")
         grid.addWidget(self._db_size_card, 0, 2)
 
-        self._faiss_size_card = _StatCard("🧮", self._format_size(self._faiss_size_provider), "FAISS Index Size")
+        self._faiss_size_card = _StatCard(self._format_size(self._faiss_size_provider), "FAISS Index Size")
         grid.addWidget(self._faiss_size_card, 0, 3)
 
-        self._last_search_card = _StatCard("🔍", self._format_last_search(), "Last Search")
+        self._last_search_card = _StatCard(self._format_last_search(), "Last Search")
         grid.addWidget(self._last_search_card, 1, 0)
 
-        license_text, license_icon = self._build_license_card_text()
-        self._license_card = _StatCard(license_icon, license_text, "License Status")
+        license_text, _license_icon = self._build_license_card_text()
+        self._license_card = _StatCard(license_text, "License Status")
         grid.addWidget(self._license_card, 1, 1)
 
         trial_text = self._build_trial_remaining_text()
-        self._trial_card = _StatCard("⏳", trial_text, "Trial Remaining")
+        self._trial_card = _StatCard(trial_text, "Trial Remaining")
         grid.addWidget(self._trial_card, 1, 2)
 
         watched_count = self._watched_folder_count_provider() if self._watched_folder_count_provider else 0
-        self._watched_card = _StatCard("👁️", f"{watched_count:,}", "Watched Folders")
+        self._watched_card = _StatCard(f"{watched_count:,}", "Watched Folders")
         grid.addWidget(self._watched_card, 1, 3)
 
         for col in range(4):
@@ -227,10 +228,10 @@ class DashboardView(QWidget):
 
     def _build_license_card_text(self) -> tuple:
         if self._license_details.get("is_trial"):
-            return "Trial", "🕐"
+            return "Trial", ""
         if self._license_details:
-            return self._license_details.get("license_type", "Licensed"), "🔐"
-        return "Unlicensed", "🔓"
+            return self._license_details.get("license_type", "Licensed"), ""
+        return "Unlicensed", ""
 
     def _build_trial_remaining_text(self) -> str:
         if self._license_details.get("is_trial"):
@@ -250,13 +251,13 @@ class DashboardView(QWidget):
         actions_row = QHBoxLayout()
         actions_row.setSpacing(12)
 
-        for icon_text, label_text, callback in [
-            ("🔍", "Search", self._on_go_to_search),
-            ("📁", "Index Folder", self._on_go_to_index),
-            ("🧬", "Duplicate Detection", self._on_go_to_duplicates),
-            ("⚙️", "Settings", self._on_go_to_settings),
+        for _icon, label_text, callback in [
+            ("Search", "Search", self._on_go_to_search),
+            ("Index", "Index Folder", self._on_go_to_index),
+            ("Duplicates", "Duplicate Detection", self._on_go_to_duplicates),
+            ("Settings", "Settings", self._on_go_to_settings),
         ]:
-            button = QPushButton(f"{icon_text}  {label_text}")
+            button = QPushButton(label_text)
             button.setObjectName("ActionButton")
             if callback:
                 button.clicked.connect(callback)
@@ -363,7 +364,7 @@ class DashboardView(QWidget):
 
         for entry in entries:
             name = Path(entry.query_image_path).name
-            row_button = QPushButton(f"🔍  {name} — {entry.result_count} result(s)")
+            row_button = QPushButton(f"{name} — {entry.result_count} result(s)")
             row_button.setObjectName("SearchHistoryRow")
             if self._on_repeat_search:
                 row_button.clicked.connect(

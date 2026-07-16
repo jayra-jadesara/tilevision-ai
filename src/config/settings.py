@@ -57,6 +57,8 @@ class AppSettings:
             "huge_file_mb_threshold": 50,
             "inference_device": "auto",
             "gpu_index_batch_size": 24,
+            "setup_wizard_completed": False,
+            "setup_wizard_version": 0,
         }
         
         self._settings: Dict[str, Any] = self._defaults.copy()
@@ -268,3 +270,21 @@ class AppSettings:
     @gpu_index_batch_size.setter
     def gpu_index_batch_size(self, value: int) -> None:
         self._settings["gpu_index_batch_size"] = max(1, int(value))
+
+    @property
+    def setup_wizard_completed(self) -> bool:
+        return bool(self._settings.get("setup_wizard_completed", False))
+
+    @setup_wizard_completed.setter
+    def setup_wizard_completed(self, value: bool) -> None:
+        self._settings["setup_wizard_completed"] = bool(value)
+        self.save()
+
+    @property
+    def setup_wizard_version(self) -> int:
+        return int(self._settings.get("setup_wizard_version", 0))
+
+    @setup_wizard_version.setter
+    def setup_wizard_version(self, value: int) -> None:
+        self._settings["setup_wizard_version"] = int(value)
+        self.save()

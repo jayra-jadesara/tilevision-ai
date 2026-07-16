@@ -45,11 +45,6 @@ from src.presentation.viewmodels.search_viewmodel import SearchViewModel
 from src.presentation.views.main_window import MainWindow, DashboardDataProviders
 from src.presentation.views.license_view import LicenseView
 
-from src.ai.embedder import DINOv2Embedder
-from src.ai.feature_extractor import FeatureExtractor
-from src.ai.preprocess.image_preprocessor import ImagePreprocessor
-from src.config.indexing_performance import IndexingPerformanceConfig
-
 _app_logger = logging.getLogger("tilevision.app")
 
 
@@ -103,6 +98,16 @@ def build_application() -> int:
     # Set modern default font
     default_font = QFont("Segoe UI", 10)
     app.setFont(default_font)
+
+    # ── 3b. First-run dependency setup wizard ─────────────────────────────────
+    from src.presentation.views.setup_wizard import SetupWizardDialog, should_show_setup_wizard
+
+    if should_show_setup_wizard(settings):
+        logger.info("Showing first-run setup wizard...")
+        wizard = SetupWizardDialog(settings, theme=settings.theme)
+        if wizard.exec() != SetupWizardDialog.DialogCode.Accepted:
+            logger.warning("Setup wizard cancelled — exiting.")
+            return 1
 
     # ── 4. Construct Data Layer ───────────────────────────────────────────────
     logger.info("Initializing database context...")
@@ -160,6 +165,11 @@ def build_application() -> int:
             logger.info(f"Valid license found for: {customer}")
 
     # ── 7. Construct AI Layer ─────────────────────────────────────────────────
+    from src.ai.embedder import DINOv2Embedder
+    from src.ai.feature_extractor import FeatureExtractor
+    from src.ai.preprocess.image_preprocessor import ImagePreprocessor
+    from src.config.indexing_performance import IndexingPerformanceConfig
+
     logger.info("Initializing AI engine...")
     embedder = DINOv2Embedder(device_preference=settings.inference_device)
     indexing_perf = IndexingPerformanceConfig.from_settings(
