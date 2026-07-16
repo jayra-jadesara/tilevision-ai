@@ -26,8 +26,11 @@ from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QApplication,
+    QCalendarWidget,
     QComboBox,
     QDateEdit,
+    QDialog,
+    QDialogButtonBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -231,10 +234,23 @@ class AdminLicenseWindow(QMainWindow):
         form.addRow("License Type:", self._license_type)
 
         self._expiry = QDateEdit()
-        self._expiry.setCalendarPopup(True)
         self._expiry.setDisplayFormat("yyyy-MM-dd")
+        self._expiry.setMinimumDate(QDate.currentDate())
+        self._expiry.setCalendarPopup(True)
+        self._expiry.setButtonSymbols(QDateEdit.ButtonSymbols.NoButtons)
         self._prepare_form_field(self._expiry)
-        form.addRow("Expiry Date:", self._expiry)
+
+        self._expiry_calendar_btn = QPushButton("Open Calendar")
+        self._expiry_calendar_btn.setMinimumHeight(36)
+        self._expiry_calendar_btn.clicked.connect(self._open_expiry_calendar)
+
+        expiry_row = QWidget()
+        expiry_layout = QHBoxLayout(expiry_row)
+        expiry_layout.setContentsMargins(0, 0, 0, 0)
+        expiry_layout.setSpacing(8)
+        expiry_layout.addWidget(self._expiry, stretch=1)
+        expiry_layout.addWidget(self._expiry_calendar_btn)
+        form.addRow("Expiry Date:", expiry_row)
         self._on_license_type_changed(self._license_type.currentText())
 
         self._notes = QLineEdit()
@@ -396,6 +412,7 @@ class AdminLicenseWindow(QMainWindow):
         self._set_expiry_date(expiry_str)
         is_lifetime = license_type == "Lifetime"
         self._expiry.setEnabled(not is_lifetime)
+        self._expiry_calendar_btn.setEnabled(not is_lifetime)
         if is_lifetime:
             self._expiry.setToolTip("Lifetime licenses do not expire.")
         else:
@@ -410,6 +427,35 @@ class AdminLicenseWindow(QMainWindow):
         if self._license_type.currentText() == "Lifetime":
             return LIFETIME_EXPIRY_SENTINEL
         return self._expiry.date().toString("yyyy-MM-dd")
+
+    def _open_expiry_calendar(self) -> None:
+        """Open a modal calendar — reliable on Windows when QDateEdit popup fails."""
+        if not self._expiry.isEnabled():
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Select Expiry Date")
+        dialog.setMinimumWidth(340)
+        dialog.setStyleSheet(get_admin_qss(self._current_theme))
+
+        layout = QVBoxLayout(dialog)
+        calendar = QCalendarWidget()
+        calendar.setGridVisible(True)
+        calendar.setMinimumDate(QDate.currentDate())
+        calendar.setSelectedDate(self._expiry.date())
+        layout.addWidget(calendar)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        calendar.clicked.connect(self._expiry.setDate)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._expiry.setDate(calendar.selectedDate())
 
     def _save_settings(self, **updates: str) -> None:
         _SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)

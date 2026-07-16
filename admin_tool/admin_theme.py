@@ -115,12 +115,37 @@ def get_admin_qss(theme: str) -> str:
         min-height: 24px;
     }}
     QDateEdit::drop-down {{
-        border: none;
-        width: 24px;
+        subcontrol-origin: padding;
+        subcontrol-position: top right;
+        width: 28px;
+        border-left: 1px solid {p['border_strong']};
+        background-color: {p['button_bg']};
+    }}
+    QCalendarWidget {{
+        background-color: {p['bg_panel']};
+        color: {p['text_primary']};
     }}
     QCalendarWidget QWidget {{
         background-color: {p['bg_panel']};
         color: {p['text_primary']};
+    }}
+    QCalendarWidget QAbstractItemView:enabled {{
+        background-color: {p['bg_input']};
+        color: {p['text_primary']};
+        selection-background-color: {p['highlight_bg']};
+        selection-color: {p['text_primary']};
+    }}
+    QCalendarWidget QToolButton {{
+        background-color: {p['button_bg']};
+        color: {p['text_primary']};
+        border: 1px solid {p['border']};
+        border-radius: 4px;
+        padding: 4px 8px;
+    }}
+    QCalendarWidget QSpinBox {{
+        background-color: {p['bg_input']};
+        color: {p['text_primary']};
+        border: 1px solid {p['border_strong']};
     }}
     QComboBox {{
         background-color: {p['bg_input']};
