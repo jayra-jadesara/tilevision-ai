@@ -22,11 +22,12 @@ from cryptography.hazmat.primitives.serialization import (
     load_pem_private_key,
 )
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QDateEdit,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -52,6 +53,7 @@ from license_ledger import LicenseLedger, LicenseRecord
 from admin_theme import get_admin_qss
 from src.licensing.validator import (
     VENDOR_LICENSE_TYPES,
+    LIFETIME_EXPIRY_SENTINEL,
     compute_expiry_date,
     generate_license_key,
 )
@@ -228,7 +230,9 @@ class AdminLicenseWindow(QMainWindow):
         self._prepare_form_field(self._license_type)
         form.addRow("License Type:", self._license_type)
 
-        self._expiry = QLineEdit()
+        self._expiry = QDateEdit()
+        self._expiry.setCalendarPopup(True)
+        self._expiry.setDisplayFormat("yyyy-MM-dd")
         self._prepare_form_field(self._expiry)
         form.addRow("Expiry Date:", self._expiry)
         self._on_license_type_changed(self._license_type.currentText())
@@ -388,7 +392,24 @@ class AdminLicenseWindow(QMainWindow):
             widget.setMinimumWidth(280)
 
     def _on_license_type_changed(self, license_type: str) -> None:
-        self._expiry.setText(compute_expiry_date(license_type))
+        expiry_str = compute_expiry_date(license_type)
+        self._set_expiry_date(expiry_str)
+        is_lifetime = license_type == "Lifetime"
+        self._expiry.setEnabled(not is_lifetime)
+        if is_lifetime:
+            self._expiry.setToolTip("Lifetime licenses do not expire.")
+        else:
+            self._expiry.setToolTip("Adjust the expiry date if needed.")
+
+    def _set_expiry_date(self, expiry_str: str) -> None:
+        date = QDate.fromString(expiry_str, "yyyy-MM-dd")
+        if date.isValid():
+            self._expiry.setDate(date)
+
+    def _selected_expiry_date(self) -> str:
+        if self._license_type.currentText() == "Lifetime":
+            return LIFETIME_EXPIRY_SENTINEL
+        return self._expiry.date().toString("yyyy-MM-dd")
 
     def _save_settings(self, **updates: str) -> None:
         _SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -484,7 +505,7 @@ class AdminLicenseWindow(QMainWindow):
         customer = self._customer_name.text().strip()
         machine_id = self._machine_id.text().strip()
         license_type = self._license_type.currentText()
-        expires_at = self._expiry.text().strip()
+        expires_at = self._selected_expiry_date()
         use_wildcard = self._wildcard.isChecked()
 
         if not customer:
@@ -556,6 +577,7 @@ class AdminLicenseWindow(QMainWindow):
         idx = self._license_type.findText(rec.license_type)
         if idx >= 0:
             self._license_type.setCurrentIndex(idx)
+        self._on_license_type_changed(self._license_type.currentText())
         self._renew_label.setText(f"Renewing / extending license {rec.license_id[:8]}...")
         self._tabs.setCurrentIndex(1)
 

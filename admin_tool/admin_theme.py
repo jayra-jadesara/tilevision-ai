@@ -106,6 +106,22 @@ def get_admin_qss(theme: str) -> str:
         min-height: 24px;
         selection-background-color: {p['highlight_bg']};
     }}
+    QDateEdit {{
+        background-color: {p['bg_input']};
+        color: {p['text_primary']};
+        border: 1px solid {p['border_strong']};
+        border-radius: 8px;
+        padding: 4px 10px;
+        min-height: 24px;
+    }}
+    QDateEdit::drop-down {{
+        border: none;
+        width: 24px;
+    }}
+    QCalendarWidget QWidget {{
+        background-color: {p['bg_panel']};
+        color: {p['text_primary']};
+    }}
     QComboBox {{
         background-color: {p['bg_input']};
         color: {p['text_primary']};

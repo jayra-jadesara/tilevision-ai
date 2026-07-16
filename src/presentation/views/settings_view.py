@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -36,6 +37,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QFrame,
     QGridLayout,
+    QLineEdit,
 )
 
 from src.ai.feature_versions import CURRENT_FEATURE_VERSION, FeatureVersionStatus
@@ -43,6 +45,7 @@ from src.ai.gpu_info import GpuRuntimeInfo
 from src.config.settings import AppSettings
 from src.core.use_cases.index_images import IndexImagesUseCase
 from src.core.use_cases.monitor_folder import is_watchdog_available
+from src.licensing.hardware import get_machine_fingerprint
 from src.presentation.workers.rebuild_index_worker import RebuildIndexWorker
 from src.utils.logger import get_log_file_path
 from src.presentation.views.catalogue_profiles_panel import CatalogueProfilesPanel
@@ -179,6 +182,7 @@ class SettingsView(QWidget):
         general_layout.setContentsMargins(4, 8, 4, 8)
         general_layout.setSpacing(20)
         general_layout.addWidget(self._build_overview_row())
+        general_layout.addWidget(self._build_machine_id_section())
         general_layout.addWidget(self._build_watched_folders_section())
 
         columns = QHBoxLayout()
@@ -264,6 +268,50 @@ class SettingsView(QWidget):
         label = QLabel(text)
         label.setObjectName("SettingsFormLabel")
         return label
+
+    def _build_machine_id_section(self) -> QGroupBox:
+        box = self._section_box("Machine ID")
+        layout = QVBoxLayout(box)
+
+        note = QLabel(
+            "Send this Machine ID to your TileVision vendor when requesting a license key. "
+            "It uniquely identifies this computer."
+        )
+        note.setObjectName("SectionNote")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self._machine_id_edit = QLineEdit()
+        self._machine_id_edit.setObjectName("MachineIdEdit")
+        self._machine_id_edit.setReadOnly(True)
+        self._machine_id_edit.setPlaceholderText("Loading Machine ID...")
+        try:
+            self._machine_id_edit.setText(get_machine_fingerprint())
+        except Exception as exc:
+            logger.warning("Failed to read machine fingerprint: %s", exc)
+            self._machine_id_edit.setText("")
+
+        copy_button = QPushButton("Copy Machine ID")
+        copy_button.setObjectName("SecondaryButton")
+        copy_button.clicked.connect(self._on_copy_machine_id)
+        row.addWidget(self._machine_id_edit, stretch=1)
+        row.addWidget(copy_button)
+        layout.addLayout(row)
+        return box
+
+    def _on_copy_machine_id(self) -> None:
+        machine_id = self._machine_id_edit.text().strip()
+        if not machine_id:
+            QMessageBox.warning(self, "Unavailable", "Machine ID could not be read on this PC.")
+            return
+        QGuiApplication.clipboard().setText(machine_id)
+        QMessageBox.information(
+            self,
+            "Copied",
+            "Machine ID copied to clipboard. Send it to your vendor to receive a license key.",
+        )
 
     def _build_watched_folders_section(self) -> QGroupBox:
         box = self._section_box("Auto Folder Monitoring")

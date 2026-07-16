@@ -43,6 +43,7 @@ def keypair():
 def test_vendor_license_types_include_trials_and_official():
     assert "15-Day Trial" in VENDOR_LICENSE_TYPES
     assert "3-Year" in VENDOR_LICENSE_TYPES
+    assert "Lifetime" in VENDOR_LICENSE_TYPES
 
 
 def test_compute_expiry_for_new_types():

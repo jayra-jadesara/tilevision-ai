@@ -139,6 +139,7 @@ VENDOR_LICENSE_TYPES: tuple[str, ...] = (
     "6-Month Trial",
     "1-Year",
     "3-Year",
+    "Lifetime",
 )
 LIFETIME_EXPIRY_SENTINEL = "9999-12-31"
 LICENSE_PAYLOAD_VERSION = 2
