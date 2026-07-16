@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from enum import Enum
 
 import numpy as np
 
 from src.ai.models import TileFeatures
+
+logger = logging.getLogger("tilevision.ai.pattern_classifier")
 
 
 class PatternType(str, Enum):
@@ -95,16 +98,18 @@ class PatternClassifier:
             else 0.0
         )
 
-        print(
-            "PATTERN FEATURES |",
-            f"density={density:.6f} |",
-            f"mean_size={mean_size:.6f} |",
-            f"size_std={size_std:.6f} |",
-            f"count={count_normalized:.4f} |",
-            f"coverage={coverage:.4f} |",
-            f"size_consistency={size_consistency:.4f} |",
-            f"spatial_uniformity={spatial_uniformity:.4f} |",
-            f"small_blob_ratio={small_blob_ratio:.4f}",
+        logger.debug(
+            "Pattern features: density=%.6f mean_size=%.6f size_std=%.6f "
+            "count=%.4f coverage=%.4f size_consistency=%.4f "
+            "spatial_uniformity=%.4f small_blob_ratio=%.4f",
+            density,
+            mean_size,
+            size_std,
+            count_normalized,
+            coverage,
+            size_consistency,
+            spatial_uniformity,
+            small_blob_ratio,
         )
         # ---------------------------------------------------------
         # Derived statistics
@@ -218,3 +223,38 @@ class PatternClassifier:
         # ---------------------------------------------------------
 
         return PatternType.TEXTURED
+
+    @staticmethod
+    def compatibility_adjustment(
+        query_type: PatternType,
+        candidate_type: PatternType,
+    ) -> float:
+        """
+        Soft ranking signal based on pattern-family compatibility.
+
+        Returns a small additive adjustment in [-0.03, +0.02].
+        Never hard-excludes candidates.
+        """
+        if query_type == candidate_type:
+            return 0.02
+
+        pair = frozenset({query_type, candidate_type})
+
+        compatible_pairs = {
+            frozenset({PatternType.SPECKLED, PatternType.TERRAZZO}),
+            frozenset({PatternType.MARBLE, PatternType.TEXTURED}),
+            frozenset({PatternType.PLAIN, PatternType.TEXTURED}),
+        }
+        if pair in compatible_pairs:
+            return 0.0
+
+        incompatible_pairs = {
+            frozenset({PatternType.SPECKLED, PatternType.PLAIN}),
+            frozenset({PatternType.SPECKLED, PatternType.MARBLE}),
+            frozenset({PatternType.PLAIN, PatternType.TERRAZZO}),
+            frozenset({PatternType.PLAIN, PatternType.MARBLE}),
+        }
+        if pair in incompatible_pairs:
+            return -0.03
+
+        return 0.0

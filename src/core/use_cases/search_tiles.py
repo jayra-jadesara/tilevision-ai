@@ -238,6 +238,8 @@ class SearchTilesUseCase:
                 hybrid = self._reranker.score(
                     query_features,
                     tile.features,
+                    query_pattern_type=query_pattern_type,
+                    candidate_pattern_type=candidate_pattern_type,
                 )
 
                 logger.info(
