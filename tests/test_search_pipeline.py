@@ -86,6 +86,13 @@ def test_feature_version_detects_stale_records():
         embedding_dimension=1024,
         pattern_feature_size=8,
     )
+    assert not is_tile_features_compatible(
+        feature_version=2,
+        pattern_feature_version=2,
+        embedding_model="facebook/dinov2-large",
+        embedding_dimension=1024,
+        pattern_feature_size=8,
+    )
 
 
 def test_identical_embeddings_score_highest():
