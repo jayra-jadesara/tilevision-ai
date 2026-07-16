@@ -47,7 +47,14 @@ class AppSettings:
             "top_k": 10,
             "theme": "light",
             "thumbnail_size": 200,
-            "license_key": ""
+            "license_key": "",
+            # Indexing performance (large catalogs: 70–200 MB, 2000+ files)
+            "index_batch_size": 12,
+            "index_checkpoint_interval": 25,
+            "max_decode_edge": 2048,
+            "preprocess_workers": 4,
+            "large_file_mb_threshold": 10,
+            "huge_file_mb_threshold": 50,
         }
         
         self._settings: Dict[str, Any] = self._defaults.copy()
@@ -183,3 +190,57 @@ class AppSettings:
     def license_key(self, value: str) -> None:
         self._settings["license_key"] = value
         self.save()
+
+    @property
+    def index_batch_size(self) -> int:
+        """Images per DINOv2 batch during folder scans."""
+        return int(self._settings.get("index_batch_size", 12))
+
+    @index_batch_size.setter
+    def index_batch_size(self, value: int) -> None:
+        self._settings["index_batch_size"] = max(1, int(value))
+
+    @property
+    def index_checkpoint_interval(self) -> int:
+        """Save FAISS index to disk every N processed files."""
+        return int(self._settings.get("index_checkpoint_interval", 25))
+
+    @index_checkpoint_interval.setter
+    def index_checkpoint_interval(self, value: int) -> None:
+        self._settings["index_checkpoint_interval"] = max(1, int(value))
+
+    @property
+    def max_decode_edge(self) -> int:
+        """Max pixel edge when decoding source images (memory guard)."""
+        return int(self._settings.get("max_decode_edge", 2048))
+
+    @max_decode_edge.setter
+    def max_decode_edge(self, value: int) -> None:
+        self._settings["max_decode_edge"] = max(512, int(value))
+
+    @property
+    def preprocess_workers(self) -> int:
+        """Parallel workers for image preprocessing during batch indexing."""
+        return int(self._settings.get("preprocess_workers", 4))
+
+    @preprocess_workers.setter
+    def preprocess_workers(self, value: int) -> None:
+        self._settings["preprocess_workers"] = max(1, int(value))
+
+    @property
+    def large_file_mb_threshold(self) -> int:
+        """Files >= this size use smaller batches and fewer workers."""
+        return int(self._settings.get("large_file_mb_threshold", 10))
+
+    @large_file_mb_threshold.setter
+    def large_file_mb_threshold(self, value: int) -> None:
+        self._settings["large_file_mb_threshold"] = max(1, int(value))
+
+    @property
+    def huge_file_mb_threshold(self) -> int:
+        """Files >= this size use minimal batch size (2) and 1 worker."""
+        return int(self._settings.get("huge_file_mb_threshold", 50))
+
+    @huge_file_mb_threshold.setter
+    def huge_file_mb_threshold(self, value: int) -> None:
+        self._settings["huge_file_mb_threshold"] = max(1, int(value))

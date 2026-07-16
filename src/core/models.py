@@ -28,6 +28,7 @@ class TileImage:
     file_name: str
     file_size: int
     dimensions: str
+    file_mtime: float = 0.0
 
     # ------------------------------------------------------------------
     # Showroom Metadata

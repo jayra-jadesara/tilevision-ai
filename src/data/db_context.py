@@ -161,6 +161,7 @@ class DatabaseContext:
             "dominant_b": "INTEGER DEFAULT 0",
             "feature_version": "INTEGER DEFAULT 0",
             "pattern_feature_version": "INTEGER DEFAULT 0",
+            "file_mtime": "REAL DEFAULT 0",
         }
 
         for column, definition in migrations.items():

@@ -96,5 +96,10 @@ class FakeFeatureExtractor:
         embedding = self._embedder.extract(image_path)
         return make_tile_features(embedding)
 
-    def extract_batch(self, image_paths: list[str]) -> list[TileFeatures]:
+    def extract_batch(
+        self,
+        image_paths: list[str],
+        *,
+        preprocess_workers: int | None = None,
+    ) -> list[TileFeatures]:
         return [self.extract(path) for path in image_paths]

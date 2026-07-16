@@ -47,6 +47,8 @@ from src.presentation.views.license_view import LicenseView
 
 from src.ai.embedder import DINOv2Embedder
 from src.ai.feature_extractor import FeatureExtractor
+from src.ai.preprocess.image_preprocessor import ImagePreprocessor
+from src.config.indexing_performance import IndexingPerformanceConfig
 
 _app_logger = logging.getLogger("tilevision.app")
 
@@ -159,10 +161,21 @@ def build_application() -> int:
 
     # ── 7. Construct AI Layer ─────────────────────────────────────────────────
     logger.info("Initializing AI engine...")
+    indexing_perf = IndexingPerformanceConfig.from_settings(settings)
+    ImagePreprocessor.configure(max_decode_edge=indexing_perf.max_decode_edge)
+    logger.info(
+        "Indexing performance: batch=%d checkpoint=%d max_decode=%d workers=%d",
+        indexing_perf.batch_size,
+        indexing_perf.checkpoint_interval,
+        indexing_perf.max_decode_edge,
+        indexing_perf.preprocess_workers,
+    )
+
     embedder = DINOv2Embedder()
 
     feature_extractor = FeatureExtractor(
-        embedder=embedder
+        embedder=embedder,
+        preprocess_workers=indexing_perf.preprocess_workers,
     )
 
     vector_index = FaissIndexManager(
@@ -178,6 +191,7 @@ def build_application() -> int:
         vector_index=vector_index,
         thumbnail_dir=settings.thumbnail_dir,
         folder_repository=indexed_folder_repository,
+        performance=indexing_perf,
     )
     search_tiles_use_case = SearchTilesUseCase(
         image_repository=image_repository,

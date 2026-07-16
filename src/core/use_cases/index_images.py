@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
+from src.config.indexing_performance import IndexingPerformanceConfig
 from src.core.models import TileImage, ScanResult, IndexedFolderState
 from src.data.repository_interface import IImageRepository, IIndexedFolderRepository
 from src.ai.feature_extractor import FeatureExtractor
@@ -29,15 +30,6 @@ from src.utils.image_utils import (
 )
 
 logger = logging.getLogger("tilevision.core.use_cases.index_images")
-
-# Persist the FAISS index to disk every N processed files during a folder
-# scan (rather than after every single file, which is a heavy full-index
-# disk write and would dominate indexing time on large catalogs).
-_CHECKPOINT_INTERVAL = 25
-
-# Number of images per batched DINOv2 inference during folder scans.
-# Larger batches improve CPU throughput when memory allows.
-_INDEX_BATCH_SIZE = 12
 
 _SIZE_PATTERN = re.compile(r"(\d{2,4})\s*[xX×]\s*(\d{2,4})")
 _COLOR_TOKENS = frozenset({
@@ -140,6 +132,40 @@ class _PendingIndexItem:
     was_previously_indexed: bool
 
 
+def _is_unchanged_indexed_file(
+    path: Path,
+    existing_record: Optional[TileImage],
+    *,
+    force: bool,
+) -> bool:
+    """
+    Return True when an indexed file can be skipped without re-embedding.
+
+    Uses size+mtime fingerprint first (no disk read). Falls back to SHA256
+    for legacy rows that predate file_mtime storage.
+    """
+    if force or existing_record is None or not existing_record.is_indexed:
+        return False
+
+    stat = path.stat()
+    if stat.st_size != existing_record.file_size:
+        return False
+
+    stored_mtime = float(existing_record.file_mtime or 0.0)
+    if stored_mtime > 0 and abs(stat.st_mtime - stored_mtime) < 1e-6:
+        return True
+
+    if stored_mtime <= 0:
+        current_sha = compute_sha256(path)
+        return current_sha == existing_record.sha256_hash
+
+    return False
+
+
+def _max_file_bytes(items: List[_PendingIndexItem]) -> int:
+    return max(item.path.stat().st_size for item in items)
+
+
 class IndexImagesUseCase:
     """
     Use case to index single image files or whole directories recursively.
@@ -153,6 +179,7 @@ class IndexImagesUseCase:
         vector_index: FaissIndexManager,
         thumbnail_dir: str,
         folder_repository: Optional[IIndexedFolderRepository] = None,
+        performance: Optional[IndexingPerformanceConfig] = None,
     ) -> None:
         """
         Initialize the indexing use case.
@@ -175,9 +202,15 @@ class IndexImagesUseCase:
         self._thumbnail_dir = Path(thumbnail_dir)
         self._supported_extensions = set(SUPPORTED_IMAGE_EXTENSIONS)
         self._folder_repo = folder_repository
+        self._perf = performance or IndexingPerformanceConfig()
 
         # Ensure thumbnail directory exists
         self._thumbnail_dir.mkdir(parents=True, exist_ok=True)
+
+    def _pending_batch_limit(self, items: List[_PendingIndexItem]) -> int:
+        if not items:
+            return self._perf.batch_size
+        return self._perf.adaptive_batch_size(_max_file_bytes(items))
 
     def index_single_file(self, file_path: Path, persist: bool = True) -> int:
         """
@@ -210,6 +243,7 @@ class IndexImagesUseCase:
             file_size, dimensions = get_image_metadata(resolved_path)
             sha256_hash = compute_sha256(resolved_path)
             perceptual_hash = compute_dhash(resolved_path)
+            file_mtime = resolved_path.stat().st_mtime
 
         file_name = resolved_path.name
 
@@ -239,6 +273,7 @@ class IndexImagesUseCase:
             file_name=file_name,
             file_size=file_size,
             dimensions=dimensions,
+            file_mtime=file_mtime,
             brand=brand,
             category=category,
             color=color,
@@ -324,6 +359,7 @@ class IndexImagesUseCase:
                 file_size, dimensions = get_image_metadata(resolved_path)
                 sha256_hash = compute_sha256(resolved_path)
                 perceptual_hash = compute_dhash(resolved_path)
+                file_mtime = resolved_path.stat().st_mtime
 
                 width, height = 0, 0
                 if "x" in dimensions:
@@ -343,6 +379,7 @@ class IndexImagesUseCase:
                         file_name=resolved_path.name,
                         file_size=file_size,
                         dimensions=dimensions,
+                        file_mtime=file_mtime,
                         brand=brand,
                         category=category,
                         color=color,
@@ -356,7 +393,12 @@ class IndexImagesUseCase:
                     )
                 )
 
-        features_list = self._feature_extractor.extract_batch(path_strings)
+        features_list = self._feature_extractor.extract_batch(
+            path_strings,
+            preprocess_workers=self._perf.adaptive_preprocess_workers(
+                _max_file_bytes(items)
+            ),
+        )
         extract_timings = self._feature_extractor.last_timings
         timer.timings.record("preprocessing", extract_timings.preprocessing * len(items))
         timer.timings.record("dinov2", extract_timings.dinov2 * len(items))
@@ -526,12 +568,14 @@ class IndexImagesUseCase:
                 existing_record = self._repo.get_by_path(str(resolved_path))
                 was_previously_indexed = bool(existing_record and existing_record.is_indexed)
 
-                if was_previously_indexed and not force:
-                    current_sha = compute_sha256(resolved_path)
-                    if current_sha == existing_record.sha256_hash:
-                        logger.debug(f"Skipping unchanged tile: {file_name}")
-                        skipped_count += 1
-                        continue
+                if _is_unchanged_indexed_file(
+                    resolved_path,
+                    existing_record,
+                    force=force,
+                ):
+                    logger.debug(f"Skipping unchanged tile: {file_name}")
+                    skipped_count += 1
+                    continue
 
                 pending_batch.append(
                     _PendingIndexItem(
@@ -540,14 +584,17 @@ class IndexImagesUseCase:
                     )
                 )
 
-                if len(pending_batch) >= _INDEX_BATCH_SIZE:
+                if len(pending_batch) >= self._pending_batch_limit(pending_batch):
                     _flush_pending_batch()
 
             except Exception as e:
                 failed_count += 1
                 logger.error(f"Error indexing file during folder scan: {resolved_path}. Error: {e}")
 
-            if indexed_since_checkpoint > 0 and processed_count % _CHECKPOINT_INTERVAL == 0:
+            if (
+                indexed_since_checkpoint > 0
+                and processed_count % self._perf.checkpoint_interval == 0
+            ):
                 self._index.save_index()
                 indexed_since_checkpoint = 0
 

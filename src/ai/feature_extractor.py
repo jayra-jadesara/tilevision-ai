@@ -67,8 +67,11 @@ class FeatureExtractor:
     def __init__(
         self,
         embedder: DINOv2Embedder | None = None,
+        *,
+        preprocess_workers: int = 4,
     ):
         self._embedder = embedder or DINOv2Embedder()
+        self._preprocess_workers = max(1, int(preprocess_workers))
         self._last_timings = ExtractTimings()
 
     @property
@@ -143,6 +146,8 @@ class FeatureExtractor:
     def extract_batch(
         self,
         image_paths: List[str],
+        *,
+        preprocess_workers: int | None = None,
     ) -> List[TileFeatures]:
         """Extract features for multiple image paths."""
         if not image_paths:
@@ -154,7 +159,8 @@ class FeatureExtractor:
         total_start = time.perf_counter()
 
         t0 = time.perf_counter()
-        worker_count = min(4, len(image_paths))
+        workers = preprocess_workers or self._preprocess_workers
+        worker_count = min(max(1, workers), len(image_paths))
         with ThreadPoolExecutor(max_workers=worker_count) as pool:
             processed_images = list(pool.map(ImagePreprocessor.preprocess, image_paths))
         preprocess_elapsed = time.perf_counter() - t0

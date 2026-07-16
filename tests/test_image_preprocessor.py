@@ -71,3 +71,18 @@ def test_small_image_still_produces_valid_output(tmp_path):
 
     assert processed.pil.size == (TARGET_SIZE, TARGET_SIZE)
     assert processed.bgr.shape == (TARGET_SIZE, TARGET_SIZE, 3)
+
+
+def test_load_downscales_huge_images_before_processing(tmp_path):
+    path = tmp_path / "huge.jpg"
+    Image.new("RGB", (6000, 4000), color=(90, 120, 150)).save(path, quality=95)
+
+    ImagePreprocessor.configure(max_decode_edge=1024)
+    try:
+        with Image.open(path) as original:
+            original = original.convert("RGB")
+            loaded = ImagePreprocessor.load(path)
+            assert max(loaded.size) <= 1024
+            assert loaded.size != original.size
+    finally:
+        ImagePreprocessor.configure(max_decode_edge=2048)

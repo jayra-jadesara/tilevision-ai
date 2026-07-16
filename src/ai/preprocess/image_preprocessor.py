@@ -13,6 +13,7 @@ load -> EXIF transpose -> alpha composite -> optional border trim
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Tuple
 
@@ -27,25 +28,82 @@ logger = logging.getLogger("tilevision.ai.image_preprocessor")
 # DINOv2 ViT patch size is 14; 518 = 37 * 14.
 TARGET_SIZE = 518
 
+# Default max edge when decoding huge catalogue masters (70–200 MB files).
+DEFAULT_MAX_DECODE_EDGE = 2048
+
 # Neutral pad color — avoids biasing color descriptors toward white/black.
 PAD_COLOR: Tuple[int, int, int] = (128, 128, 128)
+
+
+@dataclass(slots=True)
+class PreprocessConfig:
+    """Runtime preprocessing limits (wired from AppSettings at startup)."""
+
+    max_decode_edge: int = DEFAULT_MAX_DECODE_EDGE
 
 
 class ImagePreprocessor:
     """Shared preprocessing pipeline for all AI feature extractors."""
 
     DEFAULT_SIZE: Tuple[int, int] = (TARGET_SIZE, TARGET_SIZE)
+    _config = PreprocessConfig()
 
-    @staticmethod
-    def load(path: str | Path) -> Image.Image:
+    @classmethod
+    def configure(cls, *, max_decode_edge: int | None = None) -> None:
+        """Update module-level decode limits (called once from app startup)."""
+        if max_decode_edge is not None:
+            cls._config.max_decode_edge = max(512, int(max_decode_edge))
+
+    @classmethod
+    def max_decode_edge(cls) -> int:
+        return cls._config.max_decode_edge
+
+    @classmethod
+    def load(
+        cls,
+        path: str | Path,
+        *,
+        max_decode_edge: int | None = None,
+    ) -> Image.Image:
+        """
+        Load an image, applying early downscale for huge catalogue masters.
+
+        Decodes to at most ``max_decode_edge`` on the longest side before
+        border/crop/AI work — critical for 70–200 MB tile photography.
+        """
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(path)
 
+        max_edge = max_decode_edge or cls._config.max_decode_edge
+
         try:
-            image = Image.open(path)
-            image = ImageOps.exif_transpose(image)
-            return image
+            with Image.open(path) as probe:
+                probe = ImageOps.exif_transpose(probe)
+                width, height = probe.size
+
+            if max(width, height) <= max_edge:
+                with Image.open(path) as img:
+                    return ImageOps.exif_transpose(img).copy()
+
+            with Image.open(path) as img:
+                if img.format in ("JPEG", "MPO", "WEBP") and hasattr(img, "draft"):
+                    img.draft("RGB", (max_edge, max_edge))
+                image = ImageOps.exif_transpose(img)
+                image.thumbnail(
+                    (max_edge, max_edge),
+                    Image.Resampling.BICUBIC,
+                )
+                logger.debug(
+                    "Early downscale %s: %dx%d -> %dx%d (max_edge=%d)",
+                    path.name,
+                    width,
+                    height,
+                    image.size[0],
+                    image.size[1],
+                    max_edge,
+                )
+                return image.copy()
         except Exception as e:
             logger.exception("Failed to load image: %s", path)
             raise RuntimeError(str(e)) from e

@@ -62,6 +62,35 @@ Key stages: `image_loading`, `preprocessing`, `dinov2`, `descriptors`, `database
 **Expected on CPU (DINOv2-large):** ~8–10 seconds per image  
 **Expected on GPU:** significantly faster
 
+### Large catalogs (70–200 MB, 2000+ images)
+
+TileVision now applies three optimizations automatically:
+
+1. **Early downscale** — source images decode to max **2048 px** before AI (config: `max_decode_edge` in `config.json`)
+2. **Fast re-scan skip** — unchanged files skip via **file size + mtime** (no full SHA256 read)
+3. **Adaptive batching** — files ≥10 MB use batch 4; ≥50 MB use batch 2 and 1 worker
+
+Tunable keys in `%USERPROFILE%\.tilevision_ai\config.json`:
+
+```json
+{
+  "index_batch_size": 12,
+  "index_checkpoint_interval": 25,
+  "max_decode_edge": 2048,
+  "preprocess_workers": 4,
+  "large_file_mb_threshold": 10,
+  "huge_file_mb_threshold": 50
+}
+```
+
+**Production recommendation:** keep 70–200 MB originals for archive, but index a **preview folder** (1500×1500 JPG, ~1–2 MB each) for fastest first-time indexing. Use **GPU** for bulk loads.
+
+| Setup | 2000 images (estimate) |
+|-------|------------------------|
+| 200 MB + CPU | 8–15+ hours, OOM risk |
+| 200 MB + early downscale + CPU | 5–8 hours |
+| 2 MB previews + GPU | **30–90 minutes** |
+
 ---
 
 ## Benchmark Search Speed

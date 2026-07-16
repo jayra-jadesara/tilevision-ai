@@ -135,6 +135,7 @@ class SQLiteImageRepository(IImageRepository):
             file_name=row["file_name"],
             file_size=row["file_size"],
             dimensions=row["dimensions"],
+            file_mtime=float(row["file_mtime"] or 0.0),
             brand=row["brand"],
             category=row["category"],
             color=row["color"],
@@ -168,6 +169,7 @@ class SQLiteImageRepository(IImageRepository):
             file_name,
             file_size,
             dimensions,
+            file_mtime,
 
             brand,
             category,
@@ -206,13 +208,14 @@ class SQLiteImageRepository(IImageRepository):
         VALUES (
             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?, ?,
             CURRENT_TIMESTAMP
         )
         ON CONFLICT(file_path) DO UPDATE SET
             file_name=excluded.file_name,
             file_size=excluded.file_size,
             dimensions=excluded.dimensions,
+            file_mtime=excluded.file_mtime,
             brand=excluded.brand,
             category=excluded.category,
             color=excluded.color,
@@ -305,6 +308,7 @@ class SQLiteImageRepository(IImageRepository):
                         tile.file_name,
                         tile.file_size,
                         tile.dimensions,
+                        float(tile.file_mtime or 0.0),
 
                         tile.brand,
                         tile.category,
