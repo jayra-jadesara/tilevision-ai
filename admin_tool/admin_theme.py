@@ -61,7 +61,7 @@ def get_admin_qss(theme: str) -> str:
         border: 1px solid {p['border']};
         border-radius: 10px;
         margin-top: 14px;
-        padding: 14px 12px 12px 12px;
+        padding: 18px 14px 14px 14px;
         font-weight: 600;
         color: {p['text_secondary']};
     }}
@@ -102,7 +102,8 @@ def get_admin_qss(theme: str) -> str:
         color: {p['text_primary']};
         border: 1px solid {p['border_strong']};
         border-radius: 8px;
-        padding: 8px 10px;
+        padding: 4px 10px;
+        min-height: 24px;
         selection-background-color: {p['highlight_bg']};
     }}
     QComboBox {{
@@ -110,8 +111,8 @@ def get_admin_qss(theme: str) -> str:
         color: {p['text_primary']};
         border: 1px solid {p['border_strong']};
         border-radius: 8px;
-        padding: 6px 10px;
-        min-height: 28px;
+        padding: 4px 10px;
+        min-height: 24px;
     }}
     QComboBox::drop-down {{
         border: none;

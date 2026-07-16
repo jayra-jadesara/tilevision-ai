@@ -116,6 +116,7 @@ class AdminLicenseWindow(QMainWindow):
         idx = self._theme_combo.findText(self._current_theme)
         self._theme_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self._theme_combo.setFixedWidth(110)
+        self._prepare_form_field(self._theme_combo)
         self._theme_combo.currentTextChanged.connect(self._on_theme_changed)
         header.addWidget(self._theme_combo)
         layout.addLayout(header)
@@ -200,30 +201,41 @@ class AdminLicenseWindow(QMainWindow):
 
         form_box = QGroupBox("Customer & License Details")
         form = QFormLayout(form_box)
+        form.setSpacing(14)
+        form.setVerticalSpacing(14)
+        form.setContentsMargins(12, 16, 12, 12)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         self._customer_name = QLineEdit()
         self._customer_name.setPlaceholderText("Sunrise Tile Gallery")
+        self._prepare_form_field(self._customer_name)
         form.addRow("Customer Name:", self._customer_name)
 
         self._contact = QLineEdit()
         self._contact.setPlaceholderText("email / phone (optional)")
+        self._prepare_form_field(self._contact)
         form.addRow("Contact:", self._contact)
 
         self._machine_id = QLineEdit()
         self._machine_id.setPlaceholderText("Paste Machine ID from customer's Activation screen")
+        self._prepare_form_field(self._machine_id)
         form.addRow("Machine ID:", self._machine_id)
 
         self._license_type = QComboBox()
         self._license_type.addItems(list(VENDOR_LICENSE_TYPES))
         self._license_type.currentTextChanged.connect(self._on_license_type_changed)
+        self._prepare_form_field(self._license_type)
         form.addRow("License Type:", self._license_type)
 
         self._expiry = QLineEdit()
+        self._prepare_form_field(self._expiry)
         form.addRow("Expiry Date:", self._expiry)
         self._on_license_type_changed(self._license_type.currentText())
 
         self._notes = QLineEdit()
         self._notes.setPlaceholderText("Invoice #, sales rep, etc.")
+        self._prepare_form_field(self._notes)
         form.addRow("Notes:", self._notes)
 
         self._wildcard = QCheckBox("Any machine (DEV/TEST only)")
@@ -235,6 +247,7 @@ class AdminLicenseWindow(QMainWindow):
 
         generate_btn = QPushButton("Generate License Key")
         generate_btn.setObjectName("PrimaryButton")
+        generate_btn.setMinimumHeight(40)
         generate_btn.clicked.connect(self._on_generate_license)
         form.addRow("", generate_btn)
         layout.addWidget(form_box)
@@ -258,18 +271,21 @@ class AdminLicenseWindow(QMainWindow):
         filter_row.addWidget(QLabel("Status:"))
         self._status_filter = QComboBox()
         self._status_filter.addItems(["all", "active", "cancelled", "superseded"])
+        self._prepare_form_field(self._status_filter)
         self._status_filter.currentTextChanged.connect(self._refresh_registry_table)
         filter_row.addWidget(self._status_filter)
 
         filter_row.addWidget(QLabel("Category:"))
         self._category_filter = QComboBox()
         self._category_filter.addItems(["all", "trials", "official"])
+        self._prepare_form_field(self._category_filter)
         self._category_filter.currentTextChanged.connect(self._refresh_registry_table)
         filter_row.addWidget(self._category_filter)
 
         filter_row.addWidget(QLabel("Search:"))
         self._search_edit = QLineEdit()
         self._search_edit.setPlaceholderText("Customer, contact, machine ID...")
+        self._prepare_form_field(self._search_edit)
         self._search_edit.textChanged.connect(self._refresh_registry_table)
         filter_row.addWidget(self._search_edit, stretch=1)
 
@@ -364,6 +380,12 @@ class AdminLicenseWindow(QMainWindow):
             return None
         item = self._registry_table.item(row, 7)
         return item.text() if item else None
+
+    def _prepare_form_field(self, widget) -> None:
+        """Give form rows enough height so styled inputs are not clipped."""
+        widget.setMinimumHeight(36)
+        if hasattr(widget, "setMinimumWidth"):
+            widget.setMinimumWidth(280)
 
     def _on_license_type_changed(self, license_type: str) -> None:
         self._expiry.setText(compute_expiry_date(license_type))
