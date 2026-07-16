@@ -49,6 +49,7 @@ from PySide6.QtWidgets import (
 )
 
 from license_ledger import LicenseLedger, LicenseRecord
+from admin_theme import get_admin_qss
 from src.licensing.validator import (
     VENDOR_LICENSE_TYPES,
     compute_expiry_date,
@@ -66,9 +67,11 @@ class AdminLicenseWindow(QMainWindow):
         self._private_key_pem: Optional[bytes] = None
         self._ledger = LicenseLedger()
         self._renew_from_id: Optional[str] = None
+        self._current_theme = "light"
 
         self.setWindowTitle("TileVision AI — Vendor License Manager")
         self.resize(1020, 780)
+        self._load_settings()
         self._setup_ui()
         self._apply_styles()
         self._load_saved_private_key()
@@ -81,9 +84,23 @@ class AdminLicenseWindow(QMainWindow):
         layout.setContentsMargins(20, 16, 20, 16)
         layout.setSpacing(12)
 
+        header = QHBoxLayout()
         title = QLabel("TileVision AI — Vendor License Manager")
         title.setObjectName("Title")
-        layout.addWidget(title)
+        header.addWidget(title)
+        header.addStretch()
+
+        theme_label = QLabel("Theme")
+        theme_label.setObjectName("ThemeLabel")
+        header.addWidget(theme_label)
+        self._theme_combo = QComboBox()
+        self._theme_combo.addItems(["light", "dark"])
+        idx = self._theme_combo.findText(self._current_theme)
+        self._theme_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self._theme_combo.setFixedWidth(110)
+        self._theme_combo.currentTextChanged.connect(self._on_theme_changed)
+        header.addWidget(self._theme_combo)
+        layout.addLayout(header)
 
         warning = QLabel(
             "Vendor tool only. Tracks keys YOU issue here. "
@@ -333,9 +350,37 @@ class AdminLicenseWindow(QMainWindow):
     def _on_license_type_changed(self, license_type: str) -> None:
         self._expiry.setText(compute_expiry_date(license_type))
 
-    def _save_private_key_path(self, path: Path) -> None:
+    def _save_settings(self, **updates: str) -> None:
         _SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _SETTINGS_PATH.write_text(json.dumps({"private_key_path": str(path)}), encoding="utf-8")
+        data: dict = {}
+        if _SETTINGS_PATH.exists():
+            try:
+                data = json.loads(_SETTINGS_PATH.read_text(encoding="utf-8"))
+            except Exception:
+                data = {}
+        data.update(updates)
+        _SETTINGS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    def _load_settings(self) -> None:
+        if not _SETTINGS_PATH.exists():
+            return
+        try:
+            data = json.loads(_SETTINGS_PATH.read_text(encoding="utf-8"))
+            theme = str(data.get("theme", "light")).lower()
+            if theme in {"light", "dark"}:
+                self._current_theme = theme
+        except Exception:
+            pass
+
+    def _on_theme_changed(self, theme: str) -> None:
+        if theme not in {"light", "dark"}:
+            return
+        self._current_theme = theme
+        self._save_settings(theme=theme)
+        self._apply_styles()
+
+    def _save_private_key_path(self, path: Path) -> None:
+        self._save_settings(private_key_path=str(path))
 
     def _load_saved_private_key(self) -> None:
         if not _SETTINGS_PATH.exists():
@@ -545,29 +590,18 @@ class AdminLicenseWindow(QMainWindow):
         )
 
     def _apply_styles(self) -> None:
-        self.setStyleSheet(
-            """
-            QMainWindow { background-color: #1A1D26; }
-            QWidget { color: #E8EAF6; font-size: 12px; }
-            #Title { font-size: 18px; font-weight: 700; }
-            #StatValue { font-size: 22px; font-weight: 700; color: #90CAF9; }
-            #Warning { color: #FFB74D; background: #2A2418; padding: 8px; border-radius: 6px; }
-            #Hint { color: #9FA8DA; font-size: 11px; }
-            QGroupBox { border: 1px solid #2D3250; border-radius: 8px; margin-top: 12px; padding-top: 12px; }
-            QGroupBox::title { color: #7C83D3; left: 10px; padding: 0 6px; }
-            QLineEdit, QComboBox, QPlainTextEdit, QTextEdit, QTableWidget {
-                background: #252837; border: 1px solid #3D4166; border-radius: 6px; padding: 6px;
-            }
-            QPushButton { background: #2D3250; border-radius: 6px; padding: 8px 14px; }
-            QPushButton:hover { background: #3D4166; }
-            #PrimaryButton { background: #3949AB; font-weight: 600; }
-            #DangerButton { background: #8B2942; }
-            """
-        )
+        self.setStyleSheet(get_admin_qss(self._current_theme))
+        if hasattr(self, "_theme_combo"):
+            idx = self._theme_combo.findText(self._current_theme)
+            if idx >= 0 and self._theme_combo.currentIndex() != idx:
+                self._theme_combo.blockSignals(True)
+                self._theme_combo.setCurrentIndex(idx)
+                self._theme_combo.blockSignals(False)
 
 
 def main() -> int:
     app = QApplication(sys.argv)
+    app.setStyle("Fusion")
     window = AdminLicenseWindow()
     window.show()
     return app.exec()
