@@ -52,6 +52,15 @@ _FAISS_CANDIDATE_MAX = 200
 # self matches (same tile, different compression/crop).
 _NEAR_EXACT_DHASH_THRESHOLD = 3
 
+# Drop clearly weak matches so a small catalog does not always fill top_k
+# with unrelated tiles (room photos, marble, etc.).
+_WEAK_RESULT_RELATIVE_FLOOR = 0.52
+_WEAK_RESULT_ABSOLUTE_RAW_FLOOR = 0.38
+
+# Crop-from-catalog: when embedding similarity to the source product is this
+# high, treat it as the same catalog tile (100% match).
+_CROP_SOURCE_EMBEDDING_THRESHOLD = 0.78
+
 
 class SearchTilesUseCase:
     """
@@ -281,6 +290,16 @@ class SearchTilesUseCase:
             # Hybrid Re-ranking (color compatibility applied as soft penalty)
             # -------------------------------------------------------
 
+            catalog_source_tile: TileImage | None = None
+            crop_stem = self._resolve_crop_source_stem(query_path)
+            if crop_stem is not None:
+                catalog_source_tile = self._find_catalog_tile_by_stem(crop_stem)
+                if catalog_source_tile is not None:
+                    logger.info(
+                        "Crop search linked to catalog tile: %s",
+                        catalog_source_tile.file_name,
+                    )
+
             reranked = []
 
             with timer.measure("reranking"):
@@ -306,7 +325,16 @@ class SearchTilesUseCase:
                         query_dhash,
                     )
 
-                    final_score = 1.0 if exact_match else hybrid.final
+                    if (
+                        not exact_match
+                        and catalog_source_tile is not None
+                        and tile.id == catalog_source_tile.id
+                        and hybrid.embedding >= _CROP_SOURCE_EMBEDDING_THRESHOLD
+                    ):
+                        exact_match = True
+                        final_score = 1.0
+                    else:
+                        final_score = 1.0 if exact_match else hybrid.final
 
                     logger.debug(
                         "RERANK | %-45s | embedding=%.4f pattern=%.4f "
@@ -333,6 +361,8 @@ class SearchTilesUseCase:
                 key=lambda item: item[0],
                 reverse=True,
             )
+
+            reranked = self._filter_weak_results(reranked, top_k)
 
             results: List[SearchResult] = []
 
@@ -393,3 +423,71 @@ class SearchTilesUseCase:
                 return True
 
         return False
+
+    @staticmethod
+    def _resolve_crop_source_stem(query_path: Path) -> Optional[str]:
+        """
+        Extract the original catalog filename stem from a Crop & Search temp file.
+
+        Example: crop_5mm-white-dotted-ceramic-floor-tile-500x500_12345.jpg
+        -> 5mm-white-dotted-ceramic-floor-tile-500x500
+        """
+        if "tilevision_crops" not in query_path.as_posix().lower():
+            return None
+
+        stem = query_path.stem
+        if not stem.startswith("crop_"):
+            return None
+
+        remainder = stem[5:]
+        if "_" in remainder:
+            base, suffix = remainder.rsplit("_", 1)
+            if suffix.isdigit():
+                return base
+        return remainder
+
+    def _find_catalog_tile_by_stem(self, stem: str) -> Optional[TileImage]:
+        """Find an indexed catalog tile whose filename stem matches."""
+        target = stem.strip().lower()
+        if not target:
+            return None
+
+        for tile in self._repo.get_all():
+            if not tile.is_indexed:
+                continue
+            if Path(tile.file_name).stem.lower() == target:
+                return tile
+        return None
+
+    @staticmethod
+    def _filter_weak_results(
+        reranked: List[tuple[float, TileImage, bool]],
+        top_k: int,
+    ) -> List[tuple[float, TileImage, bool]]:
+        """
+        Remove weak tail results so unrelated catalog tiles are not shown
+        just to fill top_k in a small showroom database.
+        """
+        if not reranked:
+            return []
+
+        top_score = reranked[0][0]
+        min_raw = max(
+            top_score * _WEAK_RESULT_RELATIVE_FLOOR,
+            _WEAK_RESULT_ABSOLUTE_RAW_FLOOR,
+        )
+
+        kept: List[tuple[float, TileImage, bool]] = []
+        for score, tile, exact_match in reranked:
+            if exact_match or score >= min_raw:
+                kept.append((score, tile, exact_match))
+            if len(kept) >= top_k:
+                break
+
+        logger.info(
+            "Weak-result filter: kept %d of %d candidates (min_raw=%.3f)",
+            len(kept),
+            len(reranked),
+            min_raw,
+        )
+        return kept

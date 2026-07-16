@@ -149,7 +149,8 @@ def confidence_message(results: Sequence[SearchResult]) -> Optional[str]:
     if level == ConfidenceLevel.MODERATE:
         return (
             f"Moderate match (best alternative: {best:.0f}%). "
-            "Please verify results visually. Crop & Search may help for room photos."
+            "Scores are visual match ratings, not literal accuracy — "
+            "verify results visually. Only 100% means the exact same catalog image."
         )
 
     return None
