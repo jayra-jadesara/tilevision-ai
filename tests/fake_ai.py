@@ -56,7 +56,7 @@ def make_tile_features(embedding: list[float] | np.ndarray) -> TileFeatures:
         ),
         texture_histogram=np.full(54, 1.0 / 54, dtype=np.float32),
         edge_histogram=np.full(36, 1.0 / 36, dtype=np.float32),
-        pattern_features=np.zeros(8, dtype=np.float32),
+        pattern_features=np.zeros(12, dtype=np.float32),
         dominant_color=(128, 128, 128),
         width=16,
         height=16,

@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.ai.descriptors.color_descriptor import ColorDescriptor
 from src.ai.feature_versions import (
     CURRENT_FEATURE_VERSION,
+    CURRENT_PATTERN_FEATURE_VERSION,
     is_tile_features_compatible,
 )
 from src.ai.pattern_classifier import PatternClassifier, PatternType
@@ -32,7 +33,7 @@ def _features(
         texture_histogram=np.full(54, 1.0 / 54, dtype=np.float32),
         edge_histogram=np.full(36, 1.0 / 36, dtype=np.float32),
         pattern_features=np.asarray(
-            pattern or [0.0] * 8,
+            pattern or [0.0] * 12,
             dtype=np.float32,
         ),
         dominant_color=(200, 200, 200),
@@ -79,24 +80,24 @@ def test_pattern_compatibility_boosts_same_family():
 def test_feature_version_detects_stale_records():
     assert is_tile_features_compatible(
         feature_version=CURRENT_FEATURE_VERSION,
-        pattern_feature_version=2,
+        pattern_feature_version=CURRENT_PATTERN_FEATURE_VERSION,
         embedding_model="facebook/dinov2-large",
         embedding_dimension=1024,
-        pattern_feature_size=8,
+        pattern_feature_size=12,
     )
     assert not is_tile_features_compatible(
         feature_version=1,
-        pattern_feature_version=2,
+        pattern_feature_version=CURRENT_PATTERN_FEATURE_VERSION,
         embedding_model="facebook/dinov2-large",
         embedding_dimension=1024,
-        pattern_feature_size=8,
+        pattern_feature_size=12,
     )
     assert not is_tile_features_compatible(
         feature_version=2,
-        pattern_feature_version=2,
+        pattern_feature_version=CURRENT_PATTERN_FEATURE_VERSION,
         embedding_model="facebook/dinov2-large",
         embedding_dimension=1024,
-        pattern_feature_size=8,
+        pattern_feature_size=12,
         color_histogram_size=ColorDescriptor.vector_size(),
     )
     assert not is_tile_features_compatible(
@@ -106,6 +107,13 @@ def test_feature_version_detects_stale_records():
         embedding_dimension=1024,
         pattern_feature_size=8,
         color_histogram_size=8192,
+    )
+    assert not is_tile_features_compatible(
+        feature_version=CURRENT_FEATURE_VERSION,
+        pattern_feature_version=2,
+        embedding_model="facebook/dinov2-large",
+        embedding_dimension=1024,
+        pattern_feature_size=8,
     )
 
 

@@ -44,6 +44,11 @@ class PatternClassifier:
             "size_consistency": float(pattern[5]) if pattern.size >= 8 else 0.0,
             "spatial_uniformity": float(pattern[6]) if pattern.size >= 8 else 0.0,
             "small_blob_ratio": float(pattern[7]) if pattern.size >= 8 else 0.0,
+            "elongation_ratio": float(pattern[8]) if pattern.size >= 12 else 0.0,
+            "mean_circularity": float(pattern[9]) if pattern.size >= 12 else 0.0,
+            "vein_coverage": float(pattern[10]) if pattern.size >= 12 else 0.0,
+            "structure_coherence": float(pattern[11]) if pattern.size >= 12 else 0.0,
+            "has_structure_features": pattern.size >= 12,
         }
 
         mean_size = values["mean_size"]
@@ -89,6 +94,11 @@ class PatternClassifier:
         spatial_uniformity = values["spatial_uniformity"]
         small_blob_ratio = values["small_blob_ratio"]
         size_variation = values["size_variation"]
+        elongation_ratio = values["elongation_ratio"]
+        mean_circularity = values["mean_circularity"]
+        vein_coverage = values["vein_coverage"]
+        structure_coherence = values["structure_coherence"]
+        has_structure_features = values["has_structure_features"]
 
         scores = {
             PatternType.PLAIN: 0.0,
@@ -118,6 +128,15 @@ class PatternClassifier:
                 marble_signal += 0.10
             if edge_entropy > 2.0:
                 marble_signal += 0.05
+            if has_structure_features:
+                if vein_coverage >= 0.25:
+                    marble_signal += min(0.20, vein_coverage * 0.5)
+                if elongation_ratio >= 0.20:
+                    marble_signal += min(0.15, elongation_ratio * 0.4)
+                if structure_coherence >= 0.35:
+                    marble_signal += min(0.10, (structure_coherence - 0.30) * 0.5)
+                if mean_circularity < 0.55:
+                    marble_signal += 0.08
             if small_blob_ratio > 0.45:
                 marble_signal *= 0.60
             if 0.35 <= small_blob_ratio <= 0.55:
@@ -138,6 +157,15 @@ class PatternClassifier:
             speckled_signal += 0.10
         if edge_directionality < 4.0:
             speckled_signal += 0.10
+        if has_structure_features:
+            if mean_circularity >= 0.65:
+                speckled_signal += 0.12
+            if elongation_ratio < 0.20:
+                speckled_signal += 0.10
+            if vein_coverage < 0.20:
+                speckled_signal += 0.08
+            if structure_coherence < 0.30:
+                speckled_signal += 0.05
         scores[PatternType.SPECKLED] = min(1.0, speckled_signal)
 
         # Terrazzo: broader, more irregular particles than fine speckles.
@@ -182,8 +210,9 @@ class PatternClassifier:
         logger.debug(
             "Pattern features: density=%.6f mean_size=%.6f size_std=%.6f "
             "count=%.4f coverage=%.4f size_consistency=%.4f "
-            "spatial_uniformity=%.4f small_blob_ratio=%.4f edge_activity=%.4f "
-            "edge_directionality=%.2f edge_entropy=%.2f",
+            "spatial_uniformity=%.4f small_blob_ratio=%.4f elongation=%.4f "
+            "circularity=%.4f vein_coverage=%.4f structure_coherence=%.4f "
+            "edge_activity=%.4f edge_directionality=%.2f edge_entropy=%.2f",
             values["density"],
             values["mean_size"],
             values["size_std"],
@@ -192,6 +221,10 @@ class PatternClassifier:
             values["size_consistency"],
             values["spatial_uniformity"],
             values["small_blob_ratio"],
+            values["elongation_ratio"],
+            values["mean_circularity"],
+            values["vein_coverage"],
+            values["structure_coherence"],
             edge_activity,
             edge_directionality,
             edge_entropy,
