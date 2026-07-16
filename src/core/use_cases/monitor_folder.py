@@ -16,10 +16,17 @@ from typing import Callable, Dict, List, Literal, Optional, Set
 try:
     from watchdog.observers import Observer
     from watchdog.events import FileSystemEventHandler, FileSystemEvent
+    WATCHDOG_AVAILABLE = True
 except ImportError:
     Observer = None
     FileSystemEventHandler = object
     FileSystemEvent = object
+    WATCHDOG_AVAILABLE = False
+
+
+def is_watchdog_available() -> bool:
+    """Return True when the watchdog package is installed."""
+    return WATCHDOG_AVAILABLE
 
 from src.core.use_cases.index_images import IndexImagesUseCase
 from src.utils.image_utils import validate_image, SUPPORTED_IMAGE_EXTENSIONS
@@ -180,9 +187,12 @@ class FolderMonitorController:
         return self._observer is not None and self._observer.is_alive()
 
     def start_monitoring(self, folders: List[str]) -> None:
-        if Observer is None:
+        if Observer is None or not WATCHDOG_AVAILABLE:
             logger.critical("watchdog package not installed! Cannot monitor folders.")
-            raise ImportError("watchdog package is required for FolderMonitorController.")
+            raise ImportError(
+                "watchdog package is required for folder monitoring. "
+                "Install it with: pip install watchdog"
+            )
 
         if self._observer is not None:
             self.stop_monitoring()

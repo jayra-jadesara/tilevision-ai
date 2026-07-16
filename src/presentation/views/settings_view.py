@@ -42,6 +42,7 @@ from src.ai.feature_versions import CURRENT_FEATURE_VERSION, FeatureVersionStatu
 from src.ai.gpu_info import GpuRuntimeInfo
 from src.config.settings import AppSettings
 from src.core.use_cases.index_images import IndexImagesUseCase
+from src.core.use_cases.monitor_folder import is_watchdog_available
 from src.presentation.workers.rebuild_index_worker import RebuildIndexWorker
 from src.utils.logger import get_log_file_path
 from src.presentation.views.catalogue_profiles_panel import CatalogueProfilesPanel
@@ -271,6 +272,15 @@ class SettingsView(QWidget):
         note.setWordWrap(True)
         layout.addWidget(note)
 
+        self._watchdog_warning = QLabel(
+            "Folder monitoring requires the watchdog package, which is not installed. "
+            "Run pip install watchdog in your environment, then restart TileVision AI."
+        )
+        self._watchdog_warning.setObjectName("WatchdogWarning")
+        self._watchdog_warning.setWordWrap(True)
+        self._watchdog_warning.setVisible(not is_watchdog_available())
+        layout.addWidget(self._watchdog_warning)
+
         self._folders_list = QListWidget()
         self._folders_list.setObjectName("FoldersList")
         for folder in self._settings.watch_folders:
@@ -403,8 +413,17 @@ class SettingsView(QWidget):
         self._apply_watch_folder_changes()
 
     def _apply_watch_folder_changes(self) -> None:
+        self._watchdog_warning.setVisible(not is_watchdog_available())
         if self._on_watch_folders_changed is not None:
             self._on_watch_folders_changed()
+        if self._settings.watch_folders and not is_watchdog_available():
+            QMessageBox.warning(
+                self,
+                "Folder Monitoring Unavailable",
+                "The watchdog package is not installed, so folders cannot be watched yet.\n\n"
+                "Install it with:\n  pip install watchdog\n\n"
+                "Then restart TileVision AI.",
+            )
 
     def _on_remove_folder(self) -> None:
         selected = self._folders_list.currentItem()

@@ -36,10 +36,10 @@ def test_check_package_detects_installed_stdlib_adjacent():
     assert status.installed
 
 
-def test_extras_step_lists_watchdog_as_optional():
+def test_extras_step_lists_watchdog_as_required():
     extras = next(step for step in INSTALL_STEPS if step.step_id == "extras")
     watchdog = next(pkg for pkg in extras.packages if pkg.import_name == "watchdog")
-    assert watchdog.optional is True
+    assert watchdog.optional is False
 
 
 def test_ai_step_lists_tokenizers():

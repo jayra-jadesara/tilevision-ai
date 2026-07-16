@@ -37,7 +37,7 @@ from src.data.sqlite_repository import (
 from src.ai.vector_index import FaissIndexManager
 from src.core.use_cases.index_images import IndexImagesUseCase
 from src.core.use_cases.search_tiles import SearchTilesUseCase
-from src.core.use_cases.monitor_folder import FolderMonitorController
+from src.core.use_cases.monitor_folder import FolderMonitorController, is_watchdog_available
 from src.core.use_cases.find_duplicates import FindDuplicatesUseCase
 from src.core.use_cases.validate_license import ValidateLicenseUseCase
 from src.licensing.trial_manager import TrialManager
@@ -269,39 +269,72 @@ def build_application() -> int:
     auto_index_notifier = AutoIndexNotifier()
     watch_folders = settings.watch_folders
 
-    def _restart_folder_monitor() -> None:
-        if folder_monitor is None:
-            return
+    def _auto_index_callback(path: str, action: AutoIndexAction, success: bool, message: str) -> None:
+        _on_auto_indexed(
+            path,
+            action,
+            success,
+            message,
+            activity_log_repository=activity_log_repository,
+            auto_index_notifier=auto_index_notifier,
+        )
+
+    def _create_folder_monitor() -> Optional[FolderMonitorController]:
+        nonlocal folder_monitor
+        if not is_watchdog_available():
+            return None
         try:
-            folder_monitor.restart_monitoring(settings.watch_folders)
-            if settings.watch_folders:
-                logger.info(
-                    "Restarted auto folder monitoring for %d folder(s).",
-                    len(settings.watch_folders),
+            folder_monitor = FolderMonitorController(
+                indexing_use_case=index_images_use_case,
+                on_file_indexed_callback=_auto_index_callback,
+            )
+            return folder_monitor
+        except Exception as exc:
+            logger.error("Failed to create folder monitor: %s", exc)
+            folder_monitor = None
+            return None
+
+    def _restart_folder_monitor() -> None:
+        nonlocal folder_monitor
+        folders = settings.watch_folders
+        if not folders:
+            if folder_monitor is not None:
+                folder_monitor.stop_monitoring()
+            logger.info("Auto folder monitoring stopped (no watched folders).")
+            return
+
+        if folder_monitor is None:
+            if not _create_folder_monitor():
+                logger.error(
+                    "Cannot monitor folders: watchdog is not installed. "
+                    "Run: pip install watchdog — then restart the app."
                 )
-            else:
-                logger.info("Auto folder monitoring stopped (no watched folders).")
+                return
+
+        try:
+            folder_monitor.restart_monitoring(folders)
+            logger.info(
+                "Restarted auto folder monitoring for %d folder(s).",
+                len(folders),
+            )
         except Exception as exc:
             logger.error("Failed to restart folder monitoring: %s", exc)
 
     if watch_folders:
         try:
             logger.info(f"Starting auto folder monitoring for {len(watch_folders)} folder(s)...")
-            folder_monitor = FolderMonitorController(
-                indexing_use_case=index_images_use_case,
-                on_file_indexed_callback=lambda path, action, success, message: _on_auto_indexed(
-                    path,
-                    action,
-                    success,
-                    message,
-                    activity_log_repository=activity_log_repository,
-                    auto_index_notifier=auto_index_notifier,
-                ),
-            )
-            folder_monitor.start_monitoring(watch_folders)
+            if _create_folder_monitor() is not None:
+                folder_monitor.start_monitoring(watch_folders)
+            else:
+                raise ImportError("watchdog package is required for FolderMonitorController.")
         except Exception as e:
             logger.error(f"Failed to start folder monitoring (continuing without it): {e}")
             folder_monitor = None
+    elif not is_watchdog_available():
+        logger.warning(
+            "watchdog is not installed — auto folder monitoring will not work until "
+            "you run: pip install watchdog"
+        )
     else:
         logger.info("No watched folders configured — auto folder monitoring not started.")
 

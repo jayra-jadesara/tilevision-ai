@@ -291,6 +291,14 @@ def get_shared_view_qss(theme: str) -> str:
         font-size: 11px;
         color: {p['text_muted']};
     }}
+    #WatchdogWarning {{
+        font-size: 12px;
+        color: {p['danger_text']};
+        background-color: {p['danger_bg']};
+        border: 1px solid {p['danger_text']};
+        border-radius: 8px;
+        padding: 10px 12px;
+    }}
     #PrimaryButton, #StartButton, #ScanButton, #ActionButton, #CloseButton, #ActivateButton {{
         background: qlineargradient(
             x1: 0, y1: 0, x2: 1, y2: 0,
@@ -478,6 +486,14 @@ def get_settings_view_qss(theme: str) -> str:
         font-size: 12px;
         background: transparent;
         padding-bottom: 4px;
+    }}
+    #WatchdogWarning {{
+        color: {p['danger_text']};
+        font-size: 12px;
+        background-color: {p['danger_bg']};
+        border: 1px solid {p['danger_text']};
+        border-radius: 8px;
+        padding: 10px 12px;
     }}
     #SettingsFormLabel {{
         color: {p['text_secondary']};

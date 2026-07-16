@@ -102,7 +102,7 @@ INSTALL_STEPS: List[InstallStep] = [
         description="PDF catalogue export and optional folder auto-indexing.",
         packages=(
             PackageSpec("reportlab", "reportlab>=4.2.2", "ReportLab (PDF)"),
-            PackageSpec("watchdog", "watchdog>=4.0.0", "Watchdog (folder monitor)", optional=True),
+            PackageSpec("watchdog", "watchdog>=4.0.0", "Watchdog (folder monitor)"),
         ),
     ),
     InstallStep(
