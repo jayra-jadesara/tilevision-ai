@@ -2,9 +2,6 @@
 TileVision AI — Admin License Manager (Vendor Tool).
 
 Run: python admin_tool/main.py
-
-This tool is for the VENDOR only. It generates offline license keys,
-tracks customers, and manages cancellations in a local registry.
 """
 
 import base64
@@ -26,7 +23,7 @@ from cryptography.hazmat.primitives.serialization import (
 )
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QClipboard, QGuiApplication
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -48,14 +45,17 @@ from PySide6.QtWidgets import (
     QWidget,
     QFileDialog,
     QCheckBox,
+    QGridLayout,
 )
 
-from license_ledger import LicenseLedger
+from license_ledger import LicenseLedger, LicenseRecord
 from src.licensing.validator import (
     VENDOR_LICENSE_TYPES,
     compute_expiry_date,
     generate_license_key,
 )
+
+_SETTINGS_PATH = Path.home() / ".tilevision_ai_vendor" / "admin_settings.json"
 
 
 class AdminLicenseWindow(QMainWindow):
@@ -65,14 +65,14 @@ class AdminLicenseWindow(QMainWindow):
         super().__init__()
         self._private_key_pem: Optional[bytes] = None
         self._ledger = LicenseLedger()
-        self._last_generated_key: str = ""
-        self._last_license_id: str = ""
+        self._renew_from_id: Optional[str] = None
 
         self.setWindowTitle("TileVision AI — Vendor License Manager")
-        self.resize(980, 760)
+        self.resize(1020, 780)
         self._setup_ui()
         self._apply_styles()
-        self._refresh_registry_table()
+        self._load_saved_private_key()
+        self._refresh_all()
 
     def _setup_ui(self) -> None:
         central = QWidget()
@@ -86,9 +86,10 @@ class AdminLicenseWindow(QMainWindow):
         layout.addWidget(title)
 
         warning = QLabel(
-            "Vendor tool only — never ship this application or your private signing key "
-            "with the customer installer. Offline software cannot remotely disable an "
-            "already-activated PC; use Cancel + release updates to enforce refunds."
+            "Vendor tool only. Tracks keys YOU issue here. "
+            "Built-in 15-day auto-trials on customer PCs are offline and not listed "
+            "(no internet). Cancellation blocks new activations; ship revocation updates "
+            "to enforce refunds on already-activated PCs."
         )
         warning.setObjectName("Warning")
         warning.setWordWrap(True)
@@ -97,8 +98,9 @@ class AdminLicenseWindow(QMainWindow):
         layout.addWidget(self._build_keypair_section())
 
         self._tabs = QTabWidget()
+        self._tabs.addTab(self._build_overview_tab(), "Overview")
         self._tabs.addTab(self._build_generate_tab(), "Generate Key")
-        self._tabs.addTab(self._build_registry_tab(), "License Registry")
+        self._tabs.addTab(self._build_registry_tab(), "Customers & Licenses")
         layout.addWidget(self._tabs, stretch=1)
 
     def _build_keypair_section(self) -> QGroupBox:
@@ -113,6 +115,49 @@ class AdminLicenseWindow(QMainWindow):
         gen_btn.clicked.connect(self._on_generate_keypair)
         row.addWidget(gen_btn)
         return box
+
+    def _build_overview_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        grid = QGridLayout()
+        self._stat_total = QLabel("0")
+        self._stat_active = QLabel("0")
+        self._stat_trials = QLabel("0")
+        self._stat_official = QLabel("0")
+        self._stat_cancelled = QLabel("0")
+        self._stat_expiring = QLabel("0")
+
+        for idx, (title, widget) in enumerate(
+            [
+                ("Total Issued", self._stat_total),
+                ("Active", self._stat_active),
+                ("Active Trials", self._stat_trials),
+                ("Active Official", self._stat_official),
+                ("Cancelled", self._stat_cancelled),
+                ("Expiring in 30 Days", self._stat_expiring),
+            ]
+        ):
+            card = QGroupBox(title)
+            card_layout = QVBoxLayout(card)
+            widget.setObjectName("StatValue")
+            widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            card_layout.addWidget(widget)
+            grid.addWidget(card, idx // 3, idx % 3)
+        layout.addLayout(grid)
+
+        steps = QLabel(
+            "Quick workflow:\n"
+            "1. Customer sends Machine ID from TileVision Activation screen\n"
+            "2. Generate Key tab → create license → copy to customer\n"
+            "3. Customers & Licenses tab → track, renew, or cancel\n"
+            "4. Export Revocation List before each app release"
+        )
+        steps.setWordWrap(True)
+        steps.setObjectName("Hint")
+        layout.addWidget(steps)
+        layout.addStretch()
+        return page
 
     def _build_generate_tab(self) -> QWidget:
         page = QWidget()
@@ -149,6 +194,10 @@ class AdminLicenseWindow(QMainWindow):
         self._wildcard = QCheckBox("Any machine (DEV/TEST only)")
         form.addRow("", self._wildcard)
 
+        self._renew_label = QLabel("")
+        self._renew_label.setObjectName("Hint")
+        form.addRow("", self._renew_label)
+
         generate_btn = QPushButton("Generate License Key")
         generate_btn.setObjectName("PrimaryButton")
         generate_btn.clicked.connect(self._on_generate_license)
@@ -164,14 +213,6 @@ class AdminLicenseWindow(QMainWindow):
         copy_btn.clicked.connect(self._on_copy_key)
         output_layout.addWidget(copy_btn)
         layout.addWidget(output_box, stretch=1)
-
-        how = QLabel(
-            "Customer flow: open TileVision AI → paste Machine ID to you → you generate a key "
-            "→ customer pastes the key in Activation → software works offline until expiry."
-        )
-        how.setWordWrap(True)
-        how.setObjectName("Hint")
-        layout.addWidget(how)
         return page
 
     def _build_registry_tab(self) -> QWidget:
@@ -179,48 +220,136 @@ class AdminLicenseWindow(QMainWindow):
         layout = QVBoxLayout(page)
 
         filter_row = QHBoxLayout()
-        filter_row.addWidget(QLabel("Show:"))
+        filter_row.addWidget(QLabel("Status:"))
         self._status_filter = QComboBox()
-        self._status_filter.addItems(["all", "active", "cancelled"])
+        self._status_filter.addItems(["all", "active", "cancelled", "superseded"])
         self._status_filter.currentTextChanged.connect(self._refresh_registry_table)
         filter_row.addWidget(self._status_filter)
-        filter_row.addStretch()
+
+        filter_row.addWidget(QLabel("Category:"))
+        self._category_filter = QComboBox()
+        self._category_filter.addItems(["all", "trials", "official"])
+        self._category_filter.currentTextChanged.connect(self._refresh_registry_table)
+        filter_row.addWidget(self._category_filter)
+
+        filter_row.addWidget(QLabel("Search:"))
+        self._search_edit = QLineEdit()
+        self._search_edit.setPlaceholderText("Customer, contact, machine ID...")
+        self._search_edit.textChanged.connect(self._refresh_registry_table)
+        filter_row.addWidget(self._search_edit, stretch=1)
+
         refresh_btn = QPushButton("Refresh")
-        refresh_btn.clicked.connect(self._refresh_registry_table)
+        refresh_btn.clicked.connect(self._refresh_all)
         filter_row.addWidget(refresh_btn)
-        export_csv_btn = QPushButton("Export CSV")
-        export_csv_btn.clicked.connect(self._on_export_csv)
-        filter_row.addWidget(export_csv_btn)
-        export_rev_btn = QPushButton("Export Revocation List")
-        export_rev_btn.clicked.connect(self._on_export_revocation)
-        filter_row.addWidget(export_rev_btn)
         layout.addLayout(filter_row)
 
-        self._registry_table = QTableWidget(0, 7)
+        self._registry_table = QTableWidget(0, 8)
         self._registry_table.setHorizontalHeaderLabels(
-            ["Customer", "Type", "Expires", "Status", "Machine ID", "Issued", "License ID"]
+            ["Customer", "Contact", "Type", "Expires", "Status", "Machine ID", "Issued", "License ID"]
         )
         self._registry_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self._registry_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._registry_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._registry_table.doubleClicked.connect(self._on_renew_selected)
         layout.addWidget(self._registry_table, stretch=1)
 
         action_row = QHBoxLayout()
-        cancel_btn = QPushButton("Cancel Selected License")
+        renew_btn = QPushButton("Renew / Extend Selected")
+        renew_btn.clicked.connect(self._on_renew_selected)
+        action_row.addWidget(renew_btn)
+
+        copy_again_btn = QPushButton("Copy Stored Key")
+        copy_again_btn.clicked.connect(self._on_copy_stored_key)
+        action_row.addWidget(copy_again_btn)
+
+        cancel_btn = QPushButton("Cancel Selected")
         cancel_btn.setObjectName("DangerButton")
         cancel_btn.clicked.connect(self._on_cancel_selected)
         action_row.addWidget(cancel_btn)
+
         action_row.addStretch()
+
+        export_csv_btn = QPushButton("Export CSV")
+        export_csv_btn.clicked.connect(self._on_export_csv)
+        action_row.addWidget(export_csv_btn)
+
+        export_rev_btn = QPushButton("Export Revocation JSON")
+        export_rev_btn.clicked.connect(self._on_export_revocation)
+        action_row.addWidget(export_rev_btn)
+
+        export_py_btn = QPushButton("Copy Revocation Python")
+        export_py_btn.clicked.connect(self._on_copy_revocation_python)
+        action_row.addWidget(export_py_btn)
+
         layout.addLayout(action_row)
 
         self._registry_log = QTextEdit()
         self._registry_log.setReadOnly(True)
-        self._registry_log.setFixedHeight(100)
+        self._registry_log.setFixedHeight(90)
         layout.addWidget(self._registry_log)
         return page
 
+    def _refresh_all(self) -> None:
+        stats = self._ledger.get_stats()
+        self._stat_total.setText(str(stats.total))
+        self._stat_active.setText(str(stats.active))
+        self._stat_trials.setText(str(stats.trials_active))
+        self._stat_official.setText(str(stats.official_active))
+        self._stat_cancelled.setText(str(stats.cancelled))
+        self._stat_expiring.setText(str(stats.expiring_soon))
+        self._refresh_registry_table()
+
+    def _refresh_registry_table(self) -> None:
+        records = self._ledger.list_licenses(
+            status_filter=self._status_filter.currentText(),
+            category_filter=self._category_filter.currentText(),
+            search_text=self._search_edit.text(),
+        )
+        self._registry_table.setRowCount(len(records))
+        for row, rec in enumerate(records):
+            self._registry_table.setItem(row, 0, QTableWidgetItem(rec.customer_name))
+            self._registry_table.setItem(row, 1, QTableWidgetItem(rec.contact))
+            self._registry_table.setItem(row, 2, QTableWidgetItem(rec.license_type))
+            self._registry_table.setItem(row, 3, QTableWidgetItem(rec.expires_at))
+            self._registry_table.setItem(row, 4, QTableWidgetItem(rec.status))
+            machine_short = rec.machine_id if len(rec.machine_id) <= 24 else rec.machine_id[:21] + "..."
+            self._registry_table.setItem(row, 5, QTableWidgetItem(machine_short))
+            self._registry_table.setItem(row, 6, QTableWidgetItem(rec.issued_at))
+            self._registry_table.setItem(row, 7, QTableWidgetItem(rec.license_id))
+
+    def _selected_record(self) -> Optional[LicenseRecord]:
+        license_id = self._selected_license_id()
+        if not license_id:
+            return None
+        return self._ledger.get_license(license_id)
+
+    def _selected_license_id(self) -> Optional[str]:
+        row = self._registry_table.currentRow()
+        if row < 0:
+            return None
+        item = self._registry_table.item(row, 7)
+        return item.text() if item else None
+
     def _on_license_type_changed(self, license_type: str) -> None:
         self._expiry.setText(compute_expiry_date(license_type))
+
+    def _save_private_key_path(self, path: Path) -> None:
+        _SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _SETTINGS_PATH.write_text(json.dumps({"private_key_path": str(path)}), encoding="utf-8")
+
+    def _load_saved_private_key(self) -> None:
+        if not _SETTINGS_PATH.exists():
+            return
+        try:
+            data = json.loads(_SETTINGS_PATH.read_text(encoding="utf-8"))
+            path = Path(data.get("private_key_path", ""))
+            if path.exists():
+                pem = path.read_bytes()
+                load_pem_private_key(pem, password=None)
+                self._private_key_pem = pem
+                self._keypair_status.setText(f"Loaded: {path.name}")
+        except Exception:
+            pass
 
     def _on_load_private_key(self) -> None:
         path_str, _ = QFileDialog.getOpenFileName(self, "Load Private Key", "", "PEM Files (*.pem)")
@@ -231,6 +360,7 @@ class AdminLicenseWindow(QMainWindow):
             load_pem_private_key(pem, password=None)
             self._private_key_pem = pem
             self._keypair_status.setText(f"Loaded: {Path(path_str).name}")
+            self._save_private_key_path(Path(path_str))
         except Exception as exc:
             QMessageBox.critical(self, "Invalid Key", str(exc))
 
@@ -238,8 +368,8 @@ class AdminLicenseWindow(QMainWindow):
         if QMessageBox.question(
             self,
             "Generate Keypair",
-            "Create a new signing keypair? You must embed the new PUBLIC key in "
-            "src/licensing/validator.py before customer builds will accept new keys.",
+            "Create a new signing keypair? Embed the new PUBLIC key in "
+            "src/licensing/validator.py before customer builds accept new keys.",
         ) != QMessageBox.StandardButton.Yes:
             return
 
@@ -253,6 +383,7 @@ class AdminLicenseWindow(QMainWindow):
         )
         if save_path:
             Path(save_path).write_bytes(private_pem)
+            self._save_private_key_path(Path(save_path))
         self._private_key_pem = private_pem
         self._keypair_status.setText("New keypair generated.")
         self._output.setPlainText(
@@ -281,8 +412,7 @@ class AdminLicenseWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Machine Blocked",
-                "This Machine ID has a cancelled license. "
-                "Resolve with the customer before issuing a new key.",
+                "This Machine ID has a cancelled license. Resolve with the customer first.",
             )
             return
 
@@ -301,10 +431,7 @@ class AdminLicenseWindow(QMainWindow):
             QMessageBox.critical(self, "Failed", f"Could not generate key:\n{exc}")
             return
 
-        self._last_generated_key = key
-        self._last_license_id = license_id
         self._output.setPlainText(key)
-
         self._ledger.record_issue(
             license_id=license_id,
             customer_name=customer,
@@ -314,14 +441,16 @@ class AdminLicenseWindow(QMainWindow):
             license_key=key,
             notes=self._notes.text().strip(),
             contact=self._contact.text().strip(),
+            supersede_license_id=self._renew_from_id,
         )
-        self._refresh_registry_table()
-        self._tabs.setCurrentIndex(1)
+        self._renew_from_id = None
+        self._renew_label.setText("")
+        self._refresh_all()
+        self._tabs.setCurrentIndex(2)
         QMessageBox.information(
             self,
             "License Generated",
-            f"Key created for {customer}.\n\nCopy the key and send it to the customer. "
-            f"It has been saved to your local registry.",
+            f"Key created for {customer}. Copy it and send to the customer.",
         )
 
     def _on_copy_key(self) -> None:
@@ -329,40 +458,52 @@ class AdminLicenseWindow(QMainWindow):
         if text:
             QGuiApplication.clipboard().setText(text)
 
-    def _refresh_registry_table(self) -> None:
-        status = self._status_filter.currentText()
-        records = self._ledger.list_licenses(None if status == "all" else status)
-        self._registry_table.setRowCount(len(records))
-        for row, rec in enumerate(records):
-            self._registry_table.setItem(row, 0, QTableWidgetItem(rec.customer_name))
-            self._registry_table.setItem(row, 1, QTableWidgetItem(rec.license_type))
-            self._registry_table.setItem(row, 2, QTableWidgetItem(rec.expires_at))
-            self._registry_table.setItem(row, 3, QTableWidgetItem(rec.status))
-            machine_short = rec.machine_id if len(rec.machine_id) <= 20 else rec.machine_id[:17] + "..."
-            self._registry_table.setItem(row, 4, QTableWidgetItem(machine_short))
-            self._registry_table.setItem(row, 5, QTableWidgetItem(rec.issued_at))
-            self._registry_table.setItem(row, 6, QTableWidgetItem(rec.license_id))
+    def _on_renew_selected(self) -> None:
+        rec = self._selected_record()
+        if rec is None:
+            QMessageBox.information(self, "Select Row", "Select a customer license first.")
+            return
+        self._renew_from_id = rec.license_id
+        self._customer_name.setText(rec.customer_name)
+        self._contact.setText(rec.contact)
+        self._machine_id.setText(rec.machine_id)
+        self._notes.setText(rec.notes)
+        idx = self._license_type.findText(rec.license_type)
+        if idx >= 0:
+            self._license_type.setCurrentIndex(idx)
+        self._renew_label.setText(f"Renewing / extending license {rec.license_id[:8]}...")
+        self._tabs.setCurrentIndex(1)
 
-    def _selected_license_id(self) -> Optional[str]:
-        row = self._registry_table.currentRow()
-        if row < 0:
-            return None
-        item = self._registry_table.item(row, 6)
-        return item.text() if item else None
+    def _on_copy_stored_key(self) -> None:
+        rec = self._selected_record()
+        if rec is None:
+            QMessageBox.information(self, "Select Row", "Select a license first.")
+            return
+        if not rec.license_key:
+            QMessageBox.warning(
+                self,
+                "No Stored Key",
+                "This record has no stored key (older entry). Generate a renewal instead.",
+            )
+            return
+        QGuiApplication.clipboard().setText(rec.license_key)
+        self._output.setPlainText(rec.license_key)
+        self._registry_log.append(
+            f"[{datetime.now():%H:%M:%S}] Copied stored key for {rec.customer_name}"
+        )
 
     def _on_cancel_selected(self) -> None:
         license_id = self._selected_license_id()
         if not license_id:
-            QMessageBox.information(self, "Select Row", "Select a license in the table first.")
+            QMessageBox.information(self, "Select Row", "Select a license first.")
             return
 
         if QMessageBox.question(
             self,
             "Cancel License",
             "Mark this license as cancelled?\n\n"
-            "Already-activated offline installs keep working until expiry or until "
-            "the customer installs an app update that includes the revocation list. "
-            "New activations with this key will be blocked.",
+            "Offline PCs already activated keep working until expiry or until "
+            "you ship an app update with the revocation list.",
         ) != QMessageBox.StandardButton.Yes:
             return
 
@@ -370,9 +511,9 @@ class AdminLicenseWindow(QMainWindow):
             self._registry_log.append(
                 f"[{datetime.now():%H:%M:%S}] Cancelled license {license_id}"
             )
-            self._refresh_registry_table()
+            self._refresh_all()
         else:
-            QMessageBox.warning(self, "Not Found", "License ID not found in registry.")
+            QMessageBox.warning(self, "Not Found", "License ID not found.")
 
     def _on_export_csv(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
@@ -391,14 +532,17 @@ class AdminLicenseWindow(QMainWindow):
         )
         if path:
             self._ledger.export_revocation_manifest(Path(path))
-            QMessageBox.information(
-                self,
-                "Exported",
-                f"Revocation list saved to {path}.\n\n"
-                "Ship cancelled license IDs in the next app release "
-                "(EMBEDDED_REVOKED_LICENSE_IDS) or place this file on a "
-                "customer PC at %PROGRAMDATA%\\TileVisionAI\\revoked_licenses.json",
-            )
+            QMessageBox.information(self, "Exported", f"Revocation list saved to {path}")
+
+    def _on_copy_revocation_python(self) -> None:
+        snippet = self._ledger.export_revocation_python_snippet()
+        QGuiApplication.clipboard().setText(snippet)
+        QMessageBox.information(
+            self,
+            "Copied",
+            "Python snippet copied. Paste into src/licensing/revocation.py "
+            "as EMBEDDED_REVOKED_LICENSE_IDS before your next release.",
+        )
 
     def _apply_styles(self) -> None:
         self.setStyleSheet(
@@ -406,6 +550,7 @@ class AdminLicenseWindow(QMainWindow):
             QMainWindow { background-color: #1A1D26; }
             QWidget { color: #E8EAF6; font-size: 12px; }
             #Title { font-size: 18px; font-weight: 700; }
+            #StatValue { font-size: 22px; font-weight: 700; color: #90CAF9; }
             #Warning { color: #FFB74D; background: #2A2418; padding: 8px; border-radius: 6px; }
             #Hint { color: #9FA8DA; font-size: 11px; }
             QGroupBox { border: 1px solid #2D3250; border-radius: 8px; margin-top: 12px; padding-top: 12px; }
