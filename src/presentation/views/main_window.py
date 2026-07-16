@@ -126,6 +126,7 @@ class MainWindow(QMainWindow):
         indexed_folders_provider: Optional[Callable[[], List[str]]] = None,
         feature_version_provider: Optional[Callable[[], FeatureVersionStatus]] = None,
         gpu_info_provider: Optional[Callable[[], GpuRuntimeInfo]] = None,
+        on_watch_folders_changed: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         """
@@ -174,6 +175,7 @@ class MainWindow(QMainWindow):
         self._indexed_folders_provider = indexed_folders_provider
         self._feature_version_provider = feature_version_provider
         self._gpu_info_provider = gpu_info_provider
+        self._on_watch_folders_changed = on_watch_folders_changed
         self._current_theme = getattr(self._settings, "theme", "dark") if self._settings is not None else "dark"
 
         self.setWindowTitle("TileVision AI — Visual Tile Search")
@@ -298,6 +300,7 @@ class MainWindow(QMainWindow):
                 indexing_use_case=self._indexing_use_case,
                 indexed_folders_provider=self._indexed_folders_provider,
                 on_catalog_changed=self._on_catalog_changed,
+                on_watch_folders_changed=self._on_watch_folders_changed,
                 feature_version_provider=self._feature_version_provider,
                 gpu_info_provider=self._gpu_info_provider,
                 theme=self._current_theme,
@@ -459,6 +462,20 @@ class MainWindow(QMainWindow):
         settings = getattr(self, "_settings_view", None)
         if settings is not None and hasattr(settings, "refresh_feature_status"):
             settings.refresh_feature_status()
+        if hasattr(self, "_dashboard_view"):
+            self._dashboard_view.refresh()
+
+    def handle_auto_index_event(self, file_path: str, action: str) -> None:
+        """Update UI after background auto-indexing from watched folders."""
+        name = Path(file_path).name
+        if action == "indexed":
+            message = f"Auto-indexed: {name}"
+        elif action == "removed":
+            message = f"Removed from index: {name}"
+        else:
+            message = f"Auto-index failed: {name}"
+        self._update_status_bar(message)
+        self._on_catalog_changed()
 
     def refresh_stale_feature_banner(self) -> None:
         """Show or hide the stale-feature warning banner."""

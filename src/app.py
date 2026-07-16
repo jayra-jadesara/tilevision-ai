@@ -23,6 +23,7 @@ from typing import Optional
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtGui import QFont, QIcon
+from PySide6.QtCore import QTimer
 
 from src.utils.brand_assets import APP_ICON_PATH
 from src.utils.logger import setup_logger
@@ -45,21 +46,43 @@ from src.presentation.viewmodels.indexing_viewmodel import IndexingViewModel
 from src.presentation.viewmodels.search_viewmodel import SearchViewModel
 from src.presentation.views.main_window import MainWindow, DashboardDataProviders
 from src.presentation.views.license_view import LicenseView
+from src.presentation.auto_index_notifier import AutoIndexNotifier
+from src.core.use_cases.monitor_folder import AutoIndexAction
 
 _app_logger = logging.getLogger("tilevision.app")
 
 
-def _on_auto_indexed(file_path: str, success: bool, error_message: str) -> None:
+def _on_auto_indexed(
+    file_path: str,
+    action: AutoIndexAction,
+    success: bool,
+    error_message: str,
+    *,
+    activity_log_repository,
+    auto_index_notifier: AutoIndexNotifier,
+) -> None:
     """
-    Callback invoked by FolderMonitorController after auto-indexing a
-    newly-detected file. Runs on the watchdog background thread, NOT the Qt
-    main thread — so this must stay UI-free (logging only) rather than
-    touching any QWidget directly, which would not be thread-safe.
+    Callback invoked by FolderMonitorController after auto-index events.
+    Runs on the watchdog background thread — must not touch QWidget directly.
     """
-    if success:
-        _app_logger.info(f"Auto-indexed new file: {file_path}")
-    else:
-        _app_logger.warning(f"Auto-indexing failed for {file_path}: {error_message}")
+    name = Path(file_path).name
+    if action == "indexed" and success:
+        _app_logger.info("Auto-indexed file: %s", file_path)
+        activity_log_repository.record_activity("auto_index", f"Auto-indexed: {name}")
+    elif action == "removed" and success:
+        _app_logger.info("Auto-removed deleted file from index: %s", file_path)
+        activity_log_repository.record_activity("auto_index", f"Removed from index: {name}")
+    elif action == "failed":
+        _app_logger.warning("Auto-indexing failed for %s: %s", file_path, error_message)
+    elif action == "skipped":
+        _app_logger.debug("Auto-monitor skipped unchanged file: %s", file_path)
+        return
+
+    # Marshal UI refresh onto the Qt main thread.
+    QTimer.singleShot(
+        0,
+        lambda: auto_index_notifier.notify(file_path, action, success),
+    )
 
 
 def build_application() -> int:
@@ -243,17 +266,40 @@ def build_application() -> int:
     # index_images_use_case instance as manual indexing — new files still
     # go through the identical embed → FAISS → SQLite pipeline.
     folder_monitor: Optional[FolderMonitorController] = None
+    auto_index_notifier = AutoIndexNotifier()
     watch_folders = settings.watch_folders
+
+    def _restart_folder_monitor() -> None:
+        if folder_monitor is None:
+            return
+        try:
+            folder_monitor.restart_monitoring(settings.watch_folders)
+            if settings.watch_folders:
+                logger.info(
+                    "Restarted auto folder monitoring for %d folder(s).",
+                    len(settings.watch_folders),
+                )
+            else:
+                logger.info("Auto folder monitoring stopped (no watched folders).")
+        except Exception as exc:
+            logger.error("Failed to restart folder monitoring: %s", exc)
+
     if watch_folders:
         try:
             logger.info(f"Starting auto folder monitoring for {len(watch_folders)} folder(s)...")
             folder_monitor = FolderMonitorController(
                 indexing_use_case=index_images_use_case,
-                on_file_indexed_callback=_on_auto_indexed,
+                on_file_indexed_callback=lambda path, action, success, message: _on_auto_indexed(
+                    path,
+                    action,
+                    success,
+                    message,
+                    activity_log_repository=activity_log_repository,
+                    auto_index_notifier=auto_index_notifier,
+                ),
             )
             folder_monitor.start_monitoring(watch_folders)
         except Exception as e:
-            # Non-fatal: manual indexing/search still work without auto-monitoring.
             logger.error(f"Failed to start folder monitoring (continuing without it): {e}")
             folder_monitor = None
     else:
@@ -302,7 +348,9 @@ def build_application() -> int:
         indexed_folders_provider=lambda: [f.folder_path for f in indexed_folder_repository.get_all_folders()],
         feature_version_provider=image_repository.get_feature_version_status,
         gpu_info_provider=lambda: embedder.runtime_info,
+        on_watch_folders_changed=_restart_folder_monitor,
     )
+    auto_index_notifier.catalog_updated.connect(main_window.handle_auto_index_event)
     main_window.show()
 
     logger.info("TileVision AI is running.")

@@ -333,6 +333,49 @@ class IndexImagesUseCase:
                 f"Indexing pipeline failed for file: {file_name}"
             ) from e
 
+    def index_changed_file(self, file_path: Path, persist: bool = True) -> Optional[int]:
+        """
+        Index a file when it is new or changed; skip unchanged indexed files.
+
+        Used by auto folder monitoring so in-place edits do not always
+        re-embed unless size/mtime/hash changed.
+
+        Returns:
+            Database id when indexed, or None when skipped as unchanged.
+        """
+        resolved_path = file_path.resolve()
+        existing_record = self._repo.get_by_path(str(resolved_path))
+        if _is_unchanged_indexed_file(resolved_path, existing_record, force=False):
+            logger.debug("Auto-monitor skipping unchanged file: %s", resolved_path.name)
+            return None
+
+        db_id = self.index_single_file(resolved_path, persist=persist)
+        self._record_parent_folder(resolved_path)
+        return db_id
+
+    def remove_indexed_file(self, file_path: Path) -> bool:
+        """Remove one indexed tile after its image file was deleted."""
+        resolved = file_path.resolve()
+        tile = self._repo.get_by_path(str(resolved))
+        if tile is None or tile.id is None:
+            return False
+
+        try:
+            if tile.embedding_id is not None:
+                self._index.remove_vectors([tile.embedding_id])
+                self._index.save_index()
+            self._repo.remove(tile.id)
+            logger.info("Removed deleted file from index: %s", resolved)
+            return True
+        except Exception as exc:
+            logger.error("Failed to remove deleted tile %s: %s", resolved, exc)
+            return False
+
+    def _record_parent_folder(self, file_path: Path) -> None:
+        if self._folder_repo is None:
+            return
+        self._folder_repo.record_folder_indexed(str(file_path.parent.resolve()))
+
     def _index_file_batch(
         self,
         items: List[_PendingIndexItem],

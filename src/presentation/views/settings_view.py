@@ -61,6 +61,7 @@ class SettingsView(QWidget):
         indexing_use_case: Optional[IndexImagesUseCase] = None,
         indexed_folders_provider: Optional[Callable[[], List[str]]] = None,
         on_catalog_changed: Optional[Callable[[], None]] = None,
+        on_watch_folders_changed: Optional[Callable[[], None]] = None,
         feature_version_provider: Optional[Callable[[], FeatureVersionStatus]] = None,
         gpu_info_provider: Optional[Callable[[], GpuRuntimeInfo]] = None,
         theme: str = "dark",
@@ -96,6 +97,7 @@ class SettingsView(QWidget):
         self._indexing_use_case = indexing_use_case
         self._indexed_folders_provider = indexed_folders_provider
         self._on_catalog_changed = on_catalog_changed
+        self._on_watch_folders_changed = on_watch_folders_changed
         self._feature_version_provider = feature_version_provider
         self._gpu_info_provider = gpu_info_provider
         self._rebuild_worker: Optional[RebuildIndexWorker] = None
@@ -209,9 +211,9 @@ class SettingsView(QWidget):
         layout = QVBoxLayout(box)
 
         note = QLabel(
-            "Folders listed here are watched automatically — new or changed images are "
-            "indexed in the background without a manual scan. Changes here take effect "
-            "the next time you start TileVision AI."
+            "Folders listed here are watched automatically — new, changed, or deleted "
+            "images are indexed in the background without a manual scan. Changes apply "
+            "immediately while the app is running."
         )
         note.setObjectName("SectionNote")
         note.setWordWrap(True)
@@ -336,6 +338,11 @@ class SettingsView(QWidget):
         self._settings.watch_folders = current
         self._folders_list.addItem(QListWidgetItem(resolved))
         logger.info(f"Added watched folder: {resolved}")
+        self._apply_watch_folder_changes()
+
+    def _apply_watch_folder_changes(self) -> None:
+        if self._on_watch_folders_changed is not None:
+            self._on_watch_folders_changed()
 
     def _on_remove_folder(self) -> None:
         selected = self._folders_list.currentItem()
@@ -348,6 +355,7 @@ class SettingsView(QWidget):
 
         self._folders_list.takeItem(self._folders_list.row(selected))
         logger.info(f"Removed watched folder: {folder_path}")
+        self._apply_watch_folder_changes()
 
     # ── Handlers: Preferences ────────────────────────────────────────────
 
