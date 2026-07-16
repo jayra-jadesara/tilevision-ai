@@ -538,8 +538,16 @@ class MainWindow(QMainWindow):
         self._content_stack.setCurrentIndex(index)
         logger.debug(f"Navigated to content stack index: {index}")
 
+        if index == 0 and hasattr(self, "_indexing_view") and hasattr(
+            self._indexing_view, "refresh_folder_display"
+        ):
+            self._indexing_view.refresh_folder_display()
         if index == 2 and hasattr(self, "_dashboard_view"):
             self._dashboard_view.refresh()
+        if index == 3:
+            settings = getattr(self, "_settings_view", None)
+            if settings is not None and hasattr(settings, "refresh_feature_status"):
+                settings.refresh_feature_status()
 
     def navigate_to_settings_export_profiles(self) -> None:
         """Open Settings on the Export Profiles tab (from Export Catalogue)."""

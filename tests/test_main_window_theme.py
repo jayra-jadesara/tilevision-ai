@@ -98,3 +98,22 @@ def test_current_theme_tracked_correctly(main_window):
     assert main_window._current_theme == "dark"
     main_window._on_theme_changed_request("light")
     assert main_window._current_theme == "light"
+
+
+def test_navigate_to_settings_refreshes_indexed_tiles_count(qapp, tmp_path):
+    settings = AppSettings(config_dir=tmp_path)
+    counts = {"value": 22}
+    ivm = IndexingViewModel(use_case=_FakeIndexUseCase())
+    window = MainWindow(
+        indexing_viewmodel=ivm,
+        settings=settings,
+        catalog_count_provider=lambda: counts["value"],
+    )
+
+    assert window._settings_view._tiles_count_label.text() == "22"
+
+    counts["value"] = 24
+    window._navigate(3)
+
+    assert window._settings_view._tiles_count_label.text() == "24"
+    window.deleteLater()
