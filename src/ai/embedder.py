@@ -25,6 +25,7 @@ import torch
 from transformers import AutoImageProcessor, AutoModel
 
 from src.ai.models import PreprocessedImage
+from src.ai.inference_guard import synchronized_inference
 from src.ai.preprocess.image_preprocessor import ImagePreprocessor
 
 logger = logging.getLogger("tilevision.ai.embedder")
@@ -118,22 +119,23 @@ class DINOv2Embedder:
         if self._model is None:
             self.load_model()
 
-        inputs = self._processor(images=images, return_tensors="pt")
-        inputs = {key: value.to(self._device) for key, value in inputs.items()}
+        with synchronized_inference():
+            inputs = self._processor(images=images, return_tensors="pt")
+            inputs = {key: value.to(self._device) for key, value in inputs.items()}
 
-        with torch.inference_mode():
-            if self._device.type == "cuda":
-                with torch.autocast(device_type="cuda"):
+            with torch.inference_mode():
+                if self._device.type == "cuda":
+                    with torch.autocast(device_type="cuda"):
+                        outputs = self._model(**inputs)
+                else:
                     outputs = self._model(**inputs)
-            else:
-                outputs = self._model(**inputs)
 
-        embeddings = (
-            outputs.last_hidden_state[:, 0]
-            .cpu()
-            .numpy()
-            .astype(np.float32)
-        )
+            embeddings = (
+                outputs.last_hidden_state[:, 0]
+                .cpu()
+                .numpy()
+                .astype(np.float32)
+            )
 
         norms = np.linalg.norm(embeddings, axis=1, keepdims=True) + 1e-8
         return embeddings / norms

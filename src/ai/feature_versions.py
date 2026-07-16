@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 # Bump when the DINOv2 embedding pipeline changes (model, views, fusion).
-CURRENT_FEATURE_VERSION = 4
+CURRENT_FEATURE_VERSION = 5
 
 # Bump when pattern descriptor layout or algorithm changes.
 CURRENT_PATTERN_FEATURE_VERSION = 3

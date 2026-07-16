@@ -20,7 +20,7 @@ Manifest format (JSONL):
      "relevant_ids": [12, 45, 67],
      "category": "Floor"}
 
-IMPORTANT: Requires a fully re-indexed catalog (feature_version=4).
+IMPORTANT: Requires a fully re-indexed catalog (feature_version=5).
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import sys
 import time
 from collections import defaultdict
@@ -61,6 +62,8 @@ class EvalQuery:
 class MetricAccumulator:
     recall_sums: Dict[int, float] = field(default_factory=lambda: defaultdict(float))
     precision_sums: Dict[int, float] = field(default_factory=lambda: defaultdict(float))
+    mrr_sum: float = 0.0
+    ndcg_sums: Dict[int, float] = field(default_factory=lambda: defaultdict(float))
     query_count: int = 0
 
 
@@ -152,40 +155,66 @@ def _compute_metrics(
     retrieved_ids: Sequence[int],
     relevant_ids: Set[int],
     k_values: Sequence[int],
-) -> tuple[Dict[int, float], Dict[int, float]]:
+) -> tuple[Dict[int, float], Dict[int, float], float, Dict[int, float]]:
     recall: Dict[int, float] = {}
     precision: Dict[int, float] = {}
+    ndcg: Dict[int, float] = {}
     relevant_count = len(relevant_ids)
     if relevant_count == 0:
-        return {k: 0.0 for k in k_values}, {k: 0.0 for k in k_values}
+        return (
+            {k: 0.0 for k in k_values},
+            {k: 0.0 for k in k_values},
+            0.0,
+            {k: 0.0 for k in k_values},
+        )
+
+    mrr = 0.0
+    for rank, tile_id in enumerate(retrieved_ids, start=1):
+        if tile_id in relevant_ids:
+            mrr = 1.0 / rank
+            break
 
     for k in k_values:
         top_k = retrieved_ids[:k]
         hits = len(set(top_k) & relevant_ids)
         recall[k] = hits / relevant_count
         precision[k] = hits / k
-    return recall, precision
+
+        dcg = sum(
+            1.0 / math.log2(rank + 2)
+            for rank, tile_id in enumerate(top_k)
+            if tile_id in relevant_ids
+        )
+        ideal_hits = min(relevant_count, k)
+        idcg = sum(1.0 / math.log2(rank + 2) for rank in range(ideal_hits))
+        ndcg[k] = dcg / idcg if idcg > 0 else 0.0
+
+    return recall, precision, mrr, ndcg
 
 
 def _accumulate(
     bucket: MetricAccumulator,
     recall: Dict[int, float],
     precision: Dict[int, float],
+    mrr: float,
+    ndcg: Dict[int, float],
     k_values: Sequence[int],
 ) -> None:
     bucket.query_count += 1
+    bucket.mrr_sum += mrr
     for k in k_values:
         bucket.recall_sums[k] += recall[k]
         bucket.precision_sums[k] += precision[k]
+        bucket.ndcg_sums[k] += ndcg[k]
 
 
 def _format_table(
     rows: Dict[str, MetricAccumulator],
     k_values: Sequence[int],
 ) -> str:
-    headers = ["group", "queries"]
+    headers = ["group", "queries", "MRR"]
     for k in k_values:
-        headers.extend([f"R@{k}", f"P@{k}"])
+        headers.extend([f"R@{k}", f"P@{k}", f"nDCG@{k}"])
 
     col_widths = [max(len(h), 10) for h in headers]
     lines = [" | ".join(h.ljust(col_widths[i]) for i, h in enumerate(headers))]
@@ -195,14 +224,21 @@ def _format_table(
         acc = rows[group]
         if acc.query_count == 0:
             continue
-        cells = [group.ljust(col_widths[0]), str(acc.query_count).rjust(col_widths[1])]
-        idx = 2
+        cells = [
+            group.ljust(col_widths[0]),
+            str(acc.query_count).rjust(col_widths[1]),
+            f"{acc.mrr_sum / acc.query_count:.3f}".rjust(col_widths[2]),
+        ]
+        idx = 3
         for k in k_values:
             recall_avg = acc.recall_sums[k] / acc.query_count
             precision_avg = acc.precision_sums[k] / acc.query_count
+            ndcg_avg = acc.ndcg_sums[k] / acc.query_count
             cells.append(f"{recall_avg:.3f}".rjust(col_widths[idx]))
             idx += 1
             cells.append(f"{precision_avg:.3f}".rjust(col_widths[idx]))
+            idx += 1
+            cells.append(f"{ndcg_avg:.3f}".rjust(col_widths[idx]))
             idx += 1
         lines.append(" | ".join(cells))
 
@@ -309,10 +345,12 @@ def run_evaluation(args: argparse.Namespace) -> int:
         if query.query_id is not None:
             relevant_ids.discard(query.query_id)
 
-        recall, precision = _compute_metrics(retrieved_ids, relevant_ids, k_values)
+        recall, precision, mrr, ndcg = _compute_metrics(
+            retrieved_ids, relevant_ids, k_values
+        )
 
-        _accumulate(overall, recall, precision, k_values)
-        _accumulate(by_category[query.category], recall, precision, k_values)
+        _accumulate(overall, recall, precision, mrr, ndcg, k_values)
+        _accumulate(by_category[query.category], recall, precision, mrr, ndcg, k_values)
 
         pattern_label = "unknown"
         query_tile = tile_by_id.get(query.query_id) if query.query_id is not None else None
@@ -321,7 +359,7 @@ def run_evaluation(args: argparse.Namespace) -> int:
         if query_tile and query_tile.features is not None:
             pattern_label = PatternClassifier.classify(query_tile.features).value
 
-        _accumulate(by_pattern[pattern_label], recall, precision, k_values)
+        _accumulate(by_pattern[pattern_label], recall, precision, mrr, ndcg, k_values)
 
         if idx % 10 == 0 or idx == len(queries):
             elapsed = time.perf_counter() - t0
@@ -354,9 +392,11 @@ def run_evaluation(args: argparse.Namespace) -> int:
                 str(k): {
                     "recall": overall.recall_sums[k] / max(overall.query_count, 1),
                     "precision": overall.precision_sums[k] / max(overall.query_count, 1),
+                    "ndcg": overall.ndcg_sums[k] / max(overall.query_count, 1),
                 }
                 for k in k_values
             },
+            "mrr": overall.mrr_sum / max(overall.query_count, 1),
         }
         out_path = Path(args.output)
         out_path.parent.mkdir(parents=True, exist_ok=True)

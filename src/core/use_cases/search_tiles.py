@@ -9,8 +9,6 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from src.ai.candidate_filter import CandidateFilter
-from src.ai.models import TileFeatures
 from src.ai.pattern_classifier import PatternClassifier
 from src.ai.similarity_score import calibrate_display_percent
 
@@ -45,6 +43,10 @@ _FILTER_CANDIDATE_CAP = 2000
 # When metadata filters are active, rerank the full filtered ID set directly
 # (instead of FAISS top-K only) up to this many tiles for accurate results.
 _FILTERED_FULL_RERANK_CAP = 2000
+
+# Unfiltered FAISS retrieval pool bounds (Phase 7).
+_FAISS_CANDIDATE_MIN = 50
+_FAISS_CANDIDATE_MAX = 200
 
 # Perceptual hashes within this Hamming distance are treated as near-exact
 # self matches (same tile, different compression/crop).
@@ -92,6 +94,15 @@ class SearchTilesUseCase:
             field: self._repo.get_distinct_values(field)
             for field in sorted(_ALLOWED_FILTER_FIELDS)
         }
+
+    @staticmethod
+    def _compute_faiss_search_k(top_k: int, total_vectors: int) -> int:
+        """Return the unfiltered FAISS candidate pool size (Phase 7: 50–200)."""
+        return min(
+            max(top_k * 5, _FAISS_CANDIDATE_MIN),
+            _FAISS_CANDIDATE_MAX,
+            total_vectors,
+        )
 
     def execute(
         self,
@@ -222,7 +233,7 @@ class SearchTilesUseCase:
                     tile for tile in matched_tiles if tile.features is not None
                 ]
             else:
-                search_k = min(max(top_k * 5, 100), total_vectors)
+                search_k = self._compute_faiss_search_k(top_k, total_vectors)
 
                 if active_filters:
                     search_k = min(
@@ -262,26 +273,12 @@ class SearchTilesUseCase:
                     candidates.append(tile)
 
             logger.info(
-                "Candidates before color filtering: %d",
+                "Candidates for reranking: %d",
                 len(candidates),
             )
 
-            # ----------------------------------------
-            # Candidate filtering
-            # ----------------------------------------
-
-            candidates = CandidateFilter.filter(
-                query_features,
-                candidates,
-            )
-
-            logger.info(
-                "Candidates after filtering: %d",
-                len(candidates),
-            )
-            
             # -------------------------------------------------------
-            # Hybrid Re-ranking
+            # Hybrid Re-ranking (color compatibility applied as soft penalty)
             # -------------------------------------------------------
 
             reranked = []

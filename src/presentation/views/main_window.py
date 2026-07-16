@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional
 
+from src.ai.feature_versions import FeatureVersionStatus
+
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QFont, QIcon, QAction, QCloseEvent, QPixmap
 from PySide6.QtWidgets import (
@@ -141,6 +143,7 @@ class MainWindow(QMainWindow):
         db_path_provider: Optional[Callable[[], object]] = None,
         indexing_use_case=None,
         indexed_folders_provider: Optional[Callable[[], List[str]]] = None,
+        feature_version_provider: Optional[Callable[[], FeatureVersionStatus]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         """
@@ -187,6 +190,7 @@ class MainWindow(QMainWindow):
         self._db_path_provider = db_path_provider
         self._indexing_use_case = indexing_use_case
         self._indexed_folders_provider = indexed_folders_provider
+        self._feature_version_provider = feature_version_provider
         self._current_theme = getattr(self._settings, "theme", "dark") if self._settings is not None else "dark"
 
         self.setWindowTitle("TileVision AI — Visual Tile Search")
@@ -201,12 +205,9 @@ class MainWindow(QMainWindow):
         self._apply_styles()
         self._setup_status_bar()
         self._connect_signals()
+        self.refresh_stale_feature_banner()
 
-        # Apply the app-level theme unconditionally (defaults to dark if no
-        # settings/theme preference is available) — this is also what fixes
-        # unreadable QComboBox popups/QMenu/QTableWidget selection colors
-        # app-wide (Task 5/10), so it must never be skipped just because
-        # Settings wasn't wired up in a given construction context.
+        # Apply the app-level theme unconditionally
         self._on_theme_changed_request(self._current_theme)
 
         logger.info("MainWindow initialized and displayed.")
@@ -233,10 +234,25 @@ class MainWindow(QMainWindow):
         divider.setObjectName("SidebarDivider")
         root_layout.addWidget(divider)
 
-        # ── Content Stack
+        # ── Right content column (stale banner + stack)
+        content_column = QWidget()
+        content_column.setObjectName("ContentColumn")
+        content_layout = QVBoxLayout(content_column)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+
+        self._stale_banner = QLabel()
+        self._stale_banner.setObjectName("StaleFeatureBanner")
+        self._stale_banner.setWordWrap(True)
+        self._stale_banner.setVisible(False)
+        self._stale_banner.setContentsMargins(12, 8, 12, 8)
+        content_layout.addWidget(self._stale_banner)
+
         self._content_stack = QStackedWidget()
         self._content_stack.setObjectName("ContentStack")
-        root_layout.addWidget(self._content_stack, stretch=1)
+        content_layout.addWidget(self._content_stack, stretch=1)
+
+        root_layout.addWidget(content_column, stretch=1)
 
         # ── Add Views to Content Stack
         self._indexing_view = IndexingView(self._indexing_viewmodel, theme=self._current_theme)
@@ -439,6 +455,32 @@ class MainWindow(QMainWindow):
         """Refresh search filter dropdowns after catalog changes."""
         if self._search_viewmodel is not None and result.is_completed:
             self._search_viewmodel.load_filter_options()
+        self.refresh_stale_feature_banner()
+
+    def refresh_stale_feature_banner(self) -> None:
+        """Show or hide the stale-feature warning banner."""
+        if self._feature_version_provider is None:
+            self._stale_banner.setVisible(False)
+            return
+
+        try:
+            status = self._feature_version_provider()
+        except Exception as exc:
+            logger.warning("Failed to read feature version status: %s", exc)
+            self._stale_banner.setVisible(False)
+            return
+
+        if status.is_compatible or status.stale_count <= 0:
+            self._stale_banner.setVisible(False)
+            return
+
+        self._stale_banner.setText(
+            "⚠️ Indexed features are outdated "
+            f"({status.stale_count} of {status.indexed_count} tiles). "
+            "Re-scan your folders or use Settings → Rebuild FAISS Index "
+            "for accurate search results."
+        )
+        self._stale_banner.setVisible(True)
 
     # ── Navigation ────────────────────────────────────────────────────────────
 
@@ -591,6 +633,13 @@ class MainWindow(QMainWindow):
             }
             #CentralWidget {
                 background-color: #1A1D26;
+            }
+            #StaleFeatureBanner {
+                background-color: #453410;
+                color: #FBBF24;
+                padding: 8px 12px;
+                border-bottom: 1px solid #5C4A1A;
+                font-size: 12px;
             }
 
             /* ── Sidebar ────────────────────────────────────────────────────  */

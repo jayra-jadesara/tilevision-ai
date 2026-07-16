@@ -1,0 +1,4 @@
+# Replace paths and tile IDs with your own catalog before running:
+#   python dev_tools/eval_recall_precision.py --manifest eval/queries.example.jsonl
+{"query_path": "D:/tiles/Kajaria_Floor_Grey_60x60_ABC123.jpg", "relevant_ids": [12, 45, 67], "category": "Floor", "query_id": 12}
+{"query_path": "D:/tiles/Brand_Wall_White_30x60_XYZ.jpg", "relevant_ids": [3, 8], "category": "Wall", "query_id": 3}

@@ -16,6 +16,8 @@ except ImportError:
     # Fallback/mock support for environments where faiss is not pre-installed yet
     faiss = None
 
+from src.ai.inference_guard import synchronized_inference
+
 logger = logging.getLogger("tilevision.ai.vector_index")
 
 
@@ -102,21 +104,22 @@ class FaissIndexManager:
             raise ValueError("Size mismatch: The number of IDs must match the number of vectors.")
 
         try:
-            ids_np = np.array(ids, dtype=np.int64)
-            vectors_np = np.array(vectors, dtype=np.float32)
+            with synchronized_inference():
+                ids_np = np.array(ids, dtype=np.int64)
+                vectors_np = np.array(vectors, dtype=np.float32)
 
-            # Assert correct vector dimensions
-            if vectors_np.shape[1] != self._dimension:
-                raise ValueError(
-                    f"Vector dimension mismatch. Index dimension: {self._dimension}, "
-                    f"Provided vector dimension: {vectors_np.shape[1]}"
-                )
+                # Assert correct vector dimensions
+                if vectors_np.shape[1] != self._dimension:
+                    raise ValueError(
+                        f"Vector dimension mismatch. Index dimension: {self._dimension}, "
+                        f"Provided vector dimension: {vectors_np.shape[1]}"
+                    )
 
-            # Add to index
-            self._index.add_with_ids(vectors_np, ids_np)
-            logger.info(f"Added {len(ids)} vectors to FAISS index. Total now: {self._index.ntotal}")
-            if persist:
-                self.save_index()
+                # Add to index
+                self._index.add_with_ids(vectors_np, ids_np)
+                logger.info(f"Added {len(ids)} vectors to FAISS index. Total now: {self._index.ntotal}")
+                if persist:
+                    self.save_index()
         except Exception as e:
             logger.error(f"Failed to add vectors to FAISS index: {e}")
             raise RuntimeError(f"FAISS index write error: {e}") from e
@@ -150,7 +153,8 @@ class FaissIndexManager:
             return
 
         try:
-            self._index.remove_ids(np.array(ids, dtype=np.int64))
+            with synchronized_inference():
+                self._index.remove_ids(np.array(ids, dtype=np.int64))
         except Exception as e:
             logger.debug(f"No pre-existing vector(s) to remove for ids {ids} (or removal failed): {e}")
 
@@ -173,13 +177,14 @@ class FaissIndexManager:
             return False
 
         try:
-            ids_np = np.array(ids, dtype=np.int64)
-            # remove_ids returns number of removed elements
-            removed_count = self._index.remove_ids(ids_np)
-            logger.info(f"Removed {removed_count} vectors from FAISS index. Total remaining: {self._index.ntotal}")
-            if removed_count > 0:
-                self.save_index()
-                return True
+            with synchronized_inference():
+                ids_np = np.array(ids, dtype=np.int64)
+                # remove_ids returns number of removed elements
+                removed_count = self._index.remove_ids(ids_np)
+                logger.info(f"Removed {removed_count} vectors from FAISS index. Total remaining: {self._index.ntotal}")
+                if removed_count > 0:
+                    self.save_index()
+                    return True
         except Exception as e:
             logger.error(f"Failed to remove IDs {ids} from FAISS index: {e}")
         return False
@@ -214,32 +219,33 @@ class FaissIndexManager:
             return [], []
 
         try:
-            # Format query vector as 2D numpy array
-            query_np = np.array([query_vector], dtype=np.float32)
+            with synchronized_inference():
+                # Format query vector as 2D numpy array
+                query_np = np.array([query_vector], dtype=np.float32)
 
-            logger.debug(
-                "FAISS search: dimension=%d query_shape=%s query_norm=%.4f",
-                self._index.d,
-                query_np.shape,
-                float(np.linalg.norm(query_np)),
-            )
-            scores, indices = self._index.search(query_np, top_k)
+                logger.debug(
+                    "FAISS search: dimension=%d query_shape=%s query_norm=%.4f",
+                    self._index.d,
+                    query_np.shape,
+                    float(np.linalg.norm(query_np)),
+                )
+                scores, indices = self._index.search(query_np, top_k)
 
-            # Flatten output and filter out empty indices (-1 represents no match)
-            indices_flat = indices[0].tolist()
-            scores_flat = scores[0].tolist()
+                # Flatten output and filter out empty indices (-1 represents no match)
+                indices_flat = indices[0].tolist()
+                scores_flat = scores[0].tolist()
 
-            matching_ids = []
-            similarity_scores = []
+                matching_ids = []
+                similarity_scores = []
 
-            for idx, score in zip(indices_flat, scores_flat):
-                if idx != -1:
-                    matching_ids.append(int(idx))
-                    # Clamp cosine similarity value between -1.0 and 1.0 (sometimes slightly exceeds due to precision)
-                    clamped_score = max(-1.0, min(1.0, float(score)))
-                    similarity_scores.append(clamped_score)
+                for idx, score in zip(indices_flat, scores_flat):
+                    if idx != -1:
+                        matching_ids.append(int(idx))
+                        # Clamp cosine similarity value between -1.0 and 1.0 (sometimes slightly exceeds due to precision)
+                        clamped_score = max(-1.0, min(1.0, float(score)))
+                        similarity_scores.append(clamped_score)
 
-            return matching_ids, similarity_scores
+                return matching_ids, similarity_scores
         except Exception:
             logger.exception("FAISS vector search failed")
             raise
@@ -250,10 +256,11 @@ class FaissIndexManager:
             return
 
         try:
-            # Ensure folder exists
-            self._index_path.parent.mkdir(parents=True, exist_ok=True)
-            faiss.write_index(self._index, str(self._index_path))
-            logger.info(f"FAISS index successfully saved to: {self._index_path}")
+            with synchronized_inference():
+                # Ensure folder exists
+                self._index_path.parent.mkdir(parents=True, exist_ok=True)
+                faiss.write_index(self._index, str(self._index_path))
+                logger.info(f"FAISS index successfully saved to: {self._index_path}")
         except Exception as e:
             logger.error(f"Failed to write FAISS index to {self._index_path}: {e}")
             raise OSError(f"FAISS index save failure: {e}") from e

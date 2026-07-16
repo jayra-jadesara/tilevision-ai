@@ -273,6 +273,7 @@ def build_application() -> int:
         db_path_provider=lambda: db_context.db_path,
         indexing_use_case=index_images_use_case,
         indexed_folders_provider=lambda: [f.folder_path for f in indexed_folder_repository.get_all_folders()],
+        feature_version_provider=image_repository.get_feature_version_status,
     )
     main_window.show()
 

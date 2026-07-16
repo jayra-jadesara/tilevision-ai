@@ -15,6 +15,7 @@ from src.ai.descriptors.color_descriptor import ColorDescriptor
 from src.ai.descriptors.texture_descriptor import TextureDescriptor
 from src.ai.descriptors.edge_descriptor import EdgeDescriptor
 from src.ai.descriptors.pattern_descriptor import PatternDescriptor
+from src.ai.candidate_filter import CandidateFilter
 from src.ai.pattern_classifier import PatternClassifier, PatternType
 
 # DINOv2 must never fall below this fraction of the final blend.
@@ -111,7 +112,8 @@ class HybridReRanker:
             query_pattern_type,
             candidate_pattern_type,
         )
-        final = self._clamp01(base_final + compat)
+        color_penalty = CandidateFilter.dominant_color_penalty(query, candidate)
+        final = self._clamp01(base_final + compat + color_penalty)
 
         # Weak DINOv2 matches must not outrank strong semantic neighbors
         # because texture/color descriptors align on unrelated surfaces.

@@ -140,6 +140,82 @@ class ImagePreprocessor:
         return image.crop((left, top, right, bottom))
 
     @classmethod
+    def crop_to_content_region(
+        cls,
+        image: Image.Image,
+        min_margin_ratio: float = 0.08,
+    ) -> Image.Image:
+        """
+        Crop to the dominant textured region when clear background margins exist.
+
+        Uses edge/variance detection — conservative: returns the original image
+        when no confident content bounding box is found.
+        """
+        rgb = np.asarray(image.convert("RGB"))
+        height, width = rgb.shape[:2]
+        if height < 48 or width < 48:
+            return image
+
+        gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+        blur = cv2.GaussianBlur(gray, (15, 15), 0)
+        edges = cv2.Canny(blur, 40, 120)
+
+        blur_f = blur.astype(np.float32)
+        sq_blur = cv2.GaussianBlur(blur_f * blur_f, (15, 15), 0)
+        variance = np.maximum(sq_blur - blur_f * blur_f, 0.0)
+        texture_mask = (variance > 25.0).astype(np.uint8) * 255
+
+        mask = cv2.bitwise_or(edges, texture_mask)
+        coords = cv2.findNonZero(mask)
+        if coords is None:
+            return image
+
+        x, y, box_w, box_h = cv2.boundingRect(coords)
+        if box_w < width * 0.35 or box_h < height * 0.35:
+            return image
+
+        margin_x = min(x, width - (x + box_w))
+        margin_y = min(y, height - (y + box_h))
+        if margin_x < width * min_margin_ratio and margin_y < height * min_margin_ratio:
+            return image
+
+        logger.debug(
+            "Content-region crop: x=%d y=%d w=%d h=%d",
+            x,
+            y,
+            box_w,
+            box_h,
+        )
+        return image.crop((x, y, x + box_w, y + box_h))
+
+    @classmethod
+    def normalize_lighting(cls, image: Image.Image) -> Image.Image:
+        """
+        Mild LAB L-channel stretch for shadow/exposure differences.
+
+        Only applied when the luminance dynamic range is clearly compressed,
+        to avoid altering well-exposed catalogue images.
+        """
+        rgb = np.asarray(image.convert("RGB"))
+        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+        l_channel, a_channel, b_channel = cv2.split(lab)
+
+        low, high = np.percentile(l_channel, (2, 98))
+        if high - low >= 40:
+            return image
+
+        stretched = np.clip(
+            (l_channel.astype(np.float32) - low) * (255.0 / max(high - low, 1.0)),
+            0,
+            255,
+        ).astype(np.uint8)
+        merged = cv2.merge([stretched, a_channel, b_channel])
+        corrected_bgr = cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
+        corrected_rgb = cv2.cvtColor(corrected_bgr, cv2.COLOR_BGR2RGB)
+        return Image.fromarray(corrected_rgb)
+
+    @classmethod
     def resize_letterbox(
         cls,
         image: Image.Image,
@@ -196,6 +272,8 @@ class ImagePreprocessor:
 
         image = cls.to_rgb(image)
         image = cls.trim_uniform_borders(image)
+        image = cls.crop_to_content_region(image)
+        image = cls.normalize_lighting(image)
         image = cls.resize_letterbox(image)
 
         rgb = cls.to_numpy(image)
