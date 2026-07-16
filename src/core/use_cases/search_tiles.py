@@ -11,13 +11,20 @@ from typing import Dict, List, Optional
 
 from src.ai.candidate_filter import CandidateFilter
 from src.ai.pattern_classifier import PatternClassifier
+from src.ai.similarity_score import calibrate_display_percent
 
 from src.core.models import TileImage, SearchResult
 from src.data.repository_interface import IImageRepository
 from src.ai.feature_extractor import FeatureExtractor
 from src.ai.reranker import HybridReRanker
 from src.ai.vector_index import FaissIndexManager
-from src.utils.image_utils import get_thumbnail_path, validate_image
+from src.utils.image_utils import (
+    compute_sha256,
+    compute_dhash,
+    hamming_distance,
+    get_thumbnail_path,
+    validate_image,
+)
 from src.utils.pipeline_timing import PipelineTimer
 
 logger = logging.getLogger("tilevision.core.use_cases.search_tiles")
@@ -34,6 +41,10 @@ _ALLOWED_FILTER_FIELDS = frozenset({"brand", "category", "color", "size"})
 # widen-forever cost on a catalog with a very restrictive filter.
 _FILTER_CANDIDATE_MULTIPLIER = 10
 _FILTER_CANDIDATE_CAP = 2000
+
+# Perceptual hashes within this Hamming distance are treated as near-exact
+# self matches (same tile, different compression/crop).
+_NEAR_EXACT_DHASH_THRESHOLD = 3
 
 
 class SearchTilesUseCase:
@@ -123,6 +134,8 @@ class SearchTilesUseCase:
                     raise ValueError(
                         f"Selected file is not a valid, readable image: {query_path.name}"
                     )
+                query_sha256 = compute_sha256(query_path)
+                query_dhash = compute_dhash(query_path)
 
             logger.info("Computing embedding for query image...")
             query_features = self._feature_extractor.extract(
@@ -253,22 +266,32 @@ class SearchTilesUseCase:
                         candidate_pattern_type=candidate_pattern_type,
                     )
 
+                    exact_match = self._is_exact_match(
+                        tile,
+                        query_sha256,
+                        query_dhash,
+                    )
+
+                    final_score = 1.0 if exact_match else hybrid.final
+
                     logger.debug(
                         "RERANK | %-45s | embedding=%.4f pattern=%.4f "
-                        "color=%.4f texture=%.4f edge=%.4f final=%.4f",
+                        "color=%.4f texture=%.4f edge=%.4f final=%.4f exact=%s",
                         tile.file_name,
                         hybrid.embedding,
                         hybrid.pattern,
                         hybrid.color,
                         hybrid.texture,
                         hybrid.edge,
-                        hybrid.final,
+                        final_score,
+                        exact_match,
                     )
 
                     reranked.append(
                         (
-                            hybrid.final,
+                            final_score,
                             tile,
+                            exact_match,
                         )
                     )
 
@@ -279,7 +302,7 @@ class SearchTilesUseCase:
 
             results: List[SearchResult] = []
 
-            for score, tile in reranked[:top_k]:
+            for score, tile, exact_match in reranked[:top_k]:
 
                 thumbnail_path = get_thumbnail_path(
                     Path(tile.file_path),
@@ -292,9 +315,9 @@ class SearchTilesUseCase:
                     else tile.file_path
                 )
 
-                similarity_percentage = max(
-                    0.0,
-                    min(100.0, score * 100.0),
+                similarity_percentage = calibrate_display_percent(
+                    score,
+                    exact_match=exact_match,
                 )
 
                 results.append(
@@ -319,3 +342,20 @@ class SearchTilesUseCase:
             if not tile_value or tile_value.strip().lower() != required_value.strip().lower():
                 return False
         return True
+
+    @staticmethod
+    def _is_exact_match(
+        tile: TileImage,
+        query_sha256: str,
+        query_dhash: str,
+    ) -> bool:
+        """Detect byte-identical or near-identical catalog self-matches."""
+        if query_sha256 and tile.sha256_hash and query_sha256 == tile.sha256_hash:
+            return True
+
+        if query_dhash and tile.perceptual_hash:
+            distance = hamming_distance(query_dhash, tile.perceptual_hash)
+            if 0 <= distance <= _NEAR_EXACT_DHASH_THRESHOLD:
+                return True
+
+        return False
