@@ -14,7 +14,7 @@ import sys
 from dataclasses import dataclass
 from typing import List, Sequence
 
-REQUIRED_STEP_COUNT = 6
+REQUIRED_STEP_COUNT = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,78 +39,63 @@ class InstallStep:
     optional: bool = False
 
 
-CURRENT_SETUP_VERSION = 2
+CURRENT_SETUP_VERSION = 3
 
 INSTALL_STEPS: List[InstallStep] = [
     InstallStep(
         step_id="runtime",
-        title=f"Step 1 of {REQUIRED_STEP_COUNT} — Runtime and Database",
+        title=f"Step 1 of {REQUIRED_STEP_COUNT} — Runtime Check",
         description=(
-            "Verifies Python and the built-in SQLite database engine. "
-            "SQLite ships with Python — no separate download is required."
+            "Verifies Python 3.12+ and the built-in SQLite engine. "
+            "No download is required for this step."
         ),
         packages=(
             PackageSpec("__python__", "", "Python 3.12+", builtin=True),
-            PackageSpec("__sqlite__", "", "SQLite Database (built-in)", builtin=True),
+            PackageSpec("__sqlite__", "", "SQLite (built-in)", builtin=True),
         ),
     ),
     InstallStep(
-        step_id="foundation",
+        step_id="core",
         title=f"Step 2 of {REQUIRED_STEP_COUNT} — Application Core",
-        description="User interface and security libraries required to run TileVision AI.",
+        description=(
+            "Installs the desktop UI, image handling, security, PDF export, "
+            "and folder monitoring libraries."
+        ),
         packages=(
-            PackageSpec("PySide6", "PySide6>=6.6.0", "PySide6 (UI)"),
-            PackageSpec("PIL", "Pillow>=10.0.0", "Pillow (images)"),
+            PackageSpec("PySide6", "PySide6>=6.6.0", "PySide6"),
+            PackageSpec("PIL", "Pillow>=10.0.0", "Pillow"),
             PackageSpec("numpy", "numpy>=1.24.0", "NumPy"),
             PackageSpec("cryptography", "cryptography>=41.0.0", "Cryptography"),
+            PackageSpec("reportlab", "reportlab>=4.2.2", "ReportLab"),
+            PackageSpec("watchdog", "watchdog>=4.0.0", "Watchdog"),
         ),
     ),
     InstallStep(
-        step_id="vision",
-        title=f"Step 3 of {REQUIRED_STEP_COUNT} — Tile Image Processing",
-        description="OpenCV and scikit-image for catalogue photo analysis.",
-        packages=(
-            PackageSpec("cv2", "opencv-python-headless>=4.8.0", "OpenCV"),
-            PackageSpec("skimage", "scikit-image>=0.24.0", "scikit-image"),
+        step_id="ai_stack",
+        title=f"Step 3 of {REQUIRED_STEP_COUNT} — AI Search Engine",
+        description=(
+            "Installs PyTorch, DINOv2 embeddings, FAISS vector search, "
+            "and image analysis libraries. This is the largest download."
         ),
-    ),
-    InstallStep(
-        step_id="ai_core",
-        title=f"Step 4 of {REQUIRED_STEP_COUNT} — AI Engine (PyTorch)",
-        description="PyTorch and Hugging Face stack for DINOv2 tile embeddings.",
         packages=(
-            PackageSpec("torch", "torch>=2.1.0", "PyTorch (CPU)"),
+            PackageSpec("torch", "torch>=2.1.0", "PyTorch"),
             PackageSpec("torchvision", "torchvision>=0.16.0", "torchvision"),
             PackageSpec("transformers", "transformers>=4.45.0", "Transformers"),
             PackageSpec("tokenizers", "tokenizers>=0.19.0", "Tokenizers"),
             PackageSpec("timm", "timm>=1.0.7", "timm"),
             PackageSpec("huggingface_hub", "huggingface-hub>=0.24.0", "Hugging Face Hub"),
             PackageSpec("safetensors", "safetensors>=0.4.3", "safetensors"),
-        ),
-    ),
-    InstallStep(
-        step_id="search",
-        title=f"Step 5 of {REQUIRED_STEP_COUNT} — Visual Search Index",
-        description="FAISS vector index for fast tile similarity search.",
-        packages=(
-            PackageSpec("faiss", "faiss-cpu>=1.7.4", "FAISS (CPU)"),
-        ),
-    ),
-    InstallStep(
-        step_id="extras",
-        title=f"Step 6 of {REQUIRED_STEP_COUNT} — Export and Monitoring",
-        description="PDF catalogue export and optional folder auto-indexing.",
-        packages=(
-            PackageSpec("reportlab", "reportlab>=4.2.2", "ReportLab (PDF)"),
-            PackageSpec("watchdog", "watchdog>=4.0.0", "Watchdog (folder monitor)"),
+            PackageSpec("faiss", "faiss-cpu>=1.7.4", "FAISS"),
+            PackageSpec("cv2", "opencv-python-headless>=4.8.0", "OpenCV"),
+            PackageSpec("skimage", "scikit-image>=0.24.0", "scikit-image"),
         ),
     ),
     InstallStep(
         step_id="gpu_optional",
         title="Optional — NVIDIA GPU Acceleration",
         description=(
-            "Install CUDA-enabled PyTorch when an NVIDIA GPU and driver are present. "
-            "AMD and Intel graphics use CPU mode automatically — this step is skipped."
+            "Install CUDA PyTorch when an NVIDIA GPU is present. "
+            "AMD/Intel systems stay on CPU automatically."
         ),
         packages=(
             PackageSpec("__cuda_torch__", "", "CUDA PyTorch (NVIDIA only)", builtin=True),

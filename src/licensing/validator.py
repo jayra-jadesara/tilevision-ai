@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 import json
 import logging
 import os
+import uuid
 from typing import Dict, Any, Optional
 
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -31,6 +32,7 @@ from cryptography.hazmat.primitives.serialization import (
 from cryptography.exceptions import InvalidSignature
 
 from src.licensing.hardware import get_machine_fingerprint
+from src.licensing.revocation import is_license_revoked, load_revoked_license_ids
 
 logger = logging.getLogger("tilevision.licensing.validator")
 
@@ -107,19 +109,53 @@ class LicenseHardwareMismatchError(LicenseError):
     pass
 
 
-# License types supported per the product spec, mapped to their duration in
-# days from the activation/generation date. "Lifetime" is represented as a
-# far-future sentinel expiry date rather than a special-cased "never expires"
-# branch, so the same date-comparison code path in validate_license() handles
-# every license type uniformly.
+class LicenseRevokedError(LicenseError):
+    """Raised when the license ID appears on the vendor revocation list."""
+    pass
+
+
+# License types: vendor-issued trials and official licences.
+# Enforcement is always by expires_at (signed), not by the label alone.
 LICENSE_TYPE_DURATIONS_DAYS: Dict[str, Optional[int]] = {
     "15-Day Trial": 15,
+    "1-Month Trial": 30,
+    "2-Month Trial": 60,
+    "3-Month Trial": 90,
+    "6-Month Trial": 180,
+    "1-Year": 365,
+    "3-Year": 1095,
+    # Legacy aliases kept for older keys/admin records
     "30-Day": 30,
     "90-Day": 90,
-    "1-Year": 365,
-    "Lifetime": None,  # sentinel: no duration, use LIFETIME_EXPIRY_SENTINEL
+    "Lifetime": None,
 }
+
+# Types shown first in the vendor admin tool (trials, then official).
+VENDOR_LICENSE_TYPES: tuple[str, ...] = (
+    "15-Day Trial",
+    "1-Month Trial",
+    "2-Month Trial",
+    "3-Month Trial",
+    "6-Month Trial",
+    "1-Year",
+    "3-Year",
+)
 LIFETIME_EXPIRY_SENTINEL = "9999-12-31"
+LICENSE_PAYLOAD_VERSION = 2
+
+
+def _signing_message(payload: Dict[str, Any]) -> bytes:
+    """Build the signed message for v1 (legacy) or v2 (license_id) payloads."""
+    version = int(payload.get("version", 1))
+    if version >= 2 and payload.get("license_id"):
+        return (
+            f"{payload['license_id']}|{payload['customer_name']}|"
+            f"{payload['expires_at']}|{payload['hardware_hash']}|"
+            f"{payload.get('license_type', 'Custom')}"
+        ).encode("utf-8")
+    return (
+        f"{payload['customer_name']}|{payload['expires_at']}|{payload['hardware_hash']}"
+    ).encode("utf-8")
 
 
 class LicenseValidator:
@@ -183,6 +219,7 @@ class LicenseValidator:
                     f"License payload is missing required fields: {missing}"
                 )
             license_data.setdefault("license_type", "Custom")
+            license_data.setdefault("version", 1 if "license_id" not in license_data else 2)
             return license_data
         except LicenseValidationError:
             raise
@@ -219,10 +256,17 @@ class LicenseValidator:
         customer_name: str = license_data["customer_name"]
         hardware_hash: str = license_data["hardware_hash"]
         signature_b64: str = license_data["signature"]
+        license_id: Optional[str] = license_data.get("license_id")
+
+        if is_license_revoked(license_id):
+            logger.error("License ID %s is on the revocation list.", license_id)
+            raise LicenseRevokedError(
+                "This license has been cancelled by the vendor. Contact support."
+            )
 
         # ── Step 2: ECDSA Signature Verification ─────────────────────────────
         if not _DEVELOPER_MODE and self._public_key is not None:
-            data_to_verify = f"{customer_name}|{expires_at_str}|{hardware_hash}".encode("utf-8")
+            data_to_verify = _signing_message(license_data)
             try:
                 signature_bytes = base64.b64decode(signature_b64)
                 self._public_key.verify(
@@ -287,6 +331,7 @@ class LicenseValidator:
             "expires_at": expires_at_str,
             "hardware_hash": hardware_hash,
             "license_type": license_data.get("license_type", "Custom"),
+            "license_id": license_id,
         }
 
 
@@ -327,6 +372,7 @@ def generate_license_key(
     expires_at: str,
     hardware_hash: str,
     license_type: str = "Custom",
+    license_id: Optional[str] = None,
 ) -> str:
     """
     Generate a signed base64 license key.
@@ -355,16 +401,19 @@ def generate_license_key(
     from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
     private_key = load_pem_private_key(private_key_pem, password=None)
-    data_to_sign = f"{customer_name}|{expires_at}|{hardware_hash}".encode("utf-8")
-
-    signature = private_key.sign(data_to_sign, ec.ECDSA(hashes.SHA256()))
+    license_id = license_id or str(uuid.uuid4())
 
     payload = {
+        "version": LICENSE_PAYLOAD_VERSION,
+        "license_id": license_id,
         "customer_name": customer_name,
         "expires_at": expires_at,
         "hardware_hash": hardware_hash,
         "license_type": license_type,
-        "signature": base64.b64encode(signature).decode("utf-8"),
     }
+
+    data_to_sign = _signing_message(payload)
+    signature = private_key.sign(data_to_sign, ec.ECDSA(hashes.SHA256()))
+    payload["signature"] = base64.b64encode(signature).decode("utf-8")
 
     return base64.b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8")

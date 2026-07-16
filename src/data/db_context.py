@@ -10,6 +10,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Generator
 
+from src.data.db_protection import prepare_working_database
+
 logger = logging.getLogger("tilevision.data.db_context")
 
 
@@ -30,6 +32,7 @@ class DatabaseContext:
         self._db_path = Path(db_path)
         # Ensure parent directories exist
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        prepare_working_database(self._db_path)
         self.initialize_schema()
 
     @property

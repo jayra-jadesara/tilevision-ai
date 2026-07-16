@@ -37,20 +37,21 @@ def test_check_package_detects_installed_stdlib_adjacent():
 
 
 def test_extras_step_lists_watchdog_as_required():
-    extras = next(step for step in INSTALL_STEPS if step.step_id == "extras")
-    watchdog = next(pkg for pkg in extras.packages if pkg.import_name == "watchdog")
+    core = next(step for step in INSTALL_STEPS if step.step_id == "core")
+    watchdog = next(pkg for pkg in core.packages if pkg.import_name == "watchdog")
     assert watchdog.optional is False
 
 
-def test_ai_step_lists_tokenizers():
-    ai = next(step for step in INSTALL_STEPS if step.step_id == "ai_core")
+def test_ai_stack_step_lists_tokenizers():
+    ai = next(step for step in INSTALL_STEPS if step.step_id == "ai_stack")
     names = [pkg.import_name for pkg in ai.packages]
     assert "tokenizers" in names
+    assert "faiss" in names
 
 
-def test_foundation_step_complete_on_dev_machine():
-    foundation = next(step for step in INSTALL_STEPS if step.step_id == "foundation")
-    status = check_step(foundation)
+def test_core_step_complete_on_dev_machine():
+    core = next(step for step in INSTALL_STEPS if step.step_id == "core")
+    status = check_step(core)
     assert status.is_complete
 
 

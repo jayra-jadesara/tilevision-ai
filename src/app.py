@@ -29,6 +29,7 @@ from src.utils.brand_assets import APP_ICON_PATH
 from src.utils.logger import setup_logger
 from src.config.settings import AppSettings
 from src.data.db_context import DatabaseContext
+from src.data.db_protection import seal_database
 from src.data.sqlite_repository import (
     SQLiteImageRepository, SQLiteLicenseRepository, SQLiteIndexedFolderRepository,
     SQLiteSearchHistoryRepository, SQLiteActivityLogRepository,
@@ -394,6 +395,12 @@ def build_application() -> int:
     if folder_monitor is not None:
         logger.info("Stopping folder monitor before shutdown...")
         folder_monitor.stop_monitoring()
+
+    try:
+        seal_database(db_context.db_path)
+        logger.info("Catalogue database encrypted at rest.")
+    except Exception as exc:
+        logger.error("Failed to encrypt catalogue database on exit: %s", exc)
 
     logger.info(f"TileVision AI exiting with code: {exit_code}")
     return exit_code
