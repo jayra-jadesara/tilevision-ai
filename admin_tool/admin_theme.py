@@ -106,20 +106,56 @@ def get_admin_qss(theme: str) -> str:
         min-height: 24px;
         selection-background-color: {p['highlight_bg']};
     }}
-    QDateEdit {{
+    #WebDatePicker {{
         background-color: {p['bg_input']};
-        color: {p['text_primary']};
         border: 1px solid {p['border_strong']};
         border-radius: 8px;
-        padding: 4px 10px;
-        min-height: 24px;
+        min-height: 36px;
+        max-height: 36px;
     }}
-    QDateEdit::drop-down {{
-        subcontrol-origin: padding;
-        subcontrol-position: top right;
-        width: 28px;
-        border-left: 1px solid {p['border_strong']};
+    #WebDatePicker:disabled {{
+        background-color: {p['bg_panel_alt']};
+        color: {p['text_muted']};
+    }}
+    #WebDateEdit {{
+        background: transparent;
+        border: none;
+        color: {p['text_primary']};
+        padding: 0 10px;
+        margin: 0;
+        min-height: 0px;
+        max-height: 34px;
+    }}
+    #WebDateEdit:disabled {{
+        color: {p['text_muted']};
+    }}
+    #WebDateButton {{
         background-color: {p['button_bg']};
+        color: {p['text_secondary']};
+        border: none;
+        border-left: 1px solid {p['border_strong']};
+        border-top-right-radius: 7px;
+        border-bottom-right-radius: 7px;
+        min-width: 40px;
+        max-width: 40px;
+        min-height: 0px;
+        max-height: 34px;
+        padding: 0;
+        margin: 0;
+        font-size: 15px;
+    }}
+    #WebDateButton:hover {{
+        background-color: {p['button_hover']};
+        color: {p['text_primary']};
+    }}
+    #WebDateButton:disabled {{
+        background-color: {p['bg_panel_alt']};
+        color: {p['text_muted']};
+    }}
+    #WebDatePopup {{
+        background-color: {p['bg_panel']};
+        border: 1px solid {p['border_strong']};
+        border-radius: 10px;
     }}
     QCalendarWidget {{
         background-color: {p['bg_panel']};
