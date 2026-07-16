@@ -668,7 +668,7 @@ def main() -> int:
     if APP_ICON_PATH.exists():
         app.setWindowIcon(QIcon(str(APP_ICON_PATH)))
     window = AdminLicenseWindow()
-    window.show()
+    window.showMaximized()
     return app.exec()
 
 
