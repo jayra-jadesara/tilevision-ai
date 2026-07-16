@@ -1,12 +1,7 @@
 """
 Integration tests for IndexImagesUseCase.scan_and_index_directory(), using a
-fake embedder (no torch/open_clip needed — see conftest.py) but the real
-SQLite repository and real FAISS index, to verify the folder-scan pipeline
-end-to-end after the bug fixes in this patch:
-
-- Re-indexing a changed file must not leave a duplicate vector in FAISS.
-- The FAISS index must not be written to disk on every single file.
-- Unchanged files must be skipped (incremental indexing).
+fake feature extractor (no torch needed) but the real SQLite repository and
+real FAISS index.
 """
 
 import sys
@@ -23,31 +18,7 @@ from src.ai.vector_index import FaissIndexManager
 from src.core.use_cases.index_images import IndexImagesUseCase
 from src.data.db_context import DatabaseContext
 from src.data.sqlite_repository import SQLiteImageRepository
-
-
-class FakeEmbedder:
-    """Deterministic fake embedder: encodes the image's average RGB as a
-    4-dim vector so different content produces different (but stable)
-    embeddings, without needing torch/open_clip installed."""
-
-    def __init__(self):
-        self.calls = 0
-
-    def load_model(self):
-        pass
-
-    def get_embedding(self, image_path: str):
-        self.calls += 1
-        with Image.open(image_path) as img:
-            img = img.convert("RGB").resize((8, 8))
-            r, g, b = 0.0, 0.0, 0.0
-            pixels = list(img.getdata())
-            for pr, pg, pb in pixels:
-                r += pr
-                g += pg
-                b += pb
-            n = len(pixels) * 255.0
-            return [r / n, g / n, b / n, 1.0]
+from tests.fake_ai import FakeEmbedder, FakeFeatureExtractor
 
 
 @pytest.fixture()
@@ -55,11 +26,12 @@ def env(tmp_path):
     db_context = DatabaseContext(str(tmp_path / "db" / "tiles.db"))
     repo = SQLiteImageRepository(db_context)
     embedder = FakeEmbedder()
+    feature_extractor = FakeFeatureExtractor(embedder=embedder)
     vector_index = FaissIndexManager(str(tmp_path / "index" / "tiles.index"), dimension=4)
 
     use_case = IndexImagesUseCase(
         image_repository=repo,
-        embedder=embedder,
+        feature_extractor=feature_extractor,
         vector_index=vector_index,
         thumbnail_dir=str(tmp_path / "thumbs"),
     )
@@ -111,7 +83,7 @@ def test_second_scan_of_unchanged_folder_skips_everything(env):
     assert result.indexed_count == 0
     assert result.skipped_count == 2
     assert result.has_any_changes is False
-    assert env["embedder"].calls == calls_after_first  # no re-embedding
+    assert env["embedder"].calls == calls_after_first
 
 
 def test_changed_file_reindexes_without_duplicating_vector(env):
@@ -122,8 +94,6 @@ def test_changed_file_reindexes_without_duplicating_vector(env):
     env["use_case"].scan_and_index_directory(d)
     assert env["vector_index"]._index.ntotal == 1
 
-    # Overwrite with very different content -> hash changes -> must re-embed,
-    # and must NOT leave a second stale vector behind for the same tile id.
     _make_image(target, (250, 5, 5))
     result = env["use_case"].scan_and_index_directory(d)
 
@@ -131,13 +101,13 @@ def test_changed_file_reindexes_without_duplicating_vector(env):
     assert result.new_count == 0
     assert result.modified_count == 1
     assert result.skipped_count == 0
-    assert env["vector_index"]._index.ntotal == 1  # still exactly one vector
+    assert env["vector_index"]._index.ntotal == 1
 
     tile = env["repo"].get_all()[0]
     ids, scores = env["vector_index"].search_vectors(
         env["embedder"].get_embedding(str(target)), top_k=5
     )
-    assert ids.count(tile.id) == 1  # the tile appears exactly once in results
+    assert ids.count(tile.id) == 1
 
 
 def test_checkpoint_saves_periodically_not_per_file(env, monkeypatch):
@@ -156,8 +126,6 @@ def test_checkpoint_saves_periodically_not_per_file(env, monkeypatch):
 
     env["use_case"].scan_and_index_directory(d)
 
-    # 60 files with a checkpoint every 25 => saves at 25, 50, and one final
-    # save at the end (60) — a handful of saves, not 60.
     assert 2 <= save_calls["count"] <= 4
 
 
@@ -172,9 +140,6 @@ def test_index_single_file_persist_false_does_not_write_disk(env):
     assert env["vector_index"]._index.ntotal == 1
 
 
-# ── Task 2: Smart Re-index (new/modified/deleted/skipped breakdown) ────
-
-
 def test_deleted_file_is_removed_from_faiss_and_sqlite(env):
     d = env["images_dir"]
     a_path = d / "a.jpg"
@@ -186,7 +151,6 @@ def test_deleted_file_is_removed_from_faiss_and_sqlite(env):
     assert first.new_count == 2
     assert env["vector_index"]._index.ntotal == 2
 
-    # Delete one file from disk, then re-scan.
     a_path.unlink()
     second = env["use_case"].scan_and_index_directory(d)
 
@@ -200,8 +164,6 @@ def test_deleted_file_is_removed_from_faiss_and_sqlite(env):
 
 
 def test_deletion_not_detected_on_cancelled_scan(env):
-    """A cancelled scan sees only a partial file listing — treating every
-    unseen file as 'deleted' in that case would be wrong."""
     d = env["images_dir"]
     for i in range(5):
         _make_image(d / f"tile_{i}.jpg", (i, i, i))
@@ -217,10 +179,12 @@ def test_deletion_not_detected_on_cancelled_scan(env):
         if call_count["n"] == 2:
             cancel_event.set()
 
-    result = env["use_case"].scan_and_index_directory(d, progress_callback=progress_cb, cancel_event=cancel_event)
+    result = env["use_case"].scan_and_index_directory(
+        d, progress_callback=progress_cb, cancel_event=cancel_event
+    )
 
     assert result.is_completed is False
-    assert result.deleted_count == 0  # must not treat unscanned files as deleted
+    assert result.deleted_count == 0
 
 
 def test_everything_already_indexed_has_no_changes(env):
@@ -243,8 +207,8 @@ def test_time_saved_is_positive_when_files_are_skipped(env):
     for i in range(4):
         _make_image(d / f"tile_{i}.jpg", (i * 10, i * 20, i * 30))
 
-    env["use_case"].scan_and_index_directory(d)  # indexes all 4
-    result = env["use_case"].scan_and_index_directory(d)  # skips all 4
+    env["use_case"].scan_and_index_directory(d)
+    result = env["use_case"].scan_and_index_directory(d)
 
     assert result.skipped_count == 4
     assert result.time_saved_seconds > 0
@@ -259,7 +223,6 @@ def test_mixed_new_modified_and_unchanged_in_one_scan(env):
 
     env["use_case"].scan_and_index_directory(d)
 
-    # Modify one existing file and add a brand new one.
     _make_image(modified_path, (250, 10, 10))
     _make_image(d / "new_file.jpg", (3, 3, 3))
 
@@ -267,10 +230,7 @@ def test_mixed_new_modified_and_unchanged_in_one_scan(env):
 
     assert result.new_count == 1
     assert result.modified_count == 1
-    assert result.skipped_count == 1  # unchanged.jpg
-
-
-# ── Task 1: Persistent Indexed Folder ────────────────────────────────────
+    assert result.skipped_count == 1
 
 
 def test_force_rebuild_reembeds_unchanged_files(env):
@@ -282,11 +242,10 @@ def test_force_rebuild_reembeds_unchanged_files(env):
     calls_after_first = env["embedder"].calls
     assert calls_after_first == 2
 
-    # Nothing changed on disk, but force=True should re-embed everything anyway.
     result = env["use_case"].scan_and_index_directory(d, force=True)
 
     assert result.skipped_count == 0
-    assert result.modified_count == 2  # counted as "modified" since already known
+    assert result.modified_count == 2
     assert env["embedder"].calls == calls_after_first + 2
 
 
@@ -297,11 +256,15 @@ def test_folder_is_recorded_after_successful_scan(tmp_path):
     repo = SQLiteImageRepository(db_context)
     folder_repo = SQLiteIndexedFolderRepository(db_context)
     embedder = FakeEmbedder()
+    feature_extractor = FakeFeatureExtractor(embedder=embedder)
     vector_index = FaissIndexManager(str(tmp_path / "index" / "tiles.index"), dimension=4)
 
     use_case = IndexImagesUseCase(
-        image_repository=repo, embedder=embedder, vector_index=vector_index,
-        thumbnail_dir=str(tmp_path / "thumbs"), folder_repository=folder_repo,
+        image_repository=repo,
+        feature_extractor=feature_extractor,
+        vector_index=vector_index,
+        thumbnail_dir=str(tmp_path / "thumbs"),
+        folder_repository=folder_repo,
     )
 
     images_dir = tmp_path / "images"
@@ -309,7 +272,7 @@ def test_folder_is_recorded_after_successful_scan(tmp_path):
     _make_image(images_dir / "a.jpg", (1, 2, 3))
     _make_image(images_dir / "b.jpg", (4, 5, 6))
 
-    assert use_case.get_last_indexed_folder_status() is None  # nothing yet
+    assert use_case.get_last_indexed_folder_status() is None
 
     use_case.scan_and_index_directory(images_dir)
 
@@ -328,11 +291,15 @@ def test_folder_not_recorded_when_scan_is_cancelled(tmp_path):
     repo = SQLiteImageRepository(db_context)
     folder_repo = SQLiteIndexedFolderRepository(db_context)
     embedder = FakeEmbedder()
+    feature_extractor = FakeFeatureExtractor(embedder=embedder)
     vector_index = FaissIndexManager(str(tmp_path / "index" / "tiles.index"), dimension=4)
 
     use_case = IndexImagesUseCase(
-        image_repository=repo, embedder=embedder, vector_index=vector_index,
-        thumbnail_dir=str(tmp_path / "thumbs"), folder_repository=folder_repo,
+        image_repository=repo,
+        feature_extractor=feature_extractor,
+        vector_index=vector_index,
+        thumbnail_dir=str(tmp_path / "thumbs"),
+        folder_repository=folder_repo,
     )
 
     images_dir = tmp_path / "images"
@@ -346,6 +313,8 @@ def test_folder_not_recorded_when_scan_is_cancelled(tmp_path):
         if processed == 1:
             cancel_event.set()
 
-    use_case.scan_and_index_directory(images_dir, progress_callback=progress_cb, cancel_event=cancel_event)
+    use_case.scan_and_index_directory(
+        images_dir, progress_callback=progress_cb, cancel_event=cancel_event
+    )
 
     assert use_case.get_last_indexed_folder_status() is None

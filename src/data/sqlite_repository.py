@@ -203,22 +203,9 @@ class SQLiteImageRepository(IImageRepository):
             updated_time
         )
         VALUES (
-            ?,?,?,?,?,?,
-            ?,?,?,?,
-            ?,?,
-            ?,?,
-            ?,
-
-            ?,?,
-            ?,
-
-            ?,?,
-            ?,
-            ?,
-            ?,?,
-            ?,
-            ?,?,
-            ?,
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?,
             CURRENT_TIMESTAMP
         )
         ON CONFLICT(file_path) DO UPDATE SET
