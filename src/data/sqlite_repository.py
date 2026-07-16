@@ -13,6 +13,14 @@ import numpy as np
 
 from src.core.models import TileImage, LicenseInfo, IndexedFolderState, SearchHistoryEntry, ActivityLogEntry
 from src.ai.models import TileFeatures
+from src.ai.feature_versions import (
+    CURRENT_FEATURE_VERSION,
+    CURRENT_PATTERN_FEATURE_VERSION,
+    CURRENT_EMBEDDING_MODEL,
+    CURRENT_EMBEDDING_DIMENSION,
+    FeatureVersionStatus,
+    is_tile_features_compatible,
+)
 
 from src.data.db_context import DatabaseContext
 from src.data.repository_interface import (
@@ -187,6 +195,9 @@ class SQLiteImageRepository(IImageRepository):
             dominant_g,
             dominant_b,
 
+            feature_version,
+            pattern_feature_version,
+
             is_indexed,
 
             updated_time
@@ -203,6 +214,8 @@ class SQLiteImageRepository(IImageRepository):
 
             ?,?,
             ?,
+            ?,
+            ?,?,
             ?,
             ?,?,
             ?,
@@ -232,6 +245,8 @@ class SQLiteImageRepository(IImageRepository):
             dominant_r=excluded.dominant_r,
             dominant_g=excluded.dominant_g,
             dominant_b=excluded.dominant_b,
+            feature_version=excluded.feature_version,
+            pattern_feature_version=excluded.pattern_feature_version,
             is_indexed=excluded.is_indexed,
             updated_time=CURRENT_TIMESTAMP
         RETURNING id;
@@ -255,6 +270,8 @@ class SQLiteImageRepository(IImageRepository):
                 pattern_features = None
 
                 r = g = b = 0
+                feature_version = 0
+                pattern_feature_version = 0
 
                 if features is not None:
 
@@ -268,9 +285,7 @@ class SQLiteImageRepository(IImageRepository):
                         else None
                     )
 
-                    embedding_model = (
-                        "facebook/dinov2-large"
-                    )
+                    embedding_model = CURRENT_EMBEDDING_MODEL
 
                     color_blob = self._serialize_histogram(
                         features.color_histogram
@@ -291,6 +306,9 @@ class SQLiteImageRepository(IImageRepository):
                     r = int(features.dominant_color[0])
                     g = int(features.dominant_color[1])
                     b = int(features.dominant_color[2])
+
+                    feature_version = CURRENT_FEATURE_VERSION
+                    pattern_feature_version = CURRENT_PATTERN_FEATURE_VERSION
                     
                 cursor.execute(
                     query,
@@ -326,6 +344,9 @@ class SQLiteImageRepository(IImageRepository):
                         r,
                         g,
                         b,
+
+                        feature_version,
+                        pattern_feature_version,
 
                         int(tile.is_indexed),
                     ),
@@ -590,6 +611,81 @@ class SQLiteImageRepository(IImageRepository):
         except sqlite3.Error as e:
             logger.error(f"Failed to fetch distinct values for field '{field}': {e}")
             return []
+
+    def get_feature_version_status(self) -> FeatureVersionStatus:
+        """
+        Check whether indexed tiles use the current feature pipeline versions.
+        """
+        query = """
+        SELECT
+            feature_version,
+            pattern_feature_version,
+            embedding_model,
+            embedding_dimension,
+            pattern_features
+        FROM tiles
+        WHERE is_indexed = 1;
+        """
+        indexed_count = 0
+        stale_count = 0
+
+        try:
+            with self._db.session() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query)
+                rows = cursor.fetchall()
+
+                for row in rows:
+                    indexed_count += 1
+                    pattern_size = None
+                    if row["pattern_features"] is not None:
+                        pattern_size = (
+                            len(row["pattern_features"]) // 4
+                        )
+
+                    if not is_tile_features_compatible(
+                        feature_version=row["feature_version"],
+                        pattern_feature_version=row["pattern_feature_version"],
+                        embedding_model=row["embedding_model"],
+                        embedding_dimension=row["embedding_dimension"],
+                        pattern_feature_size=pattern_size,
+                    ):
+                        stale_count += 1
+        except sqlite3.Error as e:
+            logger.error(f"Failed to check feature versions: {e}")
+            return FeatureVersionStatus(
+                is_compatible=False,
+                indexed_count=0,
+                stale_count=0,
+                message="Could not verify feature versions.",
+            )
+
+        if indexed_count == 0:
+            return FeatureVersionStatus(
+                is_compatible=True,
+                indexed_count=0,
+                stale_count=0,
+                message="No indexed tiles yet.",
+            )
+
+        is_compatible = stale_count == 0
+        if is_compatible:
+            message = (
+                f"All {indexed_count} indexed tile(s) use current "
+                f"feature version {CURRENT_FEATURE_VERSION}."
+            )
+        else:
+            message = (
+                f"{stale_count} of {indexed_count} indexed tile(s) use "
+                f"stale features. A full re-index is required."
+            )
+
+        return FeatureVersionStatus(
+            is_compatible=is_compatible,
+            indexed_count=indexed_count,
+            stale_count=stale_count,
+            message=message,
+        )
 
     def mark_as_indexed(self, image_id: int, is_indexed: bool) -> bool:
         """

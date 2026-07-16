@@ -196,6 +196,13 @@ def build_application() -> int:
         logger.info("Warming up AI engine and FAISS index...")
         feature_extractor.load_model()
         vector_index.load_index()
+        version_status = image_repository.get_feature_version_status()
+        if not version_status.is_compatible and version_status.stale_count > 0:
+            logger.warning(
+                "Stale feature index detected: %s "
+                "Use Settings > Rebuild FAISS Index after re-scanning folders.",
+                version_status.message,
+            )
         logger.info("AI engine warm-up complete.")
     except Exception as e:
         # Non-fatal: indexing/search will lazily retry loading on first use

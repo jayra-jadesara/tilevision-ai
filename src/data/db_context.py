@@ -67,6 +67,8 @@ class DatabaseContext:
                 dominant_r INTEGER DEFAULT 0,
                 dominant_g INTEGER DEFAULT 0,
                 dominant_b INTEGER DEFAULT 0,
+                feature_version INTEGER DEFAULT 0,
+                pattern_feature_version INTEGER DEFAULT 0,
                 created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 is_indexed INTEGER DEFAULT 0
@@ -157,6 +159,8 @@ class DatabaseContext:
             "dominant_r": "INTEGER DEFAULT 0",
             "dominant_g": "INTEGER DEFAULT 0",
             "dominant_b": "INTEGER DEFAULT 0",
+            "feature_version": "INTEGER DEFAULT 0",
+            "pattern_feature_version": "INTEGER DEFAULT 0",
         }
 
         for column, definition in migrations.items():

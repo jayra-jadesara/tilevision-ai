@@ -126,6 +126,13 @@ class SearchTilesUseCase:
             f"(top_k={top_k}, filters={active_filters or 'none'})"
         )
 
+        version_status = self._repo.get_feature_version_status()
+        if not version_status.is_compatible and version_status.stale_count > 0:
+            logger.warning(
+                "Search running against stale indexed features: %s",
+                version_status.message,
+            )
+
         try:
             timer = PipelineTimer("SEARCH TIMING")
 
