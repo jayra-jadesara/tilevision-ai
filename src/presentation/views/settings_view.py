@@ -32,6 +32,8 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QMessageBox,
     QProgressDialog,
+    QTabWidget,
+    QScrollArea,
 )
 
 from src.ai.feature_versions import CURRENT_FEATURE_VERSION, FeatureVersionStatus
@@ -40,7 +42,8 @@ from src.config.settings import AppSettings
 from src.core.use_cases.index_images import IndexImagesUseCase
 from src.presentation.workers.rebuild_index_worker import RebuildIndexWorker
 from src.utils.logger import get_log_file_path
-from src.theme.theme_manager import get_palette
+from src.presentation.views.catalogue_profiles_panel import CatalogueProfilesPanel
+from src.theme.theme_manager import get_palette, get_shared_view_qss
 
 logger = logging.getLogger("tilevision.presentation.views.settings_view")
 
@@ -148,11 +151,34 @@ class SettingsView(QWidget):
         title.setObjectName("PageTitle")
         layout.addWidget(title)
 
-        layout.addWidget(self._build_overview_section())
-        layout.addWidget(self._build_watched_folders_section())
-        layout.addWidget(self._build_preferences_section())
-        layout.addWidget(self._build_maintenance_section())
-        layout.addStretch()
+        self._tabs = QTabWidget()
+        self._tabs.setObjectName("SettingsTabs")
+
+        general_page = QWidget()
+        general_layout = QVBoxLayout(general_page)
+        general_layout.setContentsMargins(0, 0, 0, 0)
+        general_layout.setSpacing(16)
+        general_layout.addWidget(self._build_overview_section())
+        general_layout.addWidget(self._build_watched_folders_section())
+        general_layout.addWidget(self._build_preferences_section())
+        general_layout.addWidget(self._build_maintenance_section())
+        general_layout.addStretch()
+
+        general_scroll = QScrollArea()
+        general_scroll.setWidgetResizable(True)
+        general_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        general_scroll.setWidget(general_page)
+
+        self._export_profiles_panel = CatalogueProfilesPanel(theme=self._theme)
+        self._tabs.addTab(general_scroll, "General")
+        self._tabs.addTab(self._export_profiles_panel, "Export Profiles")
+        layout.addWidget(self._tabs, stretch=1)
+
+    def show_export_profiles_tab(self) -> None:
+        """Switch to the Export Profiles tab (called from Export Catalogue)."""
+        index = self._tabs.indexOf(self._export_profiles_panel)
+        if index >= 0:
+            self._tabs.setCurrentIndex(index)
 
     def _build_overview_section(self) -> QGroupBox:
         box = QGroupBox("Overview")
@@ -199,10 +225,12 @@ class SettingsView(QWidget):
 
         button_row = QHBoxLayout()
         add_button = QPushButton("Add Folder")
+        add_button.setObjectName("SecondaryButton")
         add_button.clicked.connect(self._on_add_folder)
         button_row.addWidget(add_button)
 
         remove_button = QPushButton("Remove Selected")
+        remove_button.setObjectName("SecondaryButton")
         remove_button.clicked.connect(self._on_remove_folder)
         button_row.addWidget(remove_button)
         button_row.addStretch()
@@ -261,11 +289,13 @@ class SettingsView(QWidget):
 
         row1 = QHBoxLayout()
         self._backup_button = QPushButton("Backup Database")
+        self._backup_button.setObjectName("SecondaryButton")
         self._backup_button.clicked.connect(self._on_backup_database)
         self._backup_button.setEnabled(self._db_path_provider is not None)
         row1.addWidget(self._backup_button)
 
         self._export_logs_button = QPushButton("Export Logs")
+        self._export_logs_button.setObjectName("SecondaryButton")
         self._export_logs_button.clicked.connect(self._on_export_logs)
         row1.addWidget(self._export_logs_button)
         row1.addStretch()
@@ -273,6 +303,7 @@ class SettingsView(QWidget):
 
         row2 = QHBoxLayout()
         self._rebuild_button = QPushButton("Rebuild FAISS Index")
+        self._rebuild_button.setObjectName("SecondaryButton")
         self._rebuild_button.clicked.connect(self._on_rebuild_faiss)
         self._rebuild_button.setEnabled(
             self._indexing_use_case is not None and self._indexed_folders_provider is not None
@@ -280,6 +311,7 @@ class SettingsView(QWidget):
         row2.addWidget(self._rebuild_button)
 
         self._clear_cache_button = QPushButton("Clear Cache")
+        self._clear_cache_button.setObjectName("SecondaryButton")
         self._clear_cache_button.clicked.connect(self._on_clear_cache)
         row2.addWidget(self._clear_cache_button)
         row2.addStretch()
@@ -498,30 +530,46 @@ class SettingsView(QWidget):
     def set_theme(self, theme: str) -> None:
         """Re-skin this view for a newly-selected theme (called by MainWindow)."""
         self._theme = theme
+        if hasattr(self, "_export_profiles_panel"):
+            self._export_profiles_panel.set_theme(theme)
         self._apply_styles()
 
     def _apply_styles(self) -> None:
         p = get_palette(self._theme)
         self.setStyleSheet(
-            f"""
-            #PageTitle {{ font-size: 20px; font-weight: 700; color: {p['text_primary']}; }}
+            get_shared_view_qss(self._theme)
+            + f"""
+            QTabWidget::pane {{
+                border: 1px solid {p['border']};
+                border-radius: 8px;
+                background-color: {p['bg_panel']};
+                top: -1px;
+            }}
+            QTabBar::tab {{
+                background-color: {p['button_bg']};
+                color: {p['text_secondary']};
+                border: 1px solid {p['border']};
+                border-bottom: none;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                padding: 8px 16px;
+                margin-right: 2px;
+            }}
+            QTabBar::tab:selected {{
+                background-color: {p['bg_panel']};
+                color: {p['accent_text']};
+                font-weight: 600;
+            }}
             QGroupBox {{
                 color: {p['text_primary']}; border: 1px solid {p['border']}; border-radius: 8px;
                 margin-top: 12px; padding-top: 12px; font-weight: 600;
             }}
             QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 6px; color: {p['accent_text']}; }}
             QLabel {{ color: {p['text_secondary']}; }}
-            #SectionNote {{ color: {p['text_muted']}; font-size: 11px; }}
             #FoldersList {{
                 background-color: {p['bg_panel_alt']}; border: 1px solid {p['border']}; border-radius: 6px;
                 color: {p['text_secondary']}; min-height: 100px;
             }}
-            QPushButton {{
-                background-color: {p['button_bg']}; border: 1px solid {p['border_strong']}; border-radius: 6px;
-                padding: 6px 12px; color: {p['text_secondary']};
-            }}
-            QPushButton:hover:enabled {{ background-color: {p['button_hover']}; }}
-            QPushButton:disabled {{ color: {p['text_faint']}; }}
             QComboBox {{
                 background-color: {p['bg_input']}; border: 1px solid {p['border_strong']}; border-radius: 6px;
                 padding: 4px 8px; color: {p['text_primary']};

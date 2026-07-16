@@ -319,7 +319,7 @@ class LicenseView(QDialog):
                 font-weight: bold;
             }
             #DialogSubtitle {
-                color: #7986CB;
+                color: #7DD3FC;
                 font-size: 12px;
             }
             #Separator {
@@ -333,7 +333,7 @@ class LicenseView(QDialog):
                 border-radius: 8px;
             }
             #SectionTitle {
-                color: #7C83D3;
+                color: #38BDF8;
                 font-size: 12px;
                 font-weight: bold;
             }
@@ -363,7 +363,7 @@ class LicenseView(QDialog):
                 padding: 6px 10px;
             }
             #LicenseKeyEdit:focus {
-                border-color: #5C6BC0;
+                border-color: #0EA5E9;
             }
 
             #CopyButton {
@@ -381,8 +381,8 @@ class LicenseView(QDialog):
             #ActivateButton {
                 background: qlineargradient(
                     x1: 0, y1: 0, x2: 1, y2: 0,
-                    stop: 0 #3949AB,
-                    stop: 1 #5C6BC0
+                    stop: 0 #0369A1,
+                    stop: 1 #0EA5E9
                 );
                 border: none;
                 border-radius: 10px;
@@ -393,8 +393,8 @@ class LicenseView(QDialog):
             #ActivateButton:hover {
                 background: qlineargradient(
                     x1: 0, y1: 0, x2: 1, y2: 0,
-                    stop: 0 #5C6BC0,
-                    stop: 1 #7986CB
+                    stop: 0 #0EA5E9,
+                    stop: 1 #38BDF8
                 );
             }
             #ActivateButton:pressed {

@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
 )
 
-from src.theme.theme_manager import get_palette
+from src.theme.theme_manager import get_palette, get_shared_view_qss
 
 logger = logging.getLogger("tilevision.presentation.views.dashboard_view")
 
@@ -389,7 +389,8 @@ class DashboardView(QWidget):
     def _apply_styles(self) -> None:
         p = get_palette(self._theme)
         self.setStyleSheet(
-            f"""
+            get_shared_view_qss(self._theme)
+            + f"""
             QWidget#DashboardContent {{
                 background-color: {p['bg_app']};
             }}
@@ -400,9 +401,6 @@ class DashboardView(QWidget):
             QWidget#DashboardViewport {{
                 background-color: {p['bg_app']};
             }}
-            #PageTitle {{ font-size: 20px; font-weight: 700; color: {p['text_primary']}; }}
-            #PageSubtitle {{ font-size: 12px; color: {p['text_muted']}; }}
-            #SectionLabel {{ font-size: 13px; font-weight: 700; color: {p['text_secondary']}; margin-top: 4px; }}
             #StatCard {{
                 background-color:{p['bg_panel']};
                 border:1px solid {p['border']};
@@ -417,21 +415,6 @@ class DashboardView(QWidget):
             #StatIcon {{ font-size: 16px; }}
             #StatValue {{ font-size: 20px; font-weight: 700; color: {p['text_primary']}; }}
             #StatCaption {{ font-size: 11px; color: {p['text_muted']}; }}
-            #ActionButton {{
-                background-color:{p['accent']};
-                color:white;
-                border:none;
-                border-radius:8px;
-                padding:14px 24px;
-                font-size:14px;
-                font-weight:700;
-            }}
-            #ActionButton:hover {{
-                background-color:{p['accent_hover']};
-            }}
-            #ActionButton:pressed {{
-                background-color:{p['accent_hover']};
-            }}
             #ListPanel {{
                 background-color: {p['bg_panel']};
                 border:1px solid {p['border']};

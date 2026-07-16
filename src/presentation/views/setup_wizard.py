@@ -32,7 +32,8 @@ from src.utils.dependency_check import (
     StepStatus,
     all_dependencies_satisfied,
     check_all_steps,
-    pip_install_packages,
+    install_step_packages,
+    step_is_complete,
 )
 
 logger = logging.getLogger("tilevision.presentation.views.setup_wizard")
@@ -151,7 +152,7 @@ class SetupWizardDialog(QDialog):
     def _refresh_step(self) -> None:
         self._step_statuses = check_all_steps()
         while self._step_index < len(INSTALL_STEPS):
-            if not self._step_statuses[self._step_index].is_complete:
+            if not step_is_complete(self._step_statuses[self._step_index]):
                 break
             self._step_index += 1
 
@@ -167,16 +168,26 @@ class SetupWizardDialog(QDialog):
         self._package_list.clear()
         for pkg in status.packages:
             if pkg.installed:
-                text = f"{pkg.spec.display_name} — installed ({pkg.version})"
+                suffix = f" — OK ({pkg.version})" if pkg.version else " — OK"
+                text = f"{pkg.spec.display_name}{suffix}"
+            elif pkg.spec.optional:
+                text = f"{pkg.spec.display_name} — optional"
             else:
                 text = f"{pkg.spec.display_name} — required"
+            if pkg.note:
+                text = f"{text} — {pkg.note}"
             item = QListWidgetItem(text)
             if pkg.installed:
                 item.setForeground(Qt.GlobalColor.darkGreen)
             self._package_list.addItem(item)
 
-        complete = status.is_complete
-        self._install_button.setEnabled(not complete)
+        complete = step_is_complete(status)
+        is_builtin_only = all(pkg.spec.builtin for pkg in status.packages)
+        self._install_button.setEnabled(not complete and not is_builtin_only)
+        if status.step.optional:
+            self._install_button.setText("Install GPU Acceleration")
+        else:
+            self._install_button.setText("Install This Step")
         self._skip_button.setEnabled(self._step_index < len(INSTALL_STEPS) - 1)
         self._finish_button.setEnabled(all_dependencies_satisfied())
 
@@ -204,7 +215,7 @@ class SetupWizardDialog(QDialog):
         self._log_output.append(f"Installing: {step.title}...")
         self.repaint()
 
-        ok, message = pip_install_packages(step.packages)
+        ok, message = install_step_packages(step)
         self._log_output.append(message)
         if not ok:
             QMessageBox.warning(

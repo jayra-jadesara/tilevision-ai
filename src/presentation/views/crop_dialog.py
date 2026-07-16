@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.theme.theme_manager import get_palette
+from src.theme.theme_manager import get_palette, get_shared_view_qss
 
 logger = logging.getLogger("tilevision.presentation.views.crop_dialog")
 
@@ -81,7 +81,7 @@ class _CropCanvas(QWidget):
             for dim_rect in self._regions_outside_selection(full_rect, self._selection_rect):
                 painter.drawRect(dim_rect)
 
-            pen = QPen(QColor("#5C6BC0"), 2)
+            pen = QPen(QColor("#0EA5E9"), 2)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRect(self._selection_rect)
@@ -169,12 +169,14 @@ class CropDialog(QDialog):
         layout.addLayout(canvas_wrapper)
 
         button_row = QHBoxLayout()
-        clear_button = QPushButton("↺  Clear Selection")
+        clear_button = QPushButton("Clear Selection")
+        clear_button.setObjectName("SecondaryButton")
         clear_button.clicked.connect(self._canvas.clear_selection)
         button_row.addWidget(clear_button)
         button_row.addStretch()
 
         cancel_button = QPushButton("Cancel")
+        cancel_button.setObjectName("SecondaryButton")
         cancel_button.clicked.connect(self.reject)
         button_row.addWidget(cancel_button)
 
@@ -221,17 +223,10 @@ class CropDialog(QDialog):
     def _apply_styles(self) -> None:
         p = get_palette(self._theme)
         self.setStyleSheet(
-            f"""
+            get_shared_view_qss(self._theme)
+            + f"""
             QDialog {{ background-color: {p['bg_app']}; }}
             QWidget {{ color: {p['text_primary']}; }}
             #Instructions {{ color: {p['text_muted']}; font-size: 12px; }}
-            QPushButton {{
-                background-color: {p['button_bg']}; border: 1px solid {p['border_strong']}; border-radius: 6px;
-                padding: 8px 14px; color: {p['text_secondary']};
-            }}
-            QPushButton:hover:enabled {{ background-color: {p['button_hover']}; }}
-            #PrimaryButton {{ background-color: {p['accent']}; color: white; font-weight: 600; }}
-            #PrimaryButton:hover:enabled {{ background-color: {p['accent_hover']}; }}
-            #PrimaryButton:disabled {{ background-color: {p['button_bg']}; color: {p['text_faint']}; }}
             """
         )

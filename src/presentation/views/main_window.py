@@ -24,7 +24,7 @@ from typing import Callable, List, Optional
 from src.ai.feature_versions import FeatureVersionStatus
 from src.ai.gpu_info import GpuRuntimeInfo
 
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Slot, QSize
 from PySide6.QtGui import QFont, QIcon, QAction, QCloseEvent, QPixmap
 from PySide6.QtWidgets import (
     QMainWindow,
@@ -33,7 +33,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QFrame,
     QLabel,
-    QPushButton,
+    QToolButton,
+    QButtonGroup,
     QStackedWidget,
     QSizePolicy,
     QStatusBar,
@@ -51,12 +52,9 @@ from src.presentation.views.settings_view import SettingsView
 from src.presentation.views.dashboard_view import DashboardView
 from src.presentation.views.help_view import HelpView
 from src.theme.theme_manager import adapt_legacy_stylesheet, get_app_stylesheet, get_palette
+from src.utils.brand_assets import APP_ICON_PATH, logo_pixmap, nav_icon, nav_icon_size
 
 logger = logging.getLogger("tilevision.presentation.views.main_window")
-
-_RESOURCES_DIR = Path(__file__).resolve().parents[2] / "resources"
-_LOGO_SMALL_PATH = _RESOURCES_DIR / "logo_small.png"
-_APP_ICON_PATH = _RESOURCES_DIR / "app_icon.ico"
 
 
 @dataclass
@@ -76,16 +74,34 @@ class DashboardDataProviders:
     recent_searches: Optional[Callable[[], List[object]]] = None
 
 
-class NavButton(QPushButton):
-    """Sidebar navigation button — text only, professional ceramic-industry style."""
+class NavButton(QToolButton):
+    """Sidebar navigation button with icon and label."""
 
-    def __init__(self, label: str, parent: Optional[QWidget] = None) -> None:
-        super().__init__(label, parent)
-        self.setCheckable(True)
+    def __init__(
+        self,
+        label: str,
+        icon_name: str,
+        *,
+        theme: str = "dark",
+        checkable: bool = True,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._icon_name = icon_name
+        self._theme = theme
+        self.setText(label)
+        self.setIcon(nav_icon(icon_name, theme))
+        self.setIconSize(nav_icon_size())
+        self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        self.setCheckable(checkable)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setObjectName("NavButton")
-        self.setFixedWidth(100)
-        self.setMinimumHeight(44)
+        self.setFixedWidth(92)
+        self.setMinimumHeight(64)
+
+    def set_nav_theme(self, theme: str) -> None:
+        self._theme = theme
+        self.setIcon(nav_icon(self._icon_name, theme))
 
 
 class MainWindow(QMainWindow):
@@ -161,8 +177,8 @@ class MainWindow(QMainWindow):
         self._current_theme = getattr(self._settings, "theme", "dark") if self._settings is not None else "dark"
 
         self.setWindowTitle("TileVision AI — Visual Tile Search")
-        if _APP_ICON_PATH.exists():
-            self.setWindowIcon(QIcon(str(_APP_ICON_PATH)))
+        if APP_ICON_PATH.exists():
+            self.setWindowIcon(QIcon(str(APP_ICON_PATH)))
         self.setMinimumSize(1100, 760)
 
         # Open maximized by default
@@ -227,7 +243,11 @@ class MainWindow(QMainWindow):
         self._content_stack.addWidget(self._indexing_view)  # index 0
 
         if self._search_viewmodel is not None:
-            self._search_view = SearchView(self._search_viewmodel, theme=self._current_theme)
+            self._search_view = SearchView(
+                self._search_viewmodel,
+                theme=self._current_theme,
+                on_open_profiles_settings=self.navigate_to_settings_export_profiles,
+            )
             self._content_stack.addWidget(self._search_view)  # index 1
             self._nav_search_button.setEnabled(True)
             self._nav_search_button.setToolTip("Visual Search")
@@ -297,25 +317,19 @@ class MainWindow(QMainWindow):
         """Build the left navigation sidebar."""
         sidebar = QFrame()
         sidebar.setObjectName("Sidebar")
-        sidebar.setFixedWidth(104)
+        sidebar.setFixedWidth(96)
 
         layout = QVBoxLayout(sidebar)
         layout.setContentsMargins(2, 16, 2, 16)
-        layout.setSpacing(4)
+        layout.setSpacing(2)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         # ── App Logo / Brand
         logo_label = QLabel()
-        logo_pixmap = QPixmap(str(_LOGO_SMALL_PATH))
-        if not logo_pixmap.isNull():
-            logo_label.setPixmap(
-                logo_pixmap.scaled(
-                    56, 56, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
-                )
-            )
+        logo_scaled = logo_pixmap(52)
+        if not logo_scaled.isNull():
+            logo_label.setPixmap(logo_scaled)
         else:
-            # Fallback if the logo asset is ever missing — never crash on a
-            # missing image, just fall back to the original text mark.
             logo_label.setText("TileVision")
             logo_font = QFont()
             logo_font.setPointSize(14)
@@ -329,38 +343,48 @@ class MainWindow(QMainWindow):
         separator.setFrameShape(QFrame.Shape.HLine)
         separator.setObjectName("SidebarSeparator")
         layout.addWidget(separator)
-        layout.addSpacing(8)
+        layout.addSpacing(6)
+
+        self._nav_button_group = QButtonGroup(self)
+        self._nav_button_group.setExclusive(True)
 
         # ── Navigation Buttons
-        self._nav_index_button = NavButton("Index")
+        self._nav_index_button = NavButton("Index", "index", theme=self._current_theme)
         self._nav_index_button.clicked.connect(lambda: self._navigate(0))
+        self._nav_button_group.addButton(self._nav_index_button)
         layout.addWidget(self._nav_index_button)
 
-        self._nav_search_button = NavButton("Search")
+        self._nav_search_button = NavButton("Search", "search", theme=self._current_theme)
         self._nav_search_button.setEnabled(False)
         self._nav_search_button.setToolTip("Visual tile similarity search")
         self._nav_search_button.clicked.connect(lambda: self._navigate(1))
+        self._nav_button_group.addButton(self._nav_search_button)
         layout.addWidget(self._nav_search_button)
 
-        self._nav_duplicates_button = NavButton("Duplicates")
+        self._nav_duplicates_button = NavButton(
+            "Duplicates", "duplicates", theme=self._current_theme, checkable=False,
+        )
         self._nav_duplicates_button.setEnabled(False)
         self._nav_duplicates_button.setToolTip("Duplicate tile detection")
         self._nav_duplicates_button.clicked.connect(self._on_duplicates_clicked)
         layout.addWidget(self._nav_duplicates_button)
 
-        self._nav_catalog_button = NavButton("Dashboard")
+        self._nav_catalog_button = NavButton("Dashboard", "dashboard", theme=self._current_theme)
         self._nav_catalog_button.setEnabled(False)
         self._nav_catalog_button.setToolTip("Showroom overview")
+        self._nav_button_group.addButton(self._nav_catalog_button)
         layout.addWidget(self._nav_catalog_button)
 
-        self._nav_settings_button = NavButton("Settings")
+        self._nav_settings_button = NavButton("Settings", "settings", theme=self._current_theme)
         self._nav_settings_button.setEnabled(False)
         self._nav_settings_button.setToolTip("Application settings")
+        self._nav_button_group.addButton(self._nav_settings_button)
         layout.addWidget(self._nav_settings_button)
 
-        self._nav_help_button = NavButton("Help")
+        self._nav_help_button = NavButton(
+            "Help", "help", theme=self._current_theme, checkable=False,
+        )
         self._nav_help_button.setToolTip("Help & User Guide")
-        self._nav_help_button.setCheckable(False)  # opens a modal, not a nav page
         self._nav_help_button.clicked.connect(self._on_help_clicked)
         layout.addWidget(self._nav_help_button)
 
@@ -477,6 +501,8 @@ class MainWindow(QMainWindow):
             self._nav_search_button,
             self._nav_catalog_button,
             self._nav_settings_button,
+            self._nav_duplicates_button,
+            self._nav_help_button,
         ]:
             btn.setChecked(False)
 
@@ -496,12 +522,24 @@ class MainWindow(QMainWindow):
         if index == 2 and hasattr(self, "_dashboard_view"):
             self._dashboard_view.refresh()
 
+    def navigate_to_settings_export_profiles(self) -> None:
+        """Open Settings on the Export Profiles tab (from Export Catalogue)."""
+        self._navigate(3)
+        settings = getattr(self, "_settings_view", None)
+        if settings is not None:
+            settings.show_export_profiles_tab()
+
+    def _sync_nav_selection(self) -> None:
+        """Restore sidebar highlight to match the visible content stack page."""
+        self._navigate(self._content_stack.currentIndex())
+
     def _on_duplicates_clicked(self) -> None:
         """Open the Duplicate Detection dialog (modal, like License activation)."""
         if self._find_duplicates_use_case is None:
             return
         dialog = DuplicatesView(self._find_duplicates_use_case, parent=self, theme=self._current_theme)
         dialog.exec()
+        self._sync_nav_selection()
 
     def _on_dashboard_repeat_search(self, query_image_path: str) -> None:
         """Navigate to Search and re-run a query from the Dashboard's Recent Searches panel."""
@@ -514,6 +552,7 @@ class MainWindow(QMainWindow):
         """Open the Help & User Guide dialog (Task E)."""
         dialog = HelpView(parent=self, theme=self._current_theme)
         dialog.exec()
+        self._sync_nav_selection()
 
     def _on_theme_changed_request(self, theme: str) -> None:
         """
@@ -533,6 +572,16 @@ class MainWindow(QMainWindow):
             view = getattr(self, view_attr, None)
             if view is not None and hasattr(view, "set_theme"):
                 view.set_theme(theme)
+
+        for btn in (
+            self._nav_index_button,
+            self._nav_search_button,
+            self._nav_duplicates_button,
+            self._nav_catalog_button,
+            self._nav_settings_button,
+            self._nav_help_button,
+        ):
+            btn.set_nav_theme(theme)
 
         logger.info(f"Applied '{theme}' theme.")
         self._apply_stale_banner_style()
@@ -621,110 +670,100 @@ class MainWindow(QMainWindow):
 
     def _apply_styles(self) -> None:
         """Apply global QSS styles to the main window."""
-        self.setStyleSheet(adapt_legacy_stylesheet("""
+        p = get_palette(self._current_theme)
+        self.setStyleSheet(adapt_legacy_stylesheet(f"""
             /* ── Base ──────────────────────────────────────────────────────── */
-            QMainWindow {
-                background-color: #1A1D26;
-            }
-            #CentralWidget {
-                background-color: #1A1D26;
-            }
+            QMainWindow {{
+                background-color: {p['bg_app']};
+            }}
+            #CentralWidget {{
+                background-color: {p['bg_app']};
+            }}
 
             /* ── Sidebar ────────────────────────────────────────────────────  */
-            #Sidebar {
-                background-color: #13151F;
+            #Sidebar {{
+                background-color: {p['bg_sidebar']};
                 border-right: none;
-            }
-            #SidebarDivider {
-                color: #2D3250;
+            }}
+            #SidebarDivider {{
+                color: {p['border_strong']};
                 border: none;
-                border-left: 1px solid #2D3250;
+                border-left: 1px solid {p['border_strong']};
                 max-width: 1px;
-            }
-            #BrandLabel {
-                color: #5C6BC0;
+            }}
+            #BrandLabel {{
+                color: {p['accent_text']};
                 font-size: 14px;
                 font-weight: bold;
-            }
-            #SidebarSeparator {
-                color: #2D3250;
+            }}
+            #SidebarSeparator {{
+                color: {p['border_strong']};
                 border: none;
-                border-top: 1px solid #2D3250;
-            }
-            #VersionLabel {
-                color: #37474F;
+                border-top: 1px solid {p['border_strong']};
+            }}
+            #VersionLabel {{
+                color: {p['text_faint']};
                 font-size: 10px;
-            }
+            }}
 
             /* ── Nav Buttons ─────────────────────────────────────────────── */
-            #NavButton {
+            #NavButton {{
                 background-color: transparent;
                 border: none;
                 border-radius: 8px;
-                color: #546E7A;
-                text-align: center;
-            }
-            #NavButton:hover:!checked:enabled {
-                background-color: #1E2130;
-            }
-            #NavButton:checked {
-                background-color: #1E2847;
-                border-left: 3px solid #5C6BC0;
-            }
-            #NavButton:disabled {
-                opacity: 0.3;
-            }
-            #NavIcon {
-                font-size: 18px;
-                color: #546E7A;
-            }
-            #NavButton:checked #NavIcon {
-                color: #7986CB;
-            }
-            #NavLabel {
+                color: {p['text_muted']};
                 font-size: 10px;
-                color: #546E7A;
-            }
-            #NavButton:checked #NavLabel {
-                color: #7986CB;
-                font-weight: bold;
-            }
+                padding: 6px 2px;
+            }}
+            #NavButton:hover:!checked:enabled {{
+                background-color: {p['button_hover']};
+                color: {p['text_secondary']};
+            }}
+            #NavButton:checked {{
+                background-color: {p['button_bg']};
+                border-left: 3px solid {p['accent']};
+                color: {p['accent_text']};
+                font-weight: 600;
+            }}
+            #NavButton:disabled {{
+                opacity: 0.35;
+            }}
 
             /* ── Content Stack ───────────────────────────────────────────── */
-            #ContentStack {
-                background-color: #1A1D26;
-            }
+            #ContentStack {{
+                background-color: {p['bg_app']};
+            }}
 
             /* ── Status Bar ──────────────────────────────────────────────── */
-            QStatusBar {
-                background-color: #13151F;
-                border-top: 1px solid #2D3250;
-            }
-            #StatusBarLabel {
-                color: #546E7A;
+            QStatusBar {{
+                background-color: {p['bg_sidebar']};
+                border-top: 1px solid {p['border_strong']};
+            }}
+            #StatusBarLabel {{
+                color: {p['text_muted']};
                 font-size: 11px;
                 padding-left: 8px;
-            }
-            #LicenseStatusLabel {
-                color: #69F0AE;
+            }}
+            #LicenseStatusLabel {{
+                color: {p['success_text']};
                 font-size: 11px;
                 padding-right: 12px;
-            }
+            }}
 
             /* ── General QLabel ──────────────────────────────────────────── */
-            QLabel {
-                color: #E8EAF6;
+            QLabel {{
+                color: {p['text_primary']};
                 font-family: "Segoe UI", "Inter", sans-serif;
                 font-size: 12px;
-            }
+            }}
 
             /* ── QToolTip ────────────────────────────────────────────────── */
-            QToolTip {
-                background-color: #252837;
-                border: 1px solid #3D4166;
-                color: #E8EAF6;
+            QToolTip {{
+                background-color: {p['bg_input']};
+                border: 1px solid {p['border_strong']};
+                color: {p['text_primary']};
                 font-size: 11px;
                 padding: 4px 8px;
                 border-radius: 4px;
-            }
+            }}
         """, self._current_theme))

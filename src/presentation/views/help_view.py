@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
     QFrame,
 )
 
-from src.theme.theme_manager import get_palette
+from src.theme.theme_manager import get_palette, get_shared_view_qss
 
 logger = logging.getLogger("tilevision.presentation.views.help_view")
 
@@ -139,11 +139,11 @@ class HelpView(QDialog):
         layout.setSpacing(2)
 
         title = QLabel("How TileVision AI Works")
-        title.setObjectName("Title")
+        title.setObjectName("PageTitle")
         layout.addWidget(title)
 
         subtitle = QLabel("Five simple steps — from a folder of photos to instant matches.")
-        subtitle.setObjectName("Subtitle")
+        subtitle.setObjectName("PageSubtitle")
         layout.addWidget(subtitle)
 
         return header
@@ -239,11 +239,10 @@ class HelpView(QDialog):
     def _apply_styles(self) -> None:
         p = get_palette(self._theme)
         self.setStyleSheet(
-            f"""
+            get_shared_view_qss(self._theme)
+            + f"""
             QDialog {{ background-color: {p['bg_app']}; }}
             QWidget {{ color: {p['text_primary']}; }}
-            #Title {{ font-size: 18px; font-weight: 700; }}
-            #Subtitle {{ color: {p['text_muted']}; font-size: 12px; }}
             #StepCard {{
                 background-color: {p['bg_panel']}; border: 1px solid {p['border']}; border-radius: 10px;
                 padding: 12px;
@@ -263,10 +262,5 @@ class HelpView(QDialog):
             }}
             #Footer {{ border-top: 1px solid {p['border']}; margin-top: 4px; }}
             #CreditLabel {{ color: {p['text_muted']}; font-size: 11px; }}
-            #CloseButton {{
-                background-color: {p['accent']}; border-radius: 6px; padding: 8px 20px;
-                font-weight: 600; color: white;
-            }}
-            #CloseButton:hover {{ background-color: {p['accent_hover']}; }}
             """
         )

@@ -40,7 +40,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.presentation.viewmodels.indexing_viewmodel import IndexingViewModel, IndexingState
-from src.theme.theme_manager import get_palette
+from src.theme.theme_manager import get_palette, get_shared_view_qss
 
 logger = logging.getLogger("tilevision.presentation.views.indexing_view")
 
@@ -592,22 +592,12 @@ class IndexingView(QWidget):
     def _apply_styles(self) -> None:
         """Apply QSS theme styles to this view and all child widgets."""
         p = get_palette(self._theme)
-        self.setStyleSheet(f"""
+        self.setStyleSheet(get_shared_view_qss(self._theme) + f"""
             /* ── Base ─────────────────────────────────────────────────────── */
             #IndexingView {{
                 background-color: {p['bg_app']};
             }}
 
-            /* ── Header ───────────────────────────────────────────────────── */
-            #PageTitle {{
-                color: {p['text_primary']};
-                font-size: 20px;
-                font-weight: bold;
-            }}
-            #PageSubtitle {{
-                color: {p['text_muted']};
-                font-size: 12px;
-            }}
             #Separator {{
                 border: none;
                 border-top: 1px solid {p['border']};
@@ -656,25 +646,6 @@ class IndexingView(QWidget):
                 font-size: 12px;
             }}
 
-            /* ── Browse Button ────────────────────────────────────────────── */
-            #BrowseButton {{
-                background-color: {p['border_strong']};
-                border: 1px solid {p['accent_hover']};
-                border-radius: 6px;
-                color: {p['text_primary']};
-                font-size: 13px;
-                font-weight: 600;
-                padding: 6px 14px;
-            }}
-            #BrowseButton:hover {{
-                background-color: {p['accent_hover']};
-                border-color: {p['accent_hover']};
-                color: white;
-            }}
-            #BrowseButton:pressed {{
-                background-color: {p['accent']};
-            }}
-
             /* ── Progress Bar ─────────────────────────────────────────────── */
             #IndexingProgressBar {{
                 background-color: {p['bg_input']};
@@ -687,8 +658,8 @@ class IndexingView(QWidget):
             #IndexingProgressBar::chunk {{
                 background: qlineargradient(
                     x1: 0, y1: 0, x2: 1, y2: 0,
-                    stop: 0 #5C6BC0,
-                    stop: 1 #7C4DFF
+                    stop: 0 {p['accent']},
+                    stop: 1 {p['accent_soft']}
                 );
                 border-radius: 4px;
             }}
@@ -739,34 +710,6 @@ class IndexingView(QWidget):
                 font-size: 12px;
                 font-weight: 600;
                 padding-top: 4px;
-            }}
-
-            /* ── Start Button ─────────────────────────────────────────────── */
-            #StartButton {{
-                background: qlineargradient(
-                    x1: 0, y1: 0, x2: 1, y2: 0,
-                    stop: 0 #3949AB,
-                    stop: 1 #5C6BC0
-                );
-                border: none;
-                border-radius: 8px;
-                color: #FFFFFF;
-                font-size: 14px;
-                font-weight: bold;
-            }}
-            #StartButton:hover {{
-                background: qlineargradient(
-                    x1: 0, y1: 0, x2: 1, y2: 0,
-                    stop: 0 #5C6BC0,
-                    stop: 1 #7986CB
-                );
-            }}
-            #StartButton:pressed {{
-                background-color: #283593;
-            }}
-            #StartButton:disabled {{
-                background-color: {p['button_bg']};
-                color: {p['text_faint']};
             }}
 
             /* ── Pause Button ─────────────────────────────────────────────── */
@@ -825,17 +768,5 @@ class IndexingView(QWidget):
                 selection-background-color: {p['border_strong']};
             }}
 
-            /* ── Clear Log Button ─────────────────────────────────────────── */
-            #ClearLogButton {{
-                background-color: transparent;
-                border: 1px solid {p['border_strong']};
-                border-radius: 4px;
-                color: {p['text_muted']};
-                font-size: 11px;
-                padding: 2px 10px;
-            }}
-            #ClearLogButton:hover {{
-                color: {p['text_secondary']};
-                border-color: {p['text_faint']};
-            }}
+            /* ── Clear Log Button uses shared SecondaryButton styles ──────── */
         """)

@@ -20,7 +20,7 @@ Design Decision:
 
 import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from PySide6.QtCore import Qt, Slot, QUrl, QSize, QTimer
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QDesktopServices, QPixmap, QIcon, QColor
@@ -47,7 +47,7 @@ from PySide6.QtWidgets import (
 from src.core.models import SearchResult
 from src.presentation.viewmodels.search_viewmodel import SearchViewModel, SearchState
 from src.presentation.views.crop_dialog import CropDialog
-from src.theme.theme_manager import get_palette
+from src.theme.theme_manager import get_palette, get_shared_view_qss
 from src.utils.query_image_hints import confidence_message, should_suggest_crop
 
 logger = logging.getLogger("tilevision.presentation.views.search_view")
@@ -270,7 +270,8 @@ class SearchView(QWidget):
     """
 
     def __init__(
-        self, viewmodel: SearchViewModel, theme: str = "dark", parent: Optional[QWidget] = None
+        self, viewmodel: SearchViewModel, theme: str = "dark", parent: Optional[QWidget] = None,
+        on_open_profiles_settings: Optional[Callable[[], None]] = None,
     ) -> None:
         """
         Initialize the SearchView.
@@ -283,6 +284,7 @@ class SearchView(QWidget):
         super().__init__(parent)
         self._theme = theme
         self._viewmodel = viewmodel
+        self._on_open_profiles_settings = on_open_profiles_settings
         self._current_results: List[SearchResult] = []
         self._current_query_image_path: Optional[str] = None
         self._preview_panel = _ResultPreviewPanel(self, theme=theme)
@@ -419,7 +421,11 @@ class SearchView(QWidget):
             QMessageBox.information(self, "Export Catalogue", "No results to export yet.")
             return
 
-        dialog = ExportCatalogDialog(self)
+        dialog = ExportCatalogDialog(
+            self,
+            theme=self._theme,
+            on_open_profiles_settings=self._on_open_profiles_settings,
+        )
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
 
@@ -701,7 +707,8 @@ class SearchView(QWidget):
         # search scenario (WhatsApp photo, phone snapshot) where the user
         # usually wants "which exact tile is this" first, with the rest as
         # fallback options if the best match isn't quite right.
-        best_match_brush = QColor(get_palette(self._theme)["accent_hover"])
+        best_match_bg = QColor(get_palette(self._theme)["highlight_bg"])
+        best_match_text = QColor(get_palette(self._theme)["text_primary"])
 
         for row, result in enumerate(results):
             tile = result.tile
@@ -714,7 +721,7 @@ class SearchView(QWidget):
             thumb_item.setFlags(thumb_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self._results_table.setItem(row, 0, thumb_item)
 
-            similarity_text = f"⭐ {result.similarity_score:.1f}%" if is_best_match else f"{result.similarity_score:.1f}%"
+            similarity_text = f"★ {result.similarity_score:.1f}%" if is_best_match else f"{result.similarity_score:.1f}%"
             similarity_item = QTableWidgetItem(similarity_text)
             similarity_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             if is_best_match:
@@ -741,7 +748,11 @@ class SearchView(QWidget):
                 for col in range(self._results_table.columnCount()):
                     item = self._results_table.item(row, col)
                     if item is not None:
-                        item.setBackground(best_match_brush)
+                        item.setBackground(best_match_bg)
+                        item.setForeground(best_match_text)
+                        font = item.font()
+                        font.setBold(True)
+                        item.setFont(font)
 
     def _on_row_double_clicked(self, row: int, _column: int) -> None:
         self._open_image_at_row(row)
@@ -811,10 +822,8 @@ class SearchView(QWidget):
     def _apply_styles(self) -> None:
         p = get_palette(self._theme)
         self.setStyleSheet(
-            f"""
-            #PageTitle {{ font-size: 20px; font-weight: 700; color: {p['text_primary']}; }}
-            #PageSubtitle {{ font-size: 12px; color: {p['text_muted']}; }}
-
+            get_shared_view_qss(self._theme)
+            + f"""
             #FilterLabel {{ color: {p['text_muted']}; font-size: 12px; font-weight: 600; }}
             #FilterCombo {{
                 background-color: {p['bg_input']};
@@ -840,17 +849,6 @@ class SearchView(QWidget):
             #DropZoneTitle {{ font-size: 14px; font-weight: 600; color: {p['text_primary']}; }}
             #DropZoneSubtitle {{ font-size: 11px; color: {p['text_muted']}; }}
 
-            #SecondaryButton {{
-                background-color: {p['button_bg']};
-                color: {p['text_secondary']};
-                border: 1px solid {p['border_strong']};
-                border-radius: 6px;
-                padding: 8px 14px;
-                font-size: 12px;
-            }}
-            #SecondaryButton:hover:enabled {{ background-color: {p['button_hover']}; }}
-            #SecondaryButton:disabled {{ color: {p['text_faint']}; }}
-
             #ResultsTable {{
                 background-color: {p['bg_panel_alt']};
                 alternate-background-color: {p['bg_panel']};
@@ -859,7 +857,7 @@ class SearchView(QWidget):
                 border: 1px solid {p['border']};
                 border-radius: 8px;
             }}
-            #ResultsTable::item:selected {{ background-color: {p['accent_hover']}; }}
+            #ResultsTable::item:selected {{ background-color: {p['highlight_bg']}; color: {p['text_primary']}; }}
             QHeaderView::section {{
                 background-color: {p['row_alt']};
                 color: {p['text_secondary']};
@@ -878,7 +876,7 @@ class SearchView(QWidget):
                 background-color: {p['bg_panel']};
                 border-radius: 2px;
             }}
-            #SearchProgressBar::chunk {{ background-color: {p['accent_hover']}; }}
+            #SearchProgressBar::chunk {{ background-color: {p['accent_soft']}; }}
             #ConfidenceBanner {{
                 background-color: {p['warning_bg']};
                 color: {p['warning_text']};

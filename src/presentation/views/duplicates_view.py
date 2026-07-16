@@ -35,7 +35,8 @@ from PySide6.QtWidgets import (
 from src.core.models import TileImage
 from src.core.use_cases.find_duplicates import FindDuplicatesUseCase
 from src.presentation.workers.duplicates_worker import DuplicatesWorker
-from src.theme.theme_manager import get_palette
+from src.theme.theme_manager import get_palette, get_shared_view_qss
+from src.utils.brand_assets import APP_ICON_PATH
 
 logger = logging.getLogger("tilevision.presentation.views.duplicates_view")
 
@@ -194,6 +195,8 @@ class DuplicatesView(QDialog):
         self._theme = theme
 
         self.setWindowTitle("Duplicate Detection")
+        if APP_ICON_PATH.exists():
+            self.setWindowIcon(QIcon(str(APP_ICON_PATH)))
         self.resize(800, 620)
         self._setup_ui()
         self._apply_styles()
@@ -204,7 +207,7 @@ class DuplicatesView(QDialog):
         layout.setSpacing(12)
 
         title = QLabel("Duplicate and Near-Duplicate Tile Detection")
-        title.setObjectName("Title")
+        title.setObjectName("PageTitle")
         layout.addWidget(title)
 
         options_row = QHBoxLayout()
@@ -296,34 +299,11 @@ class DuplicatesView(QDialog):
     def _apply_styles(self) -> None:
         p = get_palette(self._theme)
         self.setStyleSheet(
-            f"""
+            get_shared_view_qss(self._theme)
+            + f"""
             QDialog {{ background-color: {p['bg_app']}; }}
             QWidget {{ color: {p['text_primary']}; }}
-            #Title {{ font-size: 16px; font-weight: 700; }}
             #StatusLabel {{ color: {p['text_muted']}; font-size: 12px; }}
-            #ScanButton {{
-                background-color: {p['accent']};
-                color: {p['button_text']};
-                border: none;
-                border-radius: 8px;
-                padding: 8px 18px;
-                font-weight: 700;
-            }}
-
-            #ScanButton:hover:enabled {{
-                background-color: {p['accent_hover']};
-                color: {p['button_text']};
-            }}
-
-            #ScanButton:pressed {{
-                background-color: {p['accent_hover']};
-                color: {p['button_text']};
-            }}
-
-            #ScanButton:disabled {{
-                background-color: {p['button_bg']};
-                color: {p['text_faint']};
-            }}
             #DuplicateGroupFrame {{
                 background-color: {p['bg_panel']}; border: 1px solid {p['border']}; border-radius: 8px;
                 padding: 10px; margin-bottom: 8px;

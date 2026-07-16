@@ -24,6 +24,7 @@ from typing import Optional
 from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtGui import QFont, QIcon
 
+from src.utils.brand_assets import APP_ICON_PATH
 from src.utils.logger import setup_logger
 from src.config.settings import AppSettings
 from src.data.db_context import DatabaseContext
@@ -91,9 +92,8 @@ def build_application() -> int:
     app.setOrganizationName("JD Software")
     app.setApplicationVersion("1.0.0")
 
-    app_icon_path = Path(__file__).resolve().parent / "resources" / "app_icon.ico"
-    if app_icon_path.exists():
-        app.setWindowIcon(QIcon(str(app_icon_path)))
+    if APP_ICON_PATH.exists():
+        app.setWindowIcon(QIcon(str(APP_ICON_PATH)))
 
     # Set modern default font
     default_font = QFont("Segoe UI", 10)
