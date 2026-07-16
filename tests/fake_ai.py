@@ -32,6 +32,9 @@ class FakeEmbedder:
     def extract_from_preprocessed(self, processed) -> np.ndarray:
         return self._rgb_embedding(processed.pil)
 
+    def extract_batch_from_preprocessed(self, processed_images) -> list:
+        return [self.extract_from_preprocessed(p) for p in processed_images]
+
     def extract(self, image_path: str) -> np.ndarray:
         with Image.open(image_path) as img:
             return self._rgb_embedding(img)
@@ -81,3 +84,6 @@ class FakeFeatureExtractor:
     def extract(self, image_path: str) -> TileFeatures:
         embedding = self._embedder.extract(image_path)
         return make_tile_features(embedding)
+
+    def extract_batch(self, image_paths: list[str]) -> list[TileFeatures]:
+        return [self.extract(path) for path in image_paths]

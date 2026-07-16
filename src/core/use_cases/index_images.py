@@ -9,6 +9,7 @@ Supports incremental indexing, perceptual hashing, SHA-256 matching, and coopera
 import logging
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
@@ -32,6 +33,15 @@ logger = logging.getLogger("tilevision.core.use_cases.index_images")
 # scan (rather than after every single file, which is a heavy full-index
 # disk write and would dominate indexing time on large catalogs).
 _CHECKPOINT_INTERVAL = 25
+
+# Number of images per batched DINOv2 inference during folder scans.
+_INDEX_BATCH_SIZE = 4
+
+
+@dataclass(slots=True)
+class _PendingIndexItem:
+    path: Path
+    was_previously_indexed: bool
 
 
 def parse_filename_metadata(stem: str) -> Tuple[str, str, str, str, str]:
@@ -215,6 +225,95 @@ class IndexImagesUseCase:
                 f"Indexing pipeline failed for file: {file_name}"
             ) from e
 
+    def _index_file_batch(
+        self,
+        items: List[_PendingIndexItem],
+        persist: bool = True,
+    ) -> None:
+        """
+        Index multiple files using batched DINOv2 inference and batch FAISS insert.
+        """
+        if not items:
+            return
+
+        timer = PipelineTimer("INDEX BATCH TIMING")
+        path_strings = [str(item.path) for item in items]
+        tiles: List[TileImage] = []
+
+        with timer.measure("image_loading"):
+            for item in items:
+                resolved_path = item.path
+                if not validate_image(resolved_path):
+                    raise ValueError(
+                        f"File is not a valid or accessible image: {resolved_path}"
+                    )
+
+                file_size, dimensions = get_image_metadata(resolved_path)
+                sha256_hash = compute_sha256(resolved_path)
+                perceptual_hash = compute_dhash(resolved_path)
+
+                width, height = 0, 0
+                if "x" in dimensions:
+                    try:
+                        w_str, h_str = dimensions.split("x")
+                        width, height = int(w_str), int(h_str)
+                    except ValueError:
+                        pass
+
+                brand, category, color, size, product_code = parse_filename_metadata(
+                    resolved_path.stem
+                )
+
+                tiles.append(
+                    TileImage(
+                        file_path=str(resolved_path),
+                        file_name=resolved_path.name,
+                        file_size=file_size,
+                        dimensions=dimensions,
+                        brand=brand,
+                        category=category,
+                        color=color,
+                        size=size,
+                        product_code=product_code,
+                        width=width,
+                        height=height,
+                        sha256_hash=sha256_hash,
+                        perceptual_hash=perceptual_hash,
+                        is_indexed=False,
+                    )
+                )
+
+        features_list = self._feature_extractor.extract_batch(path_strings)
+        extract_timings = self._feature_extractor.last_timings
+        timer.timings.record("preprocessing", extract_timings.preprocessing * len(items))
+        timer.timings.record("dinov2", extract_timings.dinov2 * len(items))
+        timer.timings.record("descriptors", extract_timings.descriptors * len(items))
+
+        db_ids: List[int] = []
+        vectors: List[List[float]] = []
+
+        with timer.measure("database"):
+            for tile, features in zip(tiles, features_list):
+                tile.features = features
+                db_id = self._repo.add(tile)
+                tile.id = db_id
+                tile.embedding_id = db_id
+                db_ids.append(db_id)
+                vectors.append(features.embedding.tolist())
+
+        for item in items:
+            generate_thumbnail(item.path, self._thumbnail_dir)
+
+        with timer.measure("faiss"):
+            self._index.update_vectors(db_ids, vectors, persist=persist)
+
+        with timer.measure("database"):
+            for tile in tiles:
+                tile.is_indexed = True
+                self._repo.add(tile)
+
+        timer.log_summary(log=logger)
+
     def scan_and_index_directory(
         self,
         directory_path: Path,
@@ -284,6 +383,32 @@ class IndexImagesUseCase:
         # detect deletions afterward (any previously-indexed tile under
         # this folder whose path isn't in this set was removed from disk).
         paths_seen_on_disk: set = set()
+        pending_batch: List[_PendingIndexItem] = []
+        indexed_since_checkpoint = 0
+
+        def _flush_pending_batch() -> None:
+            nonlocal new_count, modified_count, failed_count, indexed_since_checkpoint
+            if not pending_batch:
+                return
+
+            batch_size = len(pending_batch)
+            try:
+                self._index_file_batch(pending_batch, persist=False)
+                for item in pending_batch:
+                    if item.was_previously_indexed:
+                        modified_count += 1
+                    else:
+                        new_count += 1
+                indexed_since_checkpoint += batch_size
+            except Exception as e:
+                failed_count += batch_size
+                logger.error(
+                    "Batch indexing failed for %d file(s): %s",
+                    batch_size,
+                    e,
+                )
+            finally:
+                pending_batch.clear()
 
         for file_path in all_files:
             # 1. Cooperative Pause check
@@ -298,6 +423,7 @@ class IndexImagesUseCase:
             # 2. Cooperative Cancel check
             if cancel_event and cancel_event.is_set():
                 logger.warning("Indexing worker canceled by user request. Stopping...")
+                _flush_pending_batch()
                 is_completed = False
                 break
 
@@ -334,25 +460,25 @@ class IndexImagesUseCase:
                         skipped_count += 1
                         continue
 
-                # Run indexing pipeline. persist=False: avoid a full FAISS
-                # index disk write after every single file — see checkpoint
-                # flush below instead.
-                self.index_single_file(resolved_path, persist=False)
+                pending_batch.append(
+                    _PendingIndexItem(
+                        path=resolved_path,
+                        was_previously_indexed=was_previously_indexed,
+                    )
+                )
 
-                if was_previously_indexed:
-                    modified_count += 1
-                else:
-                    new_count += 1
+                if len(pending_batch) >= _INDEX_BATCH_SIZE:
+                    _flush_pending_batch()
+
             except Exception as e:
                 failed_count += 1
                 logger.error(f"Error indexing file during folder scan: {resolved_path}. Error: {e}")
-                # Continue scanning other files in case of a single corrupt image
 
-            # Checkpoint: flush FAISS to disk periodically so a crash, power
-            # loss, or long-running scan never loses more than one batch of
-            # progress (also matters if the user leaves it running overnight).
-            if (new_count + modified_count) > 0 and processed_count % _CHECKPOINT_INTERVAL == 0:
+            if indexed_since_checkpoint > 0 and processed_count % _CHECKPOINT_INTERVAL == 0:
                 self._index.save_index()
+                indexed_since_checkpoint = 0
+
+        _flush_pending_batch()
 
         # 4. Deletion detection (Task 2): any tile previously indexed under
         #    this folder that we did NOT see on disk during this scan was

@@ -174,6 +174,43 @@ class DINOv2Embedder:
         )
         return final_embedding
 
+    def extract_batch_from_preprocessed(
+        self,
+        processed_images: List[PreprocessedImage],
+    ) -> List[np.ndarray]:
+        """
+        Extract embeddings for multiple preprocessed images.
+
+        All views across the batch are run in a single DINOv2 forward pass
+        for better throughput during folder indexing.
+        """
+        if not processed_images:
+            return []
+
+        all_views: List[Image.Image] = []
+        view_counts: List[int] = []
+
+        for processed in processed_images:
+            views = self._generate_views(processed.pil)
+            view_counts.append(len(views))
+            all_views.extend(views)
+
+        view_embeddings = self._extract_batch(all_views)
+
+        results: List[np.ndarray] = []
+        offset = 0
+        for count in view_counts:
+            chunk = view_embeddings[offset : offset + count]
+            results.append(self._fuse_embeddings(chunk))
+            offset += count
+
+        logger.debug(
+            "Batched DINOv2 embeddings: images=%d views=%d",
+            len(processed_images),
+            len(all_views),
+        )
+        return results
+
     def extract(self, image_path: str) -> np.ndarray:
         """
         Extract embedding from a file path (loads + preprocesses once).
