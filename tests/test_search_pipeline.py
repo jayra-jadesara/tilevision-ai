@@ -7,6 +7,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from src.ai.models import TileFeatures
 from src.ai.descriptors.color_descriptor import ColorDescriptor
 from src.ai.feature_versions import (
     CURRENT_FEATURE_VERSION,
@@ -59,6 +60,11 @@ def test_reranker_embedding_weight_is_at_least_half():
         weights = HybridReRanker.get_weights(pattern_type)
         assert weights["embedding"] >= 0.50
         assert abs(sum(weights.values()) - 1.0) < 1e-6
+
+
+def test_speckled_weights_favor_embedding():
+    weights = HybridReRanker.get_weights(PatternType.SPECKLED)
+    assert weights["embedding"] >= 0.65
 
 
 def test_pattern_compatibility_penalizes_speckled_vs_plain():
@@ -127,3 +133,51 @@ def test_identical_embeddings_score_highest():
     diff_score = reranker.score(query, different).final
 
     assert same_score > diff_score
+
+
+def test_speckled_query_prefers_higher_embedding_over_texture_color():
+    """Regression: cream marble must not outrank a closer white speckled match."""
+    reranker = HybridReRanker()
+    query = _features([0.65, 0.10, 0.05, 0.05])
+
+    white_speckled = TileFeatures(
+        embedding=np.asarray([0.65, 0.10, 0.05, 0.05], dtype=np.float32),
+        color_histogram=np.full(ColorDescriptor.vector_size(), 0.01, dtype=np.float32),
+        texture_histogram=np.full(54, 0.02, dtype=np.float32),
+        edge_histogram=np.full(36, 0.02, dtype=np.float32),
+        pattern_features=np.asarray(
+            [0.003, 0.0006, 0.0006, 0.79, 0.046, 0.59, 0.86, 0.98],
+            dtype=np.float32,
+        ),
+        dominant_color=(240, 240, 240),
+        width=32,
+        height=32,
+    )
+    cream_marble = TileFeatures(
+        embedding=np.asarray([0.35, 0.20, 0.10, 0.05], dtype=np.float32),
+        color_histogram=np.full(ColorDescriptor.vector_size(), 0.05, dtype=np.float32),
+        texture_histogram=np.full(54, 0.08, dtype=np.float32),
+        edge_histogram=np.full(36, 0.08, dtype=np.float32),
+        pattern_features=np.asarray(
+            [0.002, 0.0005, 0.0015, 0.31, 0.077, 0.24, 0.54, 0.81],
+            dtype=np.float32,
+        ),
+        dominant_color=(220, 210, 190),
+        width=32,
+        height=32,
+    )
+
+    speckled_score = reranker.score(
+        query,
+        white_speckled,
+        query_pattern_type=PatternType.SPECKLED,
+        candidate_pattern_type=PatternType.SPECKLED,
+    ).final
+    cream_score = reranker.score(
+        query,
+        cream_marble,
+        query_pattern_type=PatternType.SPECKLED,
+        candidate_pattern_type=PatternType.SPECKLED,
+    ).final
+
+    assert speckled_score > cream_score

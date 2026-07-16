@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from src.ai.candidate_filter import CandidateFilter
+from src.ai.models import TileFeatures
 from src.ai.pattern_classifier import PatternClassifier
 from src.ai.similarity_score import calibrate_display_percent
 
@@ -144,14 +145,34 @@ class SearchTilesUseCase:
                 query_sha256 = compute_sha256(query_path)
                 query_dhash = compute_dhash(query_path)
 
-            logger.info("Computing embedding for query image...")
-            query_features = self._feature_extractor.extract(
-                str(query_path)
-            )
-            extract_timings = self._feature_extractor.last_timings
-            timer.timings.record("preprocessing", extract_timings.preprocessing)
-            timer.timings.record("dinov2", extract_timings.dinov2)
-            timer.timings.record("descriptors", extract_timings.descriptors)
+            query_features: TileFeatures | None = None
+            cached_tile = self._repo.get_by_path(str(query_path.resolve()))
+            if (
+                cached_tile
+                and cached_tile.is_indexed
+                and cached_tile.features is not None
+                and cached_tile.sha256_hash == query_sha256
+            ):
+                query_features = cached_tile.features
+                logger.info(
+                    "Reusing indexed features for catalog query: %s",
+                    query_path.name,
+                )
+
+            if query_features is None:
+                logger.info("Computing embedding for query image...")
+                with timer.measure("feature_extract"):
+                    query_features = self._feature_extractor.extract(
+                        str(query_path)
+                    )
+                extract_timings = self._feature_extractor.last_timings
+                timer.timings.record("preprocessing", extract_timings.preprocessing)
+                timer.timings.record("dinov2", extract_timings.dinov2)
+                timer.timings.record("descriptors", extract_timings.descriptors)
+            else:
+                timer.timings.record("preprocessing", 0.0)
+                timer.timings.record("dinov2", 0.0)
+                timer.timings.record("descriptors", 0.0)
 
 
             # ----------------------------------------

@@ -35,7 +35,7 @@ logger = logging.getLogger("tilevision.core.use_cases.index_images")
 _CHECKPOINT_INTERVAL = 25
 
 # Number of images per batched DINOv2 inference during folder scans.
-_INDEX_BATCH_SIZE = 4
+_INDEX_BATCH_SIZE = 8
 
 
 @dataclass(slots=True)

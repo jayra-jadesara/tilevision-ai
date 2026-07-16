@@ -113,6 +113,14 @@ class HybridReRanker:
         )
         final = self._clamp01(base_final + compat)
 
+        # Weak DINOv2 matches must not outrank strong semantic neighbors
+        # because texture/color descriptors align on unrelated surfaces.
+        if (
+            query_pattern_type in (PatternType.SPECKLED, PatternType.TERRAZZO)
+            and embedding < 0.42
+        ):
+            final *= 0.82
+
         return SearchScore(
             embedding=embedding,
             color=color,
@@ -129,11 +137,11 @@ class HybridReRanker:
         """
         if pattern_type == PatternType.SPECKLED:
             weights = {
-                "embedding": 0.55,
-                "pattern": 0.22,
-                "color": 0.10,
-                "texture": 0.08,
-                "edge": 0.05,
+                "embedding": 0.70,
+                "pattern": 0.20,
+                "color": 0.05,
+                "texture": 0.03,
+                "edge": 0.02,
             }
         elif pattern_type == PatternType.TERRAZZO:
             weights = {

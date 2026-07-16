@@ -214,7 +214,7 @@ class FeatureExtractor:
         image_path: str,
     ) -> TileFeatures:
 
-        logger.info(
+        logger.debug(
             "Extracting AI features: %s",
             image_path,
         )
