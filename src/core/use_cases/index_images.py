@@ -36,7 +36,8 @@ logger = logging.getLogger("tilevision.core.use_cases.index_images")
 _CHECKPOINT_INTERVAL = 25
 
 # Number of images per batched DINOv2 inference during folder scans.
-_INDEX_BATCH_SIZE = 8
+# Larger batches improve CPU throughput when memory allows.
+_INDEX_BATCH_SIZE = 12
 
 _SIZE_PATTERN = re.compile(r"(\d{2,4})\s*[xX×]\s*(\d{2,4})")
 _COLOR_TOKENS = frozenset({

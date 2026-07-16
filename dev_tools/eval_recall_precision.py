@@ -75,6 +75,13 @@ def _parse_k_values(raw: str) -> List[int]:
 
 
 def _load_manifest(path: Path) -> List[EvalQuery]:
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Manifest not found: {path}\n"
+            "Create it with:\n"
+            "  python dev_tools/generate_eval_manifest.py\n"
+            "Or copy eval/queries.example.jsonl and edit paths/IDs."
+        )
     queries: List[EvalQuery] = []
     with open(path, encoding="utf-8") as handle:
         for line_no, line in enumerate(handle, start=1):
@@ -345,6 +352,13 @@ def run_evaluation(args: argparse.Namespace) -> int:
         if query.query_id is not None:
             relevant_ids.discard(query.query_id)
 
+        if not relevant_ids:
+            logger.info(
+                "Skipping query with no relevant_ids: %s",
+                query.query_path,
+            )
+            continue
+
         recall, precision, mrr, ndcg = _compute_metrics(
             retrieved_ids, relevant_ids, k_values
         )
@@ -377,6 +391,23 @@ def run_evaluation(args: argparse.Namespace) -> int:
     print()
     print("=== By query pattern family ===")
     print(_format_table(dict(by_pattern), k_values))
+
+    target_k = args.target_k
+    target_recall = args.target_recall
+    if overall.query_count > 0 and target_k in k_values:
+        recall_at_target = overall.recall_sums[target_k] / overall.query_count
+        print()
+        print(
+            f"=== Accuracy target: Recall@{target_k} >= {target_recall:.0%} ==="
+        )
+        status = "PASS" if recall_at_target >= target_recall else "FAIL"
+        print(f"{status}: Recall@{target_k} = {recall_at_target:.1%}")
+        if status == "FAIL":
+            print(
+                "Tip: add more ground-truth groups in eval/my_queries.jsonl or "
+                "run dev_tools/generate_eval_manifest.py after re-indexing."
+            )
+            return 2
 
     if args.output:
         payload = {
@@ -447,6 +478,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         default=None,
         help="Optional path to write JSON summary.",
+    )
+    parser.add_argument(
+        "--target-recall",
+        type=float,
+        default=0.90,
+        help="Target Recall@K for pass/fail summary (default: 0.90).",
+    )
+    parser.add_argument(
+        "--target-k",
+        type=int,
+        default=5,
+        help="K value used for the accuracy target (default: 5).",
     )
     parser.add_argument(
         "--log-level",

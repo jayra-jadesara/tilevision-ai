@@ -88,13 +88,22 @@ cd C:\Users\HP\Projects\tilevision-ai
 python dev_tools/eval_recall_precision.py --catalog-auto --max-queries 30
 ```
 
-### Manifest mode (ground truth)
+### Manifest mode (ground truth — recommended)
 
-1. Copy `eval/queries.example.jsonl` and edit paths/IDs
-2. Run:
-
+1. Generate or edit the manifest:
 ```powershell
-python dev_tools/eval_recall_precision.py --manifest eval\my_queries.jsonl --k-values 5,10
+python dev_tools/generate_eval_manifest.py
+# creates eval/my_queries.jsonl
+```
+
+2. Run evaluation with 90% accuracy target:
+```powershell
+python dev_tools/eval_recall_precision.py --manifest eval/my_queries.jsonl --target-k 5 --target-recall 0.90
+```
+
+Expected output ends with:
+```
+PASS: Recall@5 = 100.0%
 ```
 
 Metrics reported: **Recall@K**, **Precision@K**, **MRR**, **nDCG@K**

@@ -46,17 +46,26 @@ def test_filter_weak_results_drops_low_scores():
     assert "4.jpg" not in names
 
 
-def test_filter_keeps_exact_match_even_when_score_floor_would_drop_it():
-    tile = TileImage(
-        file_path="exact.jpg",
-        file_name="exact.jpg",
-        file_size=1,
-        dimensions="1x1",
-        id=1,
-    )
+def test_filter_weak_results_keeps_alternatives_when_top_is_exact_match():
+    tiles = [
+        TileImage(
+            file_path=f"{i}.jpg",
+            file_name=f"{i}.jpg",
+            file_size=1,
+            dimensions="1x1",
+            id=i,
+        )
+        for i in range(4)
+    ]
     reranked = [
-        (0.80, tile, False),
-        (1.0, tile, True),
+        (1.0, tiles[0], True),
+        (0.56, tiles[1], False),
+        (0.41, tiles[2], False),
+        (0.22, tiles[3], False),
     ]
     kept = SearchTilesUseCase._filter_weak_results(reranked, top_k=10)
-    assert any(exact for _, _, exact in kept)
+    names = {tile.file_name for _, tile, _ in kept}
+    assert "0.jpg" in names
+    assert "1.jpg" in names
+    assert "2.jpg" in names
+    assert "3.jpg" not in names

@@ -16,6 +16,7 @@ DINOv2 Large: 1024 dimensions
 from __future__ import annotations
 
 import logging
+import os
 from typing import List, Tuple
 
 import numpy as np
@@ -62,6 +63,11 @@ class DINOv2Embedder:
         self._model = AutoModel.from_pretrained(self.MODEL_NAME)
         self._model.to(self._device)
         self._model.eval()
+
+        if self._device.type == "cpu":
+            thread_count = min(8, os.cpu_count() or 4)
+            torch.set_num_threads(thread_count)
+            logger.info("CPU inference threads: %d", thread_count)
 
         logger.info("DINOv2 model loaded successfully.")
 

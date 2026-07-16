@@ -35,7 +35,9 @@ TileVision AI v2
 from __future__ import annotations
 
 import logging
+import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import List
 
@@ -152,9 +154,9 @@ class FeatureExtractor:
         total_start = time.perf_counter()
 
         t0 = time.perf_counter()
-        processed_images = [
-            ImagePreprocessor.preprocess(path) for path in image_paths
-        ]
+        worker_count = min(4, len(image_paths))
+        with ThreadPoolExecutor(max_workers=worker_count) as pool:
+            processed_images = list(pool.map(ImagePreprocessor.preprocess, image_paths))
         preprocess_elapsed = time.perf_counter() - t0
 
         t1 = time.perf_counter()
@@ -166,14 +168,23 @@ class FeatureExtractor:
         t2 = time.perf_counter()
         features_list: List[TileFeatures] = []
 
-        for processed, embedding in zip(processed_images, embeddings):
+        with ThreadPoolExecutor(max_workers=worker_count) as pool:
+            descriptor_results = list(
+                pool.map(self.extract_descriptors_from_preprocessed, processed_images)
+            )
+
+        for processed, embedding, descriptor_tuple in zip(
+            processed_images,
+            embeddings,
+            descriptor_results,
+        ):
             (
                 color_hist,
                 texture_hist,
                 edge_hist,
                 pattern_features,
                 dominant,
-            ) = self.extract_descriptors_from_preprocessed(processed)
+            ) = descriptor_tuple
 
             features_list.append(
                 TileFeatures(

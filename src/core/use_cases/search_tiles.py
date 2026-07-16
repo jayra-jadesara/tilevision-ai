@@ -55,7 +55,7 @@ _NEAR_EXACT_DHASH_THRESHOLD = 3
 # Drop clearly weak matches so a small catalog does not always fill top_k
 # with unrelated tiles (room photos, marble, etc.).
 _WEAK_RESULT_RELATIVE_FLOOR = 0.52
-_WEAK_RESULT_ABSOLUTE_RAW_FLOOR = 0.38
+_WEAK_RESULT_ABSOLUTE_RAW_FLOOR = 0.30
 
 # Crop-from-catalog: when embedding similarity to the source product is this
 # high, treat it as the same catalog tile (100% match).
@@ -471,9 +471,15 @@ class SearchTilesUseCase:
         if not reranked:
             return []
 
-        top_score = reranked[0][0]
+        reference_score = reranked[0][0]
+        if reranked[0][2]:
+            for score, _, exact_match in reranked[1:]:
+                if not exact_match:
+                    reference_score = score
+                    break
+
         min_raw = max(
-            top_score * _WEAK_RESULT_RELATIVE_FLOOR,
+            reference_score * _WEAK_RESULT_RELATIVE_FLOOR,
             _WEAK_RESULT_ABSOLUTE_RAW_FLOOR,
         )
 
