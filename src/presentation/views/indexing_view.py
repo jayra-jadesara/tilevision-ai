@@ -541,6 +541,10 @@ class IndexingView(QWidget):
         )
         self._current_file_label.setText("Ready — click Start Indexing to check for changes.")
 
+    def refresh_folder_display(self) -> None:
+        """Refresh indexed image count after background auto-indexing."""
+        self._viewmodel.refresh_folder_stats()
+
     @staticmethod
     def _format_last_indexed(when) -> str:
         """

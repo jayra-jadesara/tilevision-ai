@@ -99,3 +99,20 @@ def test_backup_still_works_without_path_being_displayed(qapp, tmp_path):
     settings = AppSettings(config_dir=tmp_path)
     sv = SettingsView(settings=settings, db_path_provider=lambda: Path("/some/db/path.db"))
     assert sv._backup_button.isEnabled()
+
+
+def test_refresh_feature_status_updates_indexed_tiles_count(qapp, tmp_path):
+    settings = AppSettings(config_dir=tmp_path)
+    counts = {"value": 22}
+    sv = SettingsView(
+        settings=settings,
+        catalog_count_provider=lambda: counts["value"],
+        feature_version_provider=None,
+    )
+
+    assert sv._tiles_count_label.text() == "22"
+
+    counts["value"] = 23
+    sv.refresh_feature_status()
+
+    assert sv._tiles_count_label.text() == "23"

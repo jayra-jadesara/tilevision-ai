@@ -161,6 +161,22 @@ class IndexingViewModel(QObject):
         )
         self.persisted_folder_loaded.emit(status)
 
+    @Slot()
+    def refresh_folder_stats(self) -> None:
+        """Re-read indexed image count after auto-index or other catalog changes."""
+        get_status = getattr(self._use_case, "get_last_indexed_folder_status", None)
+        if get_status is None or self._selected_folder is None:
+            return
+
+        status = get_status()
+        if status is None:
+            return
+
+        if Path(status.folder_path).resolve() != self._selected_folder.resolve():
+            return
+
+        self.persisted_folder_loaded.emit(status)
+
     # ── Public Slots (called by the View) ────────────────────────────────────
 
     @Slot(str)

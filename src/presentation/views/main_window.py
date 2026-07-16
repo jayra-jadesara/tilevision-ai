@@ -462,6 +462,8 @@ class MainWindow(QMainWindow):
         settings = getattr(self, "_settings_view", None)
         if settings is not None and hasattr(settings, "refresh_feature_status"):
             settings.refresh_feature_status()
+        if hasattr(self, "_indexing_view") and hasattr(self._indexing_view, "refresh_folder_display"):
+            self._indexing_view.refresh_folder_display()
         if hasattr(self, "_dashboard_view"):
             self._dashboard_view.refresh()
 

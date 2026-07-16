@@ -110,7 +110,13 @@ class SettingsView(QWidget):
         self.refresh_feature_status()
 
     def refresh_feature_status(self) -> None:
-        """Update the feature-version row in the overview section."""
+        """Update overview stat cards that depend on live catalog data."""
+        if hasattr(self, "_tiles_count_label") and self._catalog_count_provider is not None:
+            try:
+                self._tiles_count_label.setText(str(self._catalog_count_provider()))
+            except Exception as exc:
+                logger.warning("Failed to read catalog count: %s", exc)
+
         if self._feature_version_provider is None:
             self._feature_status_label.setText("—")
             return
@@ -223,7 +229,7 @@ class SettingsView(QWidget):
         row.setSpacing(12)
 
         catalog_count = self._catalog_count_provider() if self._catalog_count_provider else "—"
-        tiles_card, _ = self._make_stat_card("Indexed Tiles", str(catalog_count))
+        tiles_card, self._tiles_count_label = self._make_stat_card("Indexed Tiles", str(catalog_count))
         row.addWidget(tiles_card, stretch=1)
 
         feature_card, self._feature_status_label = self._make_stat_card("Feature Index", "—")
