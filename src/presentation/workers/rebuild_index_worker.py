@@ -23,8 +23,8 @@ logger = logging.getLogger("tilevision.presentation.workers.rebuild_index_worker
 class RebuildIndexWorker(QThread):
     """Background worker that force-reindexes every known folder."""
 
-    # (processed_folders, total_folders, current_folder_name)
-    progress_updated = Signal(int, int, str)
+    # (processed_files, total_files, current_filename, eta_seconds)
+    progress_updated = Signal(int, int, str, float)
 
     # (total_files_reembedded, total_failed)
     rebuild_finished = Signal(int, int)
@@ -45,19 +45,34 @@ class RebuildIndexWorker(QThread):
     def run(self) -> None:
         total_reembedded = 0
         total_failed = 0
-        total = len(self._folder_paths)
 
         try:
-            for i, folder_path in enumerate(self._folder_paths):
-                self.progress_updated.emit(i, total, folder_path)
-                result = self._use_case.scan_and_index_directory(folder_path, force=True)
+            for folder_path in self._folder_paths:
+
+                def on_progress(
+                    processed: int,
+                    total: int,
+                    current_filename: str,
+                    eta_seconds: float,
+                ) -> None:
+                    self.progress_updated.emit(
+                        processed,
+                        total,
+                        current_filename,
+                        eta_seconds,
+                    )
+
+                result = self._use_case.scan_and_index_directory(
+                    folder_path,
+                    force=True,
+                    progress_callback=on_progress,
+                )
                 total_reembedded += result.indexed_count
                 total_failed += result.failed_count
 
-            self.progress_updated.emit(total, total, "Done")
             logger.info(
                 f"FAISS rebuild complete: {total_reembedded} file(s) re-embedded, "
-                f"{total_failed} failed, across {total} folder(s)."
+                f"{total_failed} failed, across {len(self._folder_paths)} folder(s)."
             )
             self.rebuild_finished.emit(total_reembedded, total_failed)
         except Exception as e:

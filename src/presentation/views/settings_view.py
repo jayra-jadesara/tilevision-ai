@@ -55,6 +55,7 @@ class SettingsView(QWidget):
         db_path_provider: Optional[Callable[[], Path]] = None,
         indexing_use_case: Optional[IndexImagesUseCase] = None,
         indexed_folders_provider: Optional[Callable[[], List[str]]] = None,
+        on_catalog_changed: Optional[Callable[[], None]] = None,
         theme: str = "dark",
         parent: Optional[QWidget] = None,
     ) -> None:
@@ -87,6 +88,7 @@ class SettingsView(QWidget):
         self._db_path_provider = db_path_provider
         self._indexing_use_case = indexing_use_case
         self._indexed_folders_provider = indexed_folders_provider
+        self._on_catalog_changed = on_catalog_changed
         self._rebuild_worker: Optional[RebuildIndexWorker] = None
         self._rebuild_progress_dialog: Optional[QProgressDialog] = None
         self._setup_ui()
@@ -198,9 +200,10 @@ class SettingsView(QWidget):
         layout = QVBoxLayout(box)
 
         note = QLabel(
-            "These actions affect your whole catalog. Backup Database and Export Logs "
-            "are always safe; Rebuild FAISS Index and Clear Cache are safe but will take "
-            "time to regenerate on next use."
+            "Rebuild FAISS Index re-analyzes every tile after a software update. "
+            "Clear Cache removes thumbnails only (they regenerate automatically). "
+            "Backup Database and Export Logs are optional support tools — use them "
+            "before major changes or when contacting support."
         )
         note.setObjectName("SectionNote")
         note.setWordWrap(True)
@@ -378,12 +381,14 @@ class SettingsView(QWidget):
 
         self._rebuild_button.setEnabled(False)
         self._rebuild_progress_dialog = QProgressDialog(
-            "Rebuilding FAISS index...", None, 0, len(folders), self
+            "Preparing rebuild...", None, 0, 1, self
         )
         self._rebuild_progress_dialog.setWindowTitle("Rebuild FAISS Index")
         self._rebuild_progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
         self._rebuild_progress_dialog.setMinimumDuration(0)
         self._rebuild_progress_dialog.setCancelButton(None)
+        self._rebuild_progress_dialog.setAutoClose(False)
+        self._rebuild_progress_dialog.setAutoReset(False)
         self._rebuild_progress_dialog.show()
 
         self._rebuild_worker = RebuildIndexWorker(self._indexing_use_case, folders)
@@ -393,17 +398,38 @@ class SettingsView(QWidget):
         self._rebuild_worker.finished.connect(self._rebuild_worker.deleteLater)
         self._rebuild_worker.start()
 
-    def _on_rebuild_progress(self, processed: int, total: int, current_folder: str) -> None:
-        if self._rebuild_progress_dialog is not None:
-            self._rebuild_progress_dialog.setValue(processed)
-            self._rebuild_progress_dialog.setLabelText(f"Rebuilding: {current_folder} ({processed}/{total})")
+    def _on_rebuild_progress(
+        self,
+        processed: int,
+        total: int,
+        current_name: str,
+        eta_seconds: float,
+    ) -> None:
+        dialog = self._rebuild_progress_dialog
+        if dialog is None:
+            return
+
+        if total > 0 and dialog.maximum() != total:
+            dialog.setMaximum(total)
+
+        dialog.setValue(min(processed, max(total, 1)))
+        eta_text = f" — ~{int(eta_seconds)}s remaining" if eta_seconds > 1 else ""
+        dialog.setLabelText(
+            f"Rebuilding: {current_name} ({processed}/{total}){eta_text}"
+        )
 
     def _on_rebuild_finished(self, total_reembedded: int, total_failed: int) -> None:
         self._rebuild_button.setEnabled(True)
         if self._rebuild_progress_dialog is not None:
+            self._rebuild_progress_dialog.setValue(
+                self._rebuild_progress_dialog.maximum()
+            )
             self._rebuild_progress_dialog.close()
             self._rebuild_progress_dialog = None
         self._rebuild_worker = None
+
+        if self._on_catalog_changed is not None:
+            self._on_catalog_changed()
 
         message = f"Rebuild complete. {total_reembedded} image(s) re-indexed."
         if total_failed:

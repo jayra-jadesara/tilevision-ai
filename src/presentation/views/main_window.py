@@ -49,7 +49,7 @@ from src.presentation.views.duplicates_view import DuplicatesView
 from src.presentation.views.settings_view import SettingsView
 from src.presentation.views.dashboard_view import DashboardView
 from src.presentation.views.help_view import HelpView
-from src.theme.theme_manager import adapt_legacy_stylesheet, get_app_stylesheet
+from src.theme.theme_manager import adapt_legacy_stylesheet, get_app_stylesheet, get_palette
 
 logger = logging.getLogger("tilevision.presentation.views.main_window")
 
@@ -203,6 +203,7 @@ class MainWindow(QMainWindow):
 
         self._setup_ui()
         self._apply_styles()
+        self._apply_stale_banner_style()
         self._setup_status_bar()
         self._connect_signals()
         self.refresh_stale_feature_banner()
@@ -309,6 +310,7 @@ class MainWindow(QMainWindow):
                 db_path_provider=self._db_path_provider,
                 indexing_use_case=self._indexing_use_case,
                 indexed_folders_provider=self._indexed_folders_provider,
+                on_catalog_changed=self._on_catalog_changed,
                 theme=self._current_theme,
             )
             self._content_stack.addWidget(self._settings_view)  # index 3
@@ -457,6 +459,12 @@ class MainWindow(QMainWindow):
             self._search_viewmodel.load_filter_options()
         self.refresh_stale_feature_banner()
 
+    def _on_catalog_changed(self) -> None:
+        """Refresh UI after rebuild/re-index updates the catalog."""
+        self.refresh_stale_feature_banner()
+        if self._search_viewmodel is not None:
+            self._search_viewmodel.load_filter_options()
+
     def refresh_stale_feature_banner(self) -> None:
         """Show or hide the stale-feature warning banner."""
         if self._feature_version_provider is None:
@@ -556,6 +564,7 @@ class MainWindow(QMainWindow):
                 view.set_theme(theme)
 
         logger.info(f"Applied '{theme}' theme.")
+        self._apply_stale_banner_style()
 
     # ── Slots ─────────────────────────────────────────────────────────────────
 
@@ -624,6 +633,21 @@ class MainWindow(QMainWindow):
 
     # ── Styling ───────────────────────────────────────────────────────────────
 
+    def _apply_stale_banner_style(self) -> None:
+        """Apply theme-aware colors to the stale-feature warning banner."""
+        palette = get_palette(self._current_theme)
+        self._stale_banner.setStyleSheet(
+            f"""
+            #StaleFeatureBanner {{
+                background-color: {palette['warning_bg']};
+                color: {palette['warning_text']};
+                padding: 8px 12px;
+                border-bottom: 1px solid {palette['border']};
+                font-size: 12px;
+            }}
+            """
+        )
+
     def _apply_styles(self) -> None:
         """Apply global QSS styles to the main window."""
         self.setStyleSheet(adapt_legacy_stylesheet("""
@@ -633,13 +657,6 @@ class MainWindow(QMainWindow):
             }
             #CentralWidget {
                 background-color: #1A1D26;
-            }
-            #StaleFeatureBanner {
-                background-color: #453410;
-                color: #FBBF24;
-                padding: 8px 12px;
-                border-bottom: 1px solid #5C4A1A;
-                font-size: 12px;
             }
 
             /* ── Sidebar ────────────────────────────────────────────────────  */
