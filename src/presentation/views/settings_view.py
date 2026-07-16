@@ -540,25 +540,28 @@ class SettingsView(QWidget):
             get_shared_view_qss(self._theme)
             + f"""
             QTabWidget::pane {{
-                border: 1px solid {p['border']};
-                border-radius: 8px;
-                background-color: {p['bg_panel']};
-                top: -1px;
+                border: none;
+                background-color: transparent;
+                top: 0;
             }}
             QTabBar::tab {{
-                background-color: {p['button_bg']};
+                background-color: transparent;
                 color: {p['text_secondary']};
-                border: 1px solid {p['border']};
-                border-bottom: none;
-                border-top-left-radius: 6px;
-                border-top-right-radius: 6px;
-                padding: 8px 16px;
-                margin-right: 2px;
+                border: none;
+                border-bottom: 2px solid transparent;
+                border-top-left-radius: 0;
+                border-top-right-radius: 0;
+                padding: 10px 18px;
+                margin-right: 4px;
             }}
             QTabBar::tab:selected {{
-                background-color: {p['bg_panel']};
+                background-color: transparent;
                 color: {p['accent_text']};
+                border-bottom: 2px solid {p['accent']};
                 font-weight: 600;
+            }}
+            QTabBar::tab:hover {{
+                color: {p['text_primary']};
             }}
             QGroupBox {{
                 color: {p['text_primary']}; border: 1px solid {p['border']}; border-radius: 8px;

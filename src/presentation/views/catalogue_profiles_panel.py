@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QRegularExpression
+from PySide6.QtGui import QRegularExpressionValidator
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -19,10 +20,22 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QMessageBox,
     QSplitter,
+    QGroupBox,
+    QCheckBox,
+    QSpinBox,
+    QFrame,
+    QScrollArea,
 )
 
 from src.services.catalogue_master_service import CatalogueMaster, CatalogueMasterService
 from src.theme.theme_manager import get_palette, get_shared_view_qss
+from src.utils.profile_validation import (
+    validate_email,
+    validate_logo_path,
+    validate_phone,
+    validate_profile_name,
+    validate_website,
+)
 
 
 class CatalogueProfilesPanel(QWidget):
@@ -35,97 +48,261 @@ class CatalogueProfilesPanel(QWidget):
         self._theme = theme
         self._service = CatalogueMasterService()
         self._editing_id: Optional[str] = None
+        self._field_errors: dict[str, QLabel] = {}
         self._build_ui()
         self._refresh_list()
         self._apply_styles()
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 8, 0, 0)
-        layout.setSpacing(12)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(12, 12, 12, 12)
+        outer.setSpacing(10)
 
         hint = QLabel(
-            "Create company profiles here once, then pick them from the Export Catalogue "
-            "dropdown on the Search page."
+            "Configure company details and export options once here. On Search, pick a profile "
+            "and export — no extra editing needed."
         )
         hint.setWordWrap(True)
         hint.setObjectName("PageSubtitle")
-        layout.addWidget(hint)
+        outer.addWidget(hint)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.addWidget(QLabel("Saved Profiles"))
-        self._list = QListWidget()
-        self._list.currentItemChanged.connect(self._on_list_selection_changed)
-        left_layout.addWidget(self._list)
+        splitter.setChildrenCollapsible(False)
 
-        list_buttons = QHBoxLayout()
-        self._new_btn = QPushButton("New")
-        self._new_btn.setObjectName("SecondaryButton")
+        left = QFrame()
+        left.setObjectName("ProfileSidebar")
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 8, 0)
+        left_layout.setSpacing(8)
+
+        left_header = QHBoxLayout()
+        left_header.addWidget(QLabel("Saved Profiles"))
+        left_header.addStretch()
+        self._new_btn = QPushButton("+ New")
+        self._new_btn.setObjectName("ToolbarButton")
         self._new_btn.clicked.connect(self._on_new)
         self._delete_btn = QPushButton("Delete")
-        self._delete_btn.setObjectName("SecondaryButton")
+        self._delete_btn.setObjectName("ToolbarButton")
         self._delete_btn.clicked.connect(self._on_delete)
-        list_buttons.addWidget(self._new_btn)
-        list_buttons.addWidget(self._delete_btn)
-        list_buttons.addStretch()
-        left_layout.addLayout(list_buttons)
+        left_header.addWidget(self._new_btn)
+        left_header.addWidget(self._delete_btn)
+        left_layout.addLayout(left_header)
+
+        self._list = QListWidget()
+        self._list.setObjectName("ProfileList")
+        self._list.currentItemChanged.connect(self._on_list_selection_changed)
+        left_layout.addWidget(self._list, stretch=1)
         splitter.addWidget(left)
 
-        right = QWidget()
-        form_outer = QVBoxLayout(right)
-        form_outer.setContentsMargins(0, 0, 0, 0)
-        form_outer.addWidget(QLabel("Profile Details"))
-        form = QFormLayout()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setObjectName("ProfileEditorScroll")
+
+        editor = QWidget()
+        editor_layout = QVBoxLayout(editor)
+        editor_layout.setContentsMargins(0, 0, 0, 0)
+        editor_layout.setSpacing(12)
+
+        company_box = QGroupBox("Company Details")
+        company_form = QFormLayout(company_box)
+        company_form.setSpacing(10)
 
         self._display_name = QLineEdit()
         self._display_name.setPlaceholderText("e.g. ABC Ceramic")
-        form.addRow("Profile Name", self._display_name)
+        company_form.addRow(
+            "Profile Name",
+            self._wrap_validated_field(
+                self._display_name, validate_profile_name, "display_name"
+            ),
+        )
 
         self._company_name = QLineEdit()
-        form.addRow("Company Name", self._company_name)
+        company_form.addRow("Company Name", self._company_name)
 
-        logo_row = QHBoxLayout()
         self._logo_path = QLineEdit()
-        logo_browse = QPushButton("Browse")
-        logo_browse.setObjectName("SecondaryButton")
-        logo_browse.clicked.connect(self._browse_logo)
-        logo_row.addWidget(self._logo_path)
-        logo_row.addWidget(logo_browse)
-        form.addRow("Company Logo", logo_row)
+        self._logo_path.setPlaceholderText("JPG, PNG, JPEG, or WEBP")
+        company_form.addRow(
+            "Company Logo",
+            self._wrap_validated_field(self._logo_path, validate_logo_path, "logo"),
+        )
 
         self._email = QLineEdit()
-        form.addRow("Email", self._email)
+        self._email.setPlaceholderText("name@company.com")
+        company_form.addRow(
+            "Email",
+            self._wrap_validated_field(self._email, validate_email, "email"),
+        )
+
         self._phone = QLineEdit()
-        form.addRow("Phone", self._phone)
+        self._phone.setPlaceholderText("10-digit mobile number")
+        self._phone.setMaxLength(10)
+        self._phone.setValidator(
+            QRegularExpressionValidator(QRegularExpression(r"^\d*$"))
+        )
+        company_form.addRow(
+            "Phone",
+            self._wrap_validated_field(self._phone, validate_phone, "phone"),
+        )
+
         self._website = QLineEdit()
-        form.addRow("Website", self._website)
+        self._website.setPlaceholderText("company.com")
+        company_form.addRow(
+            "Website",
+            self._wrap_validated_field(self._website, validate_website, "website"),
+        )
+
         self._address = QLineEdit()
-        form.addRow("Address", self._address)
+        company_form.addRow("Address", self._address)
 
         pdf_row = QHBoxLayout()
         self._pdf_folder = QLineEdit()
         self._pdf_folder.setPlaceholderText("Default folder for exported PDFs")
-        pdf_browse = QPushButton("Browse")
-        pdf_browse.setObjectName("SecondaryButton")
+        pdf_browse = QPushButton("Browse…")
+        pdf_browse.setObjectName("BrowseButton")
         pdf_browse.clicked.connect(self._browse_pdf_folder)
-        pdf_row.addWidget(self._pdf_folder)
+        pdf_row.addWidget(self._pdf_folder, stretch=1)
         pdf_row.addWidget(pdf_browse)
-        form.addRow("Default PDF Folder", pdf_row)
+        company_form.addRow("Default PDF Folder", pdf_row)
 
-        form_outer.addLayout(form)
-        form_outer.addStretch()
+        editor_layout.addWidget(company_box)
 
+        export_box = QGroupBox("Export Options")
+        export_form = QFormLayout(export_box)
+        export_form.setSpacing(10)
+
+        self._include_search_image = QCheckBox("Include search image in PDF")
+        self._include_search_image.setChecked(True)
+        export_form.addRow(self._include_search_image)
+
+        self._include_image_path = QCheckBox("Include image file path in PDF")
+        export_form.addRow(self._include_image_path)
+
+        self._export_only_selected = QCheckBox("Export only selected search results")
+        export_form.addRow(self._export_only_selected)
+
+        self._watermark = QLineEdit()
+        self._watermark.setPlaceholderText("Optional watermark text")
+        export_form.addRow("Watermark", self._watermark)
+
+        self._max_results = QSpinBox()
+        self._max_results.setRange(1, 100)
+        self._max_results.setValue(12)
+        export_form.addRow("Max results", self._max_results)
+
+        editor_layout.addWidget(export_box)
+        editor_layout.addStretch()
+
+        save_row = QHBoxLayout()
+        save_row.addStretch()
         self._save_btn = QPushButton("Save Profile")
         self._save_btn.setObjectName("PrimaryButton")
+        self._save_btn.setMinimumWidth(140)
         self._save_btn.clicked.connect(self._on_save)
-        form_outer.addWidget(self._save_btn)
-        splitter.addWidget(right)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 2)
-        layout.addWidget(splitter, stretch=1)
+        save_row.addWidget(self._save_btn)
+        editor_layout.addLayout(save_row)
+
+        scroll.setWidget(editor)
+        splitter.addWidget(scroll)
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 5)
+        outer.addWidget(splitter, stretch=1)
+
+    def _wrap_validated_field(
+        self,
+        field: QLineEdit,
+        validator: Callable[[str], Optional[str]],
+        key: str,
+    ) -> QWidget:
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(3)
+
+        if key == "logo":
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.addWidget(field, stretch=1)
+            browse = QPushButton("Browse…")
+            browse.setObjectName("BrowseButton")
+            browse.clicked.connect(self._browse_logo)
+            row.addWidget(browse)
+            layout.addLayout(row)
+        else:
+            layout.addWidget(field)
+
+        error_label = QLabel("")
+        error_label.setObjectName("FieldError")
+        error_label.setWordWrap(True)
+        error_label.hide()
+        layout.addWidget(error_label)
+        self._field_errors[key] = error_label
+
+        field.editingFinished.connect(
+            lambda f=field, v=validator, k=key: self._validate_field(f, v, k)
+        )
+        return container
+
+    def _set_field_error(
+        self,
+        field: QLineEdit,
+        key: str,
+        message: Optional[str],
+    ) -> bool:
+        error_label = self._field_errors[key]
+        if message:
+            error_label.setText(message)
+            error_label.show()
+            field.setProperty("invalid", True)
+        else:
+            error_label.clear()
+            error_label.hide()
+            field.setProperty("invalid", False)
+        field.style().unpolish(field)
+        field.style().polish(field)
+        return message is None
+
+    def _validate_field(
+        self,
+        field: QLineEdit,
+        validator: Callable[[str], Optional[str]],
+        key: str,
+    ) -> bool:
+        return self._set_field_error(field, key, validator(field.text()))
+
+    def _clear_validation_hints(self) -> None:
+        for label in self._field_errors.values():
+            label.clear()
+            label.hide()
+        for field in (
+            self._display_name,
+            self._logo_path,
+            self._email,
+            self._phone,
+            self._website,
+        ):
+            field.setProperty("invalid", False)
+            field.style().unpolish(field)
+            field.style().polish(field)
+
+    def _validate_all_fields(self) -> bool:
+        checks = (
+            (self._display_name, validate_profile_name, "display_name"),
+            (self._email, validate_email, "email"),
+            (self._phone, validate_phone, "phone"),
+            (self._website, validate_website, "website"),
+            (self._logo_path, validate_logo_path, "logo"),
+        )
+        results = [
+            self._validate_field(field, validator, key)
+            for field, validator, key in checks
+        ]
+        if not all(results):
+            for field, _, _ in checks:
+                if field.property("invalid"):
+                    field.setFocus()
+                    break
+        return all(results)
 
     def _refresh_list(self, select_id: Optional[str] = None) -> None:
         self._list.blockSignals(True)
@@ -158,6 +335,7 @@ class CatalogueProfilesPanel(QWidget):
         self._load_form(master)
 
     def _load_form(self, master: CatalogueMaster) -> None:
+        self._clear_validation_hints()
         self._display_name.setText(master.display_name)
         self._company_name.setText(master.company_name)
         self._logo_path.setText(master.logo_path)
@@ -166,9 +344,15 @@ class CatalogueProfilesPanel(QWidget):
         self._website.setText(master.website)
         self._address.setText(master.address)
         self._pdf_folder.setText(master.default_pdf_folder)
+        self._include_search_image.setChecked(master.include_search_image)
+        self._include_image_path.setChecked(master.include_image_path)
+        self._export_only_selected.setChecked(master.export_only_selected)
+        self._watermark.setText(master.watermark_text)
+        self._max_results.setValue(master.max_results)
 
     def _clear_form(self) -> None:
         self._editing_id = None
+        self._clear_validation_hints()
         for field in (
             self._display_name,
             self._company_name,
@@ -178,8 +362,13 @@ class CatalogueProfilesPanel(QWidget):
             self._website,
             self._address,
             self._pdf_folder,
+            self._watermark,
         ):
             field.clear()
+        self._include_search_image.setChecked(True)
+        self._include_image_path.setChecked(False)
+        self._export_only_selected.setChecked(False)
+        self._max_results.setValue(12)
         self._list.clearSelection()
 
     def _form_master(self) -> CatalogueMaster:
@@ -194,6 +383,11 @@ class CatalogueProfilesPanel(QWidget):
             website=self._website.text().strip(),
             address=self._address.text().strip(),
             default_pdf_folder=self._pdf_folder.text().strip(),
+            include_search_image=self._include_search_image.isChecked(),
+            include_image_path=self._include_image_path.isChecked(),
+            export_only_selected=self._export_only_selected.isChecked(),
+            watermark_text=self._watermark.text().strip(),
+            max_results=self._max_results.value(),
         )
         if self._editing_id:
             return CatalogueMaster(id=self._editing_id, **common)
@@ -204,19 +398,16 @@ class CatalogueProfilesPanel(QWidget):
         self._display_name.setFocus()
 
     def _on_save(self) -> None:
+        if not self._validate_all_fields():
+            return
+
         try:
             master = self._form_master()
-            if not master.display_name:
-                raise ValueError("Profile name is required.")
-
             if self._editing_id and self._service.get(self._editing_id):
                 saved = self._service.update(master)
             else:
                 saved = self._service.add(master)
                 self._editing_id = saved.id
-        except ValueError as exc:
-            QMessageBox.warning(self, "Save Failed", str(exc))
-            return
         except KeyError:
             saved = self._service.add(self._form_master())
             self._editing_id = saved.id
@@ -250,10 +441,11 @@ class CatalogueProfilesPanel(QWidget):
             self,
             "Select Company Logo",
             "",
-            "Images (*.png *.jpg *.jpeg *.bmp *.webp)",
+            "Images (*.png *.jpg *.jpeg *.webp)",
         )
         if path:
             self._logo_path.setText(path)
+            self._validate_field(self._logo_path, validate_logo_path, "logo")
 
     def _browse_pdf_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Select Default PDF Folder")
@@ -269,18 +461,69 @@ class CatalogueProfilesPanel(QWidget):
         self.setStyleSheet(
             get_shared_view_qss(self._theme)
             + f"""
-            QListWidget {{
+            #ProfileSidebar {{
+                background: transparent;
+            }}
+            #ProfileList {{
                 background-color: {p['bg_panel']};
                 border: 1px solid {p['border']};
                 border-radius: 8px;
                 color: {p['text_primary']};
+                padding: 4px;
             }}
-            QLineEdit {{
+            #ProfileList::item {{
+                padding: 8px 10px;
+                border-radius: 6px;
+            }}
+            #ProfileList::item:selected {{
+                background-color: {p['accent_soft']};
+                color: {p['text_primary']};
+            }}
+            #ToolbarButton {{
+                background: transparent;
+                color: {p['accent_text']};
+                border: none;
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-size: 12px;
+                font-weight: 600;
+            }}
+            #ToolbarButton:hover:enabled {{
+                background-color: {p['button_hover']};
+            }}
+            QGroupBox {{
+                color: {p['text_primary']};
+                border: 1px solid {p['border']};
+                border-radius: 8px;
+                margin-top: 14px;
+                padding: 12px 12px 8px 12px;
+                font-weight: 600;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 6px;
+                color: {p['accent_text']};
+            }}
+            QLineEdit, QSpinBox {{
                 background-color: {p['bg_input']};
                 border: 1px solid {p['border_strong']};
                 border-radius: 6px;
                 padding: 6px 8px;
                 color: {p['text_primary']};
+            }}
+            QLineEdit[invalid="true"] {{
+                border: 2px solid {p['danger_text']};
+            }}
+            #FieldError {{
+                color: {p['danger_text']};
+                font-size: 12px;
+                font-weight: 600;
+                padding-left: 2px;
+            }}
+            QCheckBox {{
+                color: {p['text_secondary']};
+                spacing: 8px;
             }}
             QLabel {{ color: {p['text_secondary']}; }}
             """

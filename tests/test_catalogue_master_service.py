@@ -40,6 +40,29 @@ def test_suggested_pdf_path_uses_master_folder(tmp_path: Path) -> None:
     assert Path(suggested).parent.resolve() == (tmp_path / "catalogues").resolve()
 
 
+def test_export_options_round_trip(tmp_path: Path) -> None:
+    store = tmp_path / "masters.json"
+    service = CatalogueMasterService(storage_path=store)
+    master = CatalogueMaster(
+        display_name="Demo",
+        include_search_image=False,
+        include_image_path=True,
+        export_only_selected=True,
+        watermark_text="CONFIDENTIAL",
+        max_results=24,
+    )
+    service.add(master)
+
+    reloaded = CatalogueMasterService(storage_path=store)
+    saved = reloaded.get(master.id)
+    assert saved is not None
+    assert saved.include_search_image is False
+    assert saved.include_image_path is True
+    assert saved.export_only_selected is True
+    assert saved.watermark_text == "CONFIDENTIAL"
+    assert saved.max_results == 24
+
+
 def test_migrate_legacy_company_settings(tmp_path: Path, monkeypatch) -> None:
     legacy = tmp_path / "legacy.json"
     legacy.write_text(

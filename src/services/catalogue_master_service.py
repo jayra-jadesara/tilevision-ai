@@ -25,6 +25,11 @@ class CatalogueMaster:
     website: str = ""
     address: str = ""
     default_pdf_folder: str = ""
+    include_search_image: bool = True
+    include_image_path: bool = False
+    export_only_selected: bool = False
+    watermark_text: str = ""
+    max_results: int = 12
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
 
     def to_dict(self) -> dict:
@@ -32,6 +37,13 @@ class CatalogueMaster:
 
     @classmethod
     def from_dict(cls, data: dict) -> "CatalogueMaster":
+        max_results = data.get("max_results", 12)
+        try:
+            max_results = int(max_results)
+        except (TypeError, ValueError):
+            max_results = 12
+        max_results = max(1, min(100, max_results))
+
         return cls(
             id=str(data.get("id") or uuid.uuid4()),
             display_name=str(data.get("display_name") or data.get("company_name") or "Untitled"),
@@ -42,6 +54,11 @@ class CatalogueMaster:
             website=str(data.get("website") or ""),
             address=str(data.get("address") or ""),
             default_pdf_folder=str(data.get("default_pdf_folder") or ""),
+            include_search_image=bool(data.get("include_search_image", True)),
+            include_image_path=bool(data.get("include_image_path", False)),
+            export_only_selected=bool(data.get("export_only_selected", False)),
+            watermark_text=str(data.get("watermark_text") or ""),
+            max_results=max_results,
         )
 
 
