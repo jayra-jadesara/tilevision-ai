@@ -7,6 +7,7 @@ Supports incremental indexing, perceptual hashing, SHA-256 matching, and coopera
 """
 
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -37,34 +38,105 @@ _CHECKPOINT_INTERVAL = 25
 # Number of images per batched DINOv2 inference during folder scans.
 _INDEX_BATCH_SIZE = 8
 
+_SIZE_PATTERN = re.compile(r"(\d{2,4})\s*[xX×]\s*(\d{2,4})")
+_COLOR_TOKENS = frozenset({
+    "white", "black", "grey", "gray", "cream", "beige", "brown", "blue", "green",
+    "red", "ivory", "bone", "taupe", "sand", "charcoal", "anthracite", "gold",
+    "silver", "bronze", "copper", "walnut", "oak", "teak", "ebony", "onyx",
+})
+_CATEGORY_TOKENS = frozenset({
+    "floor", "wall", "tile", "tiles", "ceramic", "porcelain", "marble", "granite",
+    "wood", "stone", "terrazzo", "mosaic", "slate", "travertine", "cement",
+    "concrete", "vinyl", "decor", "decorative",
+})
+# Placement tokens beat material tokens when both appear in a filename.
+_CATEGORY_PRIORITY = (
+    "floor",
+    "wall",
+    "tile",
+    "tiles",
+    "decor",
+    "decorative",
+    "ceramic",
+    "porcelain",
+    "marble",
+    "granite",
+    "wood",
+    "stone",
+    "terrazzo",
+    "mosaic",
+    "slate",
+    "travertine",
+    "cement",
+    "concrete",
+    "vinyl",
+)
+
+
+def _extract_size_from_stem(stem: str) -> str:
+    match = _SIZE_PATTERN.search(stem)
+    if not match:
+        return "Unknown"
+    return f"{match.group(1)}x{match.group(2)}"
+
+
+def parse_filename_metadata(stem: str) -> Tuple[str, str, str, str, str]:
+    """
+    Parse brand, category, color, size, and product code from filename stem.
+
+    Supports:
+    - ``Brand_Category_Color_Size_ProductCode``
+    - Descriptive hyphenated names such as ``cream-color-floor-tiles``
+    """
+    size = _extract_size_from_stem(stem)
+    parts = [part.strip() for part in stem.split("_") if part.strip()]
+
+    if len(parts) >= 2:
+        brand = parts[0] or "Unknown"
+        category = parts[1] if len(parts) > 1 else "Unknown"
+        color = parts[2] if len(parts) > 2 else "Unknown"
+        parsed_size = parts[3] if len(parts) > 3 else size
+        product_code = parts[4] if len(parts) > 4 else "Unknown"
+        if parsed_size and parsed_size.lower() != "unknown":
+            size = parsed_size
+        return (
+            brand.strip(),
+            category.strip(),
+            color.strip(),
+            size.strip(),
+            product_code.strip(),
+        )
+
+    tokens = [token for token in re.split(r"[-\s]+", stem.lower()) if token]
+    if tokens:
+        found_color = next(
+            (token.title() for token in tokens if token in _COLOR_TOKENS),
+            "Unknown",
+        )
+        token_set = set(tokens)
+        found_category = next(
+            (
+                token.title()
+                for token in _CATEGORY_PRIORITY
+                if token in token_set
+            ),
+            "Unknown",
+        )
+        return (
+            "Unknown",
+            found_category,
+            found_color,
+            size,
+            stem[:80],
+        )
+
+    return ("Unknown", "Unknown", "Unknown", size, "Unknown")
+
 
 @dataclass(slots=True)
 class _PendingIndexItem:
     path: Path
     was_previously_indexed: bool
-
-
-def parse_filename_metadata(stem: str) -> Tuple[str, str, str, str, str]:
-    """
-    Parse brand, category, color, size, and product code from filename stem
-    assuming the format: Brand_Category_Color_Size_ProductCode.
-    
-    If the name does not match this structure, falls back gracefully.
-    """
-    parts = stem.split("_")
-    brand = parts[0] if len(parts) > 0 and parts[0] else "Unknown"
-    category = parts[1] if len(parts) > 1 and parts[1] else "Unknown"
-    color = parts[2] if len(parts) > 2 and parts[2] else "Unknown"
-    size = parts[3] if len(parts) > 3 and parts[3] else "Unknown"
-    product_code = parts[4] if len(parts) > 4 and parts[4] else "Unknown"
-
-    return (
-        brand.strip(),
-        category.strip(),
-        color.strip(),
-        size.strip(),
-        product_code.strip(),
-    )
 
 
 class IndexImagesUseCase:

@@ -139,6 +139,28 @@ def test_unknown_filter_keys_are_ignored_not_errors(env):
     assert len(results) == 1
 
 
+def test_get_filter_options_excludes_unknown_values(env):
+    _add_tile(env, "a.jpg", (200, 0, 0), "Unknown", "Floor", "Red")
+    _add_tile(env, "b.jpg", (0, 200, 0), "Kajaria", "Wall", "Green")
+
+    options = env["use_case"].get_filter_options()
+
+    assert "Unknown" not in options["brand"]
+    assert options["brand"] == ["Kajaria"]
+
+
+def test_filter_with_no_matching_tiles_returns_empty(env):
+    _add_tile(env, "a.jpg", (200, 0, 0), "Kajaria", "Floor", "Red")
+
+    query_path = env["tmp_path"] / "query.jpg"
+    Image.new("RGB", (16, 16), color=(200, 0, 0)).save(query_path)
+
+    results = env["use_case"].execute(
+        str(query_path), top_k=20, filters={"brand": "Somany"}
+    )
+    assert results == []
+
+
 def test_get_filter_options_returns_distinct_sorted_values(env):
     _add_tile(env, "a.jpg", (200, 0, 0), "Kajaria", "Floor", "Red")
     _add_tile(env, "b.jpg", (0, 200, 0), "Somany", "Wall", "Green")

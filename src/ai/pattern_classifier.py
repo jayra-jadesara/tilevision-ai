@@ -15,6 +15,10 @@ class PatternType(str, Enum):
     TERRAZZO = "terrazzo"
     MARBLE = "marble"
     PLAIN = "plain"
+    WOOD = "wood"
+    GEOMETRIC = "geometric"
+    STONE = "stone"
+    MOSAIC = "mosaic"
     TEXTURED = "textured"
 
 
@@ -105,6 +109,10 @@ class PatternClassifier:
             PatternType.SPECKLED: 0.0,
             PatternType.TERRAZZO: 0.0,
             PatternType.MARBLE: 0.0,
+            PatternType.WOOD: 0.0,
+            PatternType.GEOMETRIC: 0.0,
+            PatternType.STONE: 0.0,
+            PatternType.MOSAIC: 0.0,
             PatternType.TEXTURED: 0.15,
         }
 
@@ -128,6 +136,13 @@ class PatternClassifier:
                 marble_signal += 0.10
             if edge_entropy > 2.0:
                 marble_signal += 0.05
+            # Vein-like surfaces with sparse particles: favor marble over wood.
+            if (
+                small_blob_ratio < 0.35
+                and count_normalized < 0.15
+                and edge_directionality >= 4.0
+            ):
+                marble_signal += 0.20
             if has_structure_features:
                 if vein_coverage >= 0.25:
                     marble_signal += min(0.20, vein_coverage * 0.5)
@@ -181,6 +196,67 @@ class PatternClassifier:
         if size_variation >= 2.5:
             terrazzo_signal += 0.10
         scores[PatternType.TERRAZZO] = min(1.0, terrazzo_signal)
+
+        # Wood grain: strong directional edges, moderate coherence, low speckle density.
+        wood_signal = 0.0
+        if edge_directionality >= 4.5:
+            wood_signal += 0.25
+        if structure_coherence >= 0.40:
+            wood_signal += 0.20
+        if count_normalized < 0.18:
+            wood_signal += 0.10
+        if coverage < 0.10:
+            wood_signal += 0.10
+        if has_structure_features and elongation_ratio >= 0.25:
+            wood_signal += 0.15
+        if small_blob_ratio < 0.55:
+            wood_signal += 0.10
+        # Low particle count + sparse coverage reads as veining, not wood grain.
+        if small_blob_ratio < 0.35 and count_normalized < 0.15:
+            wood_signal *= 0.55
+        scores[PatternType.WOOD] = min(1.0, wood_signal)
+
+        # Geometric: regular structure, elevated edge activity, uniform layout.
+        geometric_signal = 0.0
+        if edge_activity >= 0.02:
+            geometric_signal += 0.20
+        if spatial_uniformity >= 0.55:
+            geometric_signal += 0.20
+        if edge_directionality >= 3.5:
+            geometric_signal += 0.15
+        if 1.5 <= edge_entropy <= 3.5:
+            geometric_signal += 0.10
+        if count_normalized < 0.25:
+            geometric_signal += 0.10
+        scores[PatternType.GEOMETRIC] = min(1.0, geometric_signal)
+
+        # Natural stone / granite: irregular medium/large particles, earthy texture.
+        stone_signal = 0.0
+        if size_variation >= 2.0:
+            stone_signal += 0.20
+        if mean_size >= 0.0008:
+            stone_signal += 0.15
+        if 0.03 <= coverage <= 0.30:
+            stone_signal += 0.15
+        if small_blob_ratio < 0.75:
+            stone_signal += 0.10
+        if edge_activity >= 0.015:
+            stone_signal += 0.10
+        scores[PatternType.STONE] = min(1.0, stone_signal)
+
+        # Mosaic: many mixed chips, varied sizes, distributed coverage.
+        mosaic_signal = 0.0
+        if count_normalized >= 0.20:
+            mosaic_signal += 0.20
+        if size_variation >= 2.5:
+            mosaic_signal += 0.20
+        if 0.05 <= coverage <= 0.35:
+            mosaic_signal += 0.15
+        if 0.35 <= small_blob_ratio <= 0.80:
+            mosaic_signal += 0.10
+        if spatial_uniformity >= 0.40:
+            mosaic_signal += 0.10
+        scores[PatternType.MOSAIC] = min(1.0, mosaic_signal)
 
         # Penalize contradictory combinations.
         if scores[PatternType.MARBLE] > 0.45 and scores[PatternType.SPECKLED] > 0.45:
@@ -298,9 +374,15 @@ class PatternClassifier:
 
         compatible_pairs = {
             frozenset({PatternType.SPECKLED, PatternType.TERRAZZO}),
+            frozenset({PatternType.SPECKLED, PatternType.MOSAIC}),
             frozenset({PatternType.MARBLE, PatternType.TEXTURED}),
+            frozenset({PatternType.MARBLE, PatternType.STONE}),
             frozenset({PatternType.PLAIN, PatternType.TEXTURED}),
             frozenset({PatternType.MARBLE, PatternType.PLAIN}),
+            frozenset({PatternType.STONE, PatternType.TERRAZZO}),
+            frozenset({PatternType.WOOD, PatternType.TEXTURED}),
+            frozenset({PatternType.GEOMETRIC, PatternType.TEXTURED}),
+            frozenset({PatternType.MOSAIC, PatternType.TERRAZZO}),
         }
         if pair in compatible_pairs:
             return 0.0

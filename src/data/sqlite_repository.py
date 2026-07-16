@@ -8,7 +8,7 @@ and domain models.
 from datetime import datetime
 import logging
 import sqlite3
-from typing import List, Optional
+from typing import Dict, List, Optional
 import numpy as np
 
 from src.core.models import TileImage, LicenseInfo, IndexedFolderState, SearchHistoryEntry, ActivityLogEntry
@@ -587,7 +587,9 @@ class SQLiteImageRepository(IImageRepository):
         # validated against the fixed allow-list above, never from raw input.
         query = (
             f"SELECT DISTINCT {field} FROM tiles "
-            f"WHERE {field} IS NOT NULL AND TRIM({field}) != '' "
+            f"WHERE is_indexed = 1 "
+            f"AND {field} IS NOT NULL AND TRIM({field}) != '' "
+            f"AND LOWER(TRIM({field})) != 'unknown' "
             f"ORDER BY {field} COLLATE NOCASE;"
         )
         try:
@@ -598,6 +600,38 @@ class SQLiteImageRepository(IImageRepository):
                 return [row[field] for row in rows]
         except sqlite3.Error as e:
             logger.error(f"Failed to fetch distinct values for field '{field}': {e}")
+            return []
+
+    def get_ids_matching_filters(self, filters: Dict[str, str]) -> List[int]:
+        """
+        Return indexed tile IDs matching all active metadata filters.
+        """
+        if not filters:
+            return []
+
+        clauses = ["is_indexed = 1"]
+        params: List[str] = []
+
+        for field, value in filters.items():
+            if field not in self._DISTINCT_VALUE_ALLOWED_FIELDS:
+                continue
+            if not value or str(value).strip().lower() == "unknown":
+                continue
+            clauses.append(f"LOWER(TRIM({field})) = LOWER(TRIM(?))")
+            params.append(str(value).strip())
+
+        if len(params) == 0:
+            return []
+
+        query = f"SELECT id FROM tiles WHERE {' AND '.join(clauses)} ORDER BY id;"
+        try:
+            with self._db.session() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+                return [int(row["id"]) for row in rows]
+        except sqlite3.Error as e:
+            logger.error(f"Failed to fetch IDs for filters {filters}: {e}")
             return []
 
     def get_feature_version_status(self) -> FeatureVersionStatus:

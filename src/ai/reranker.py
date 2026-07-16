@@ -159,6 +159,38 @@ class HybridReRanker:
                 "texture": 0.12,
                 "edge": 0.15,
             }
+        elif pattern_type == PatternType.WOOD:
+            weights = {
+                "embedding": 0.60,
+                "pattern": 0.05,
+                "color": 0.08,
+                "texture": 0.12,
+                "edge": 0.15,
+            }
+        elif pattern_type == PatternType.GEOMETRIC:
+            weights = {
+                "embedding": 0.65,
+                "pattern": 0.08,
+                "color": 0.08,
+                "texture": 0.07,
+                "edge": 0.12,
+            }
+        elif pattern_type == PatternType.STONE:
+            weights = {
+                "embedding": 0.58,
+                "pattern": 0.12,
+                "color": 0.12,
+                "texture": 0.13,
+                "edge": 0.05,
+            }
+        elif pattern_type == PatternType.MOSAIC:
+            weights = {
+                "embedding": 0.58,
+                "pattern": 0.18,
+                "color": 0.12,
+                "texture": 0.07,
+                "edge": 0.05,
+            }
         elif pattern_type == PatternType.PLAIN:
             weights = {
                 "embedding": 0.55,

@@ -42,6 +42,9 @@ _ALLOWED_FILTER_FIELDS = frozenset({"brand", "category", "color", "size"})
 # widen-forever cost on a catalog with a very restrictive filter.
 _FILTER_CANDIDATE_MULTIPLIER = 10
 _FILTER_CANDIDATE_CAP = 2000
+# When metadata filters are active, rerank the full filtered ID set directly
+# (instead of FAISS top-K only) up to this many tiles for accurate results.
+_FILTERED_FULL_RERANK_CAP = 2000
 
 # Perceptual hashes within this Hamming distance are treated as near-exact
 # self matches (same tile, different compression/crop).
@@ -189,71 +192,77 @@ class SearchTilesUseCase:
             )
 
 
-            # 2. Search FAISS index. If filters are active, widen the
-            #    candidate pool since some matches will be filtered out
-            #    downstream — otherwise a filtered search could return
-            #    fewer than top_k results even when more matches exist
-            #    further down the similarity ranking.
+            # 2. Retrieve candidate tiles (FAISS or metadata-filtered full set).
             total_vectors = self._index.get_total_count()
 
             if total_vectors <= 0:
                 logger.info("FAISS index is empty. No search results available.")
                 return []
 
-            search_k = min(
-                max(top_k * 5, 100),
-                total_vectors,
-            )
-
+            filtered_ids: Optional[set[int]] = None
             if active_filters:
-                search_k = min(
-                    max(
-                        top_k * _FILTER_CANDIDATE_MULTIPLIER,
-                        top_k,
-                    ),
-                    _FILTER_CANDIDATE_CAP,
-                    total_vectors,
+                filtered_ids = set(self._repo.get_ids_matching_filters(active_filters))
+                if not filtered_ids:
+                    logger.info(
+                        "No indexed tiles match metadata filters: %s",
+                        active_filters,
+                    )
+                    return []
+
+            candidates: List[TileImage] = []
+
+            if filtered_ids is not None and len(filtered_ids) <= _FILTERED_FULL_RERANK_CAP:
+                logger.info(
+                    "Metadata filters active — reranking %d filtered catalog tile(s) directly.",
+                    len(filtered_ids),
                 )
+                with timer.measure("database"):
+                    matched_tiles = self._repo.get_by_ids(list(filtered_ids))
+                candidates = [
+                    tile for tile in matched_tiles if tile.features is not None
+                ]
+            else:
+                search_k = min(max(top_k * 5, 100), total_vectors)
 
-            logger.info(f"Querying FAISS vector index (search_k={search_k})...")
-            with timer.measure("faiss"):
-                matching_ids, _ = self._index.search_vectors(
-                    query_features.embedding.tolist(),
-                    search_k,
+                if active_filters:
+                    search_k = min(
+                        max(top_k * _FILTER_CANDIDATE_MULTIPLIER, top_k),
+                        _FILTER_CANDIDATE_CAP,
+                        total_vectors,
+                    )
+
+                logger.info(f"Querying FAISS vector index (search_k={search_k})...")
+                with timer.measure("faiss"):
+                    matching_ids, _ = self._index.search_vectors(
+                        query_features.embedding.tolist(),
+                        search_k,
+                    )
+
+                if not matching_ids:
+                    logger.info("No matching records found in vector index.")
+                    return []
+
+                logger.info(
+                    "Retrieving database metadata for matching IDs: %s",
+                    matching_ids,
                 )
+                with timer.measure("database"):
+                    matched_tiles = self._repo.get_by_ids(matching_ids)
 
-            if not matching_ids:
-                logger.info("No matching records found in vector index.")
-                return []
+                tile_map = {t.id: t for t in matched_tiles if t.id is not None}
 
-            # 3. Retrieve metadata records from SQLite in the exact order of matches
-            logger.info(f"Retrieving database metadata for matching IDs: {matching_ids}")
-            with timer.measure("database"):
-                matched_tiles = self._repo.get_by_ids(matching_ids)
-            
-            # Create a lookup map of Tile ID -> TileImage
-            tile_map = {t.id: t for t in matched_tiles if t.id is not None}
-
-            # ----------------------------------------
-            # Build candidate list
-            # ----------------------------------------
-
-            candidates = []
-
-            for record_id in matching_ids:
-
-                tile = tile_map.get(record_id)
-
-                if tile is None:
-                    continue
-
-                if not self._matches_filters(tile, active_filters):
-                    continue
-
-                candidates.append(tile)
+                for record_id in matching_ids:
+                    tile = tile_map.get(record_id)
+                    if tile is None:
+                        continue
+                    if filtered_ids is not None and record_id not in filtered_ids:
+                        continue
+                    if not self._matches_filters(tile, active_filters):
+                        continue
+                    candidates.append(tile)
 
             logger.info(
-                "Candidates before filtering: %d",
+                "Candidates before color filtering: %d",
                 len(candidates),
             )
 

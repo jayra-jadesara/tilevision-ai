@@ -456,14 +456,17 @@ class SearchView(QWidget):
         for field, combo in self._filter_combos.items():
             values = options.get(field, [])
             current = combo.currentText()
+            placeholder = f"Any {field.capitalize()}"
             combo.blockSignals(True)
             combo.clear()
-            placeholder = f"Any {field.capitalize()}"
             combo.addItem(placeholder)
             combo.addItems(values)
-            # Restore previous selection if it's still a valid option
             idx = combo.findText(current)
-            combo.setCurrentIndex(idx if idx >= 0 else 0)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+            else:
+                combo.setCurrentIndex(0)
+                self._viewmodel.set_filter(field, "")
             combo.blockSignals(False)
 
     def _build_progress_bar(self) -> QWidget:

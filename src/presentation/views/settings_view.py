@@ -105,7 +105,7 @@ class SettingsView(QWidget):
         layout.addWidget(self._build_overview_section())
         layout.addWidget(self._build_watched_folders_section())
         layout.addWidget(self._build_preferences_section())
-        # layout.addWidget(self._build_maintenance_section())
+        layout.addWidget(self._build_maintenance_section())
         layout.addStretch()
 
     def _build_overview_section(self) -> QGroupBox:

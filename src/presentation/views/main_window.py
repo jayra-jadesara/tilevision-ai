@@ -429,9 +429,16 @@ class MainWindow(QMainWindow):
         """Connect ViewModel signals to the status bar and other global UI elements."""
         self._indexing_viewmodel.status_message.connect(self._update_status_bar)
         self._indexing_viewmodel.state_changed.connect(self._on_indexing_state_changed)
+        self._indexing_viewmodel.indexing_completed.connect(self._on_indexing_completed)
 
         if self._search_viewmodel is not None:
             self._search_viewmodel.status_message.connect(self._update_status_bar)
+
+    @Slot(object)
+    def _on_indexing_completed(self, result) -> None:
+        """Refresh search filter dropdowns after catalog changes."""
+        if self._search_viewmodel is not None and result.is_completed:
+            self._search_viewmodel.load_filter_options()
 
     # ── Navigation ────────────────────────────────────────────────────────────
 

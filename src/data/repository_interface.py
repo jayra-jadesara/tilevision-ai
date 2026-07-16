@@ -6,7 +6,7 @@ decoupling of the business logic from data storage implementations.
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from src.core.models import TileImage, LicenseInfo, IndexedFolderState, SearchHistoryEntry, ActivityLogEntry
 
@@ -116,6 +116,19 @@ class IImageRepository(ABC):
 
         Raises:
             ValueError: If field is not an allowed column name.
+        """
+        pass
+
+    @abstractmethod
+    def get_ids_matching_filters(self, filters: Dict[str, str]) -> List[int]:
+        """
+        Return indexed tile IDs whose metadata matches all provided filters.
+
+        Args:
+            filters: Dict of field -> required value (brand/category/color/size).
+
+        Returns:
+            Matching tile primary keys.
         """
         pass
 
