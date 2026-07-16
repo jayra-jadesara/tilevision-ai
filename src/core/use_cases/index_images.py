@@ -7,15 +7,16 @@ Supports incremental indexing, perceptual hashing, SHA-256 matching, and coopera
 """
 
 import logging
-from pathlib import Path
 import threading
 import time
+from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
 from src.core.models import TileImage, ScanResult, IndexedFolderState
 from src.data.repository_interface import IImageRepository, IIndexedFolderRepository
 from src.ai.feature_extractor import FeatureExtractor
 from src.ai.vector_index import FaissIndexManager
+from src.utils.pipeline_timing import PipelineTimer
 from src.utils.image_utils import (
     validate_image,
     get_image_metadata,
@@ -117,13 +118,16 @@ class IndexImagesUseCase:
             RuntimeError: If embedding extraction or FAISS storage fails.
         """
         resolved_path = file_path.resolve()
-        if not validate_image(resolved_path):
-            raise ValueError(f"File is not a valid or accessible image: {resolved_path}")
+        timer = PipelineTimer("INDEX TIMING")
 
-        # Compute hashes and dimensions
-        file_size, dimensions = get_image_metadata(resolved_path)
-        sha256_hash = compute_sha256(resolved_path)
-        perceptual_hash = compute_dhash(resolved_path)
+        with timer.measure("image_loading"):
+            if not validate_image(resolved_path):
+                raise ValueError(f"File is not a valid or accessible image: {resolved_path}")
+
+            file_size, dimensions = get_image_metadata(resolved_path)
+            sha256_hash = compute_sha256(resolved_path)
+            perceptual_hash = compute_dhash(resolved_path)
+
         file_name = resolved_path.name
 
         # Parse width/height from dimensions string "WxH"
@@ -138,10 +142,12 @@ class IndexImagesUseCase:
         # Parse naming metadata
         brand, category, color, size, product_code = parse_filename_metadata(resolved_path.stem)
 
-        logger.info(
-            "Extracting AI features..."
-        )
+        logger.info("Extracting AI features...")
         features = self._feature_extractor.extract(str(resolved_path))
+        extract_timings = self._feature_extractor.last_timings
+        timer.timings.record("preprocessing", extract_timings.preprocessing)
+        timer.timings.record("dinov2", extract_timings.dinov2)
+        timer.timings.record("descriptors", extract_timings.descriptors)
 
         # 1. Store/update metadata record in SQLite
         # Note: We temporarily insert without embedding_id, get the ID, and then update it.
@@ -164,7 +170,8 @@ class IndexImagesUseCase:
         )
         
         # Save record to get the database auto-increment ID
-        db_id = self._repo.add(tile)
+        with timer.measure("database"):
+            db_id = self._repo.add(tile)
         
         # Keep embedding ID identical to the database row ID
         tile.id = db_id
@@ -183,18 +190,20 @@ class IndexImagesUseCase:
                 f"Indexing vector into FAISS for ID {db_id}: {file_name}"
             )
 
-            self._index.update_vectors(
-                [db_id],
-                [features.embedding.tolist()],
-                persist=persist,
-            )
+            with timer.measure("faiss"):
+                self._index.update_vectors(
+                    [db_id],
+                    [features.embedding.tolist()],
+                    persist=persist,
+                )
 
             # 4. Mark tile as successfully indexed
             tile.is_indexed = True
 
-            # Save again to persist embedding_id + indexed status.
-            self._repo.add(tile)
+            with timer.measure("database"):
+                self._repo.add(tile)
 
+            timer.log_summary(log=logger)
             return db_id
 
         except Exception as e:

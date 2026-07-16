@@ -18,6 +18,7 @@ from src.ai.feature_extractor import FeatureExtractor
 from src.ai.reranker import HybridReRanker
 from src.ai.vector_index import FaissIndexManager
 from src.utils.image_utils import get_thumbnail_path, validate_image
+from src.utils.pipeline_timing import PipelineTimer
 
 logger = logging.getLogger("tilevision.core.use_cases.search_tiles")
 
@@ -103,9 +104,6 @@ class SearchTilesUseCase:
         if not query_path.exists() or not query_path.is_file():
             raise FileNotFoundError(f"Query image does not exist: {query_image_path}")
 
-        if not validate_image(query_path):
-            raise ValueError(f"Selected file is not a valid, readable image: {query_path.name}")
-
         top_k = max(1, int(top_k))
         active_filters = {
             k: v for k, v in (filters or {}).items()
@@ -118,11 +116,22 @@ class SearchTilesUseCase:
         )
 
         try:
-            # 1. Extract AI features from the query image
+            timer = PipelineTimer("SEARCH TIMING")
+
+            with timer.measure("image_load"):
+                if not validate_image(query_path):
+                    raise ValueError(
+                        f"Selected file is not a valid, readable image: {query_path.name}"
+                    )
+
             logger.info("Computing embedding for query image...")
             query_features = self._feature_extractor.extract(
                 str(query_path)
             )
+            extract_timings = self._feature_extractor.last_timings
+            timer.timings.record("preprocessing", extract_timings.preprocessing)
+            timer.timings.record("dinov2", extract_timings.dinov2)
+            timer.timings.record("descriptors", extract_timings.descriptors)
 
 
             # ----------------------------------------
@@ -166,10 +175,11 @@ class SearchTilesUseCase:
                 )
 
             logger.info(f"Querying FAISS vector index (search_k={search_k})...")
-            matching_ids, _ = self._index.search_vectors(
-                query_features.embedding.tolist(),
-                search_k,
-            )
+            with timer.measure("faiss"):
+                matching_ids, _ = self._index.search_vectors(
+                    query_features.embedding.tolist(),
+                    search_k,
+                )
 
             if not matching_ids:
                 logger.info("No matching records found in vector index.")
@@ -177,7 +187,8 @@ class SearchTilesUseCase:
 
             # 3. Retrieve metadata records from SQLite in the exact order of matches
             logger.info(f"Retrieving database metadata for matching IDs: {matching_ids}")
-            matched_tiles = self._repo.get_by_ids(matching_ids)
+            with timer.measure("database"):
+                matched_tiles = self._repo.get_by_ids(matching_ids)
             
             # Create a lookup map of Tile ID -> TileImage
             tile_map = {t.id: t for t in matched_tiles if t.id is not None}
@@ -225,53 +236,41 @@ class SearchTilesUseCase:
 
             reranked = []
 
-            for tile in candidates:
+            with timer.measure("reranking"):
+                for tile in candidates:
 
-                if tile.features is None:
-                    continue
-                
-                # Detect candidate tile pattern type
-                candidate_pattern_type = PatternClassifier.classify(
-                    tile.features
-                )
+                    if tile.features is None:
+                        continue
 
-                hybrid = self._reranker.score(
-                    query_features,
-                    tile.features,
-                    query_pattern_type=query_pattern_type,
-                    candidate_pattern_type=candidate_pattern_type,
-                )
-
-                logger.info(
-                    "PATTERN TYPE | %s | query=%s | candidate=%s",
-                    tile.file_name,
-                    query_pattern_type.value,
-                    candidate_pattern_type.value,
-                )
-
-                logger.info(
-                    "RERANK | %-45s | "
-                    "embedding=%.4f | "
-                    "pattern=%.4f | "
-                    "color=%.4f | "
-                    "texture=%.4f | "
-                    "edge=%.4f | "
-                    "final=%.4f",
-                    tile.file_name,
-                    hybrid.embedding,
-                    hybrid.pattern,
-                    hybrid.color,
-                    hybrid.texture,
-                    hybrid.edge,
-                    hybrid.final,
-                )
-
-                reranked.append(
-                    (
-                        hybrid.final,
-                        tile,
+                    candidate_pattern_type = PatternClassifier.classify(
+                        tile.features
                     )
-                )
+
+                    hybrid = self._reranker.score(
+                        query_features,
+                        tile.features,
+                        query_pattern_type=query_pattern_type,
+                        candidate_pattern_type=candidate_pattern_type,
+                    )
+
+                    logger.debug(
+                        "RERANK | %-45s | embedding=%.4f pattern=%.4f "
+                        "color=%.4f texture=%.4f edge=%.4f final=%.4f",
+                        tile.file_name,
+                        hybrid.embedding,
+                        hybrid.pattern,
+                        hybrid.color,
+                        hybrid.texture,
+                        hybrid.edge,
+                        hybrid.final,
+                    )
+
+                    reranked.append(
+                        (
+                            hybrid.final,
+                            tile,
+                        )
+                    )
 
             reranked.sort(
                 key=lambda item: item[0],
@@ -306,6 +305,7 @@ class SearchTilesUseCase:
                     )
                 )
 
+            timer.log_summary(log=logger)
             return results
         except Exception as e:
             logger.error(f"Failed to execute tile search query: {e}")

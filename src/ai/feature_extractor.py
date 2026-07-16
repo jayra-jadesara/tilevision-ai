@@ -35,6 +35,8 @@ TileVision AI v2
 from __future__ import annotations
 
 import logging
+import time
+from dataclasses import dataclass
 
 import cv2
 import numpy as np
@@ -50,6 +52,14 @@ from src.ai.descriptors.pattern_descriptor import PatternDescriptor
 logger = logging.getLogger("tilevision.ai.feature_extractor")
 
 
+@dataclass(slots=True)
+class ExtractTimings:
+    preprocessing: float = 0.0
+    dinov2: float = 0.0
+    descriptors: float = 0.0
+    total: float = 0.0
+
+
 class FeatureExtractor:
 
     def __init__(
@@ -57,6 +67,11 @@ class FeatureExtractor:
         embedder: DINOv2Embedder | None = None,
     ):
         self._embedder = embedder or DINOv2Embedder()
+        self._last_timings = ExtractTimings()
+
+    @property
+    def last_timings(self) -> ExtractTimings:
+        return self._last_timings
 
     # --------------------------------------------------------
     
@@ -108,13 +123,20 @@ class FeatureExtractor:
             image_path,
         )
 
-        image = ImagePreprocessor.preprocess(image_path)
+        total_start = time.perf_counter()
 
+        t0 = time.perf_counter()
+        image = ImagePreprocessor.preprocess(image_path)
+        preprocess_elapsed = time.perf_counter() - t0
+
+        t1 = time.perf_counter()
         embedding = np.asarray(
             self._embedder.extract_from_preprocessed(image),
             dtype=np.float32,
         )
+        dinov2_elapsed = time.perf_counter() - t1
 
+        t2 = time.perf_counter()
         color_hist = ColorDescriptor.extract(
             image.bgr,
         )
@@ -127,13 +149,29 @@ class FeatureExtractor:
             image.bgr,
         )
 
-        # Detect dots, speckles and small surface patterns
         pattern_features = PatternDescriptor.extract(
             image.bgr,
         )
 
         dominant = self.dominant_color(
             image.bgr,
+        )
+        descriptors_elapsed = time.perf_counter() - t2
+
+        self._last_timings = ExtractTimings(
+            preprocessing=preprocess_elapsed,
+            dinov2=dinov2_elapsed,
+            descriptors=descriptors_elapsed,
+            total=time.perf_counter() - total_start,
+        )
+
+        logger.debug(
+            "Feature extract timing: preprocessing=%.3fs dinov2=%.3fs "
+            "descriptors=%.3fs total=%.3fs",
+            preprocess_elapsed,
+            dinov2_elapsed,
+            descriptors_elapsed,
+            self._last_timings.total,
         )
 
         return TileFeatures(

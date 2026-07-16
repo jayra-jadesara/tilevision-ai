@@ -217,14 +217,12 @@ class FaissIndexManager:
             # Format query vector as 2D numpy array
             query_np = np.array([query_vector], dtype=np.float32)
 
-            print("=" * 50)
-            print("FAISS Index Dimension :", self._index.d)
-            print("Query Shape           :", query_np.shape)
-            print("Query Dtype           :", query_np.dtype)
-            print("Query Norm            :", np.linalg.norm(query_np))
-            print("=" * 50)
-            # Perform search (Inner Product values equivalent to Cosine similarity for normalized inputs)
-            # distances is shape (1, top_k), indices is shape (1, top_k)
+            logger.debug(
+                "FAISS search: dimension=%d query_shape=%s query_norm=%.4f",
+                self._index.d,
+                query_np.shape,
+                float(np.linalg.norm(query_np)),
+            )
             scores, indices = self._index.search(query_np, top_k)
 
             # Flatten output and filter out empty indices (-1 represents no match)
@@ -243,12 +241,7 @@ class FaissIndexManager:
 
             return matching_ids, similarity_scores
         except Exception:
-            import traceback
-
-            traceback.print_exc()
-
             logger.exception("FAISS vector search failed")
-
             raise
 
     def save_index(self) -> None:
