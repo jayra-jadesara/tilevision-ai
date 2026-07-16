@@ -5,6 +5,7 @@ from typing import List
 
 import numpy as np
 
+from src.ai.descriptors.color_descriptor import ColorDescriptor
 from src.ai.models import TileFeatures
 from src.core.models import TileImage
 
@@ -17,15 +18,15 @@ class CandidateFilter:
     incompatible dominant colors.  Final ranking is handled by HybridReRanker.
     """
 
-    # Maximum RGB dominant-color Euclidean distance.
-    # Tolerant of moderate lighting / white-balance differences.
-    COLOR_DISTANCE_THRESHOLD = 90.0
+    # Maximum LAB distance between dominant colors.
+    COLOR_DISTANCE_THRESHOLD = 42.0
 
     @staticmethod
     def color_distance(c1, c2) -> float:
-        c1 = np.asarray(c1, dtype=np.float32)
-        c2 = np.asarray(c2, dtype=np.float32)
-        return float(np.linalg.norm(c1 - c2))
+        return ColorDescriptor.rgb_to_lab_distance(
+            tuple(c1),
+            tuple(c2),
+        )
 
     @classmethod
     def filter(
@@ -47,7 +48,7 @@ class CandidateFilter:
             )
 
             logger.debug(
-                "Candidate filter | %s | color_distance=%.2f",
+                "Candidate filter | %s | lab_distance=%.2f",
                 tile.file_name,
                 color_distance,
             )

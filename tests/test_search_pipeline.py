@@ -7,6 +7,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from src.ai.descriptors.color_descriptor import ColorDescriptor
 from src.ai.feature_versions import (
     CURRENT_FEATURE_VERSION,
     is_tile_features_compatible,
@@ -23,7 +24,11 @@ def _features(
 ) -> TileFeatures:
     return TileFeatures(
         embedding=np.asarray(embedding, dtype=np.float32),
-        color_histogram=np.full(8192, 1.0 / 8192, dtype=np.float32),
+        color_histogram=np.full(
+            ColorDescriptor.vector_size(),
+            1.0 / ColorDescriptor.vector_size(),
+            dtype=np.float32,
+        ),
         texture_histogram=np.full(54, 1.0 / 54, dtype=np.float32),
         edge_histogram=np.full(36, 1.0 / 36, dtype=np.float32),
         pattern_features=np.asarray(
@@ -92,6 +97,15 @@ def test_feature_version_detects_stale_records():
         embedding_model="facebook/dinov2-large",
         embedding_dimension=1024,
         pattern_feature_size=8,
+        color_histogram_size=ColorDescriptor.vector_size(),
+    )
+    assert not is_tile_features_compatible(
+        feature_version=CURRENT_FEATURE_VERSION,
+        pattern_feature_version=2,
+        embedding_model="facebook/dinov2-large",
+        embedding_dimension=1024,
+        pattern_feature_size=8,
+        color_histogram_size=8192,
     )
 
 

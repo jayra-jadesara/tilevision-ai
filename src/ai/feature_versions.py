@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 # Bump when the DINOv2 embedding pipeline changes (model, views, fusion).
-CURRENT_FEATURE_VERSION = 3
+CURRENT_FEATURE_VERSION = 4
 
 # Bump when pattern descriptor layout or algorithm changes.
 CURRENT_PATTERN_FEATURE_VERSION = 2
@@ -18,6 +18,7 @@ CURRENT_PATTERN_FEATURE_VERSION = 2
 CURRENT_EMBEDDING_MODEL = "facebook/dinov2-large"
 CURRENT_EMBEDDING_DIMENSION = 1024
 CURRENT_PATTERN_FEATURE_SIZE = 8
+CURRENT_COLOR_HISTOGRAM_SIZE = 2884
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +36,7 @@ def is_tile_features_compatible(
     embedding_model: str | None,
     embedding_dimension: int | None,
     pattern_feature_size: int | None = None,
+    color_histogram_size: int | None = None,
 ) -> bool:
     """Return True when stored feature metadata matches the current pipeline."""
     if feature_version != CURRENT_FEATURE_VERSION:
@@ -48,6 +50,11 @@ def is_tile_features_compatible(
     if (
         pattern_feature_size is not None
         and pattern_feature_size != CURRENT_PATTERN_FEATURE_SIZE
+    ):
+        return False
+    if (
+        color_histogram_size is not None
+        and color_histogram_size != CURRENT_COLOR_HISTOGRAM_SIZE
     ):
         return False
     return True

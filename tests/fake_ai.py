@@ -7,6 +7,7 @@ from __future__ import annotations
 import numpy as np
 from PIL import Image
 
+from src.ai.descriptors.color_descriptor import ColorDescriptor
 from src.ai.feature_extractor import ExtractTimings
 from src.ai.models import TileFeatures
 
@@ -48,7 +49,11 @@ def make_tile_features(embedding: list[float] | np.ndarray) -> TileFeatures:
     embedding_arr = np.asarray(embedding, dtype=np.float32)
     return TileFeatures(
         embedding=embedding_arr,
-        color_histogram=np.full(8192, 1.0 / 8192, dtype=np.float32),
+        color_histogram=np.full(
+            ColorDescriptor.vector_size(),
+            1.0 / ColorDescriptor.vector_size(),
+            dtype=np.float32,
+        ),
         texture_histogram=np.full(54, 1.0 / 54, dtype=np.float32),
         edge_histogram=np.full(36, 1.0 / 36, dtype=np.float32),
         pattern_features=np.zeros(8, dtype=np.float32),

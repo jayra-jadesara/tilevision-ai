@@ -18,6 +18,7 @@ from src.ai.feature_versions import (
     CURRENT_PATTERN_FEATURE_VERSION,
     CURRENT_EMBEDDING_MODEL,
     CURRENT_EMBEDDING_DIMENSION,
+    CURRENT_COLOR_HISTOGRAM_SIZE,
     FeatureVersionStatus,
     is_tile_features_compatible,
 )
@@ -609,7 +610,8 @@ class SQLiteImageRepository(IImageRepository):
             pattern_feature_version,
             embedding_model,
             embedding_dimension,
-            pattern_features
+            pattern_features,
+            color_histogram
         FROM tiles
         WHERE is_indexed = 1;
         """
@@ -625,9 +627,14 @@ class SQLiteImageRepository(IImageRepository):
                 for row in rows:
                     indexed_count += 1
                     pattern_size = None
+                    color_size = None
                     if row["pattern_features"] is not None:
                         pattern_size = (
                             len(row["pattern_features"]) // 4
+                        )
+                    if row["color_histogram"] is not None:
+                        color_size = (
+                            len(row["color_histogram"]) // 2
                         )
 
                     if not is_tile_features_compatible(
@@ -636,6 +643,7 @@ class SQLiteImageRepository(IImageRepository):
                         embedding_model=row["embedding_model"],
                         embedding_dimension=row["embedding_dimension"],
                         pattern_feature_size=pattern_size,
+                        color_histogram_size=color_size,
                     ):
                         stale_count += 1
         except sqlite3.Error as e:

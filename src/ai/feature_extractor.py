@@ -39,7 +39,6 @@ import time
 from dataclasses import dataclass
 from typing import List
 
-import cv2
 import numpy as np
 
 from src.ai.embedder import DINOv2Embedder
@@ -81,36 +80,7 @@ class FeatureExtractor:
 
     @staticmethod
     def dominant_color(image_bgr):
-
-        pixels = image_bgr.reshape((-1, 3))
-
-        pixels = np.float32(pixels)
-
-        criteria = (
-            cv2.TERM_CRITERIA_EPS
-            + cv2.TERM_CRITERIA_MAX_ITER,
-            20,
-            1.0,
-        )
-
-        k = 1
-
-        _, labels, centers = cv2.kmeans(
-            pixels,
-            k,
-            None,
-            criteria,
-            10,
-            cv2.KMEANS_RANDOM_CENTERS,
-        )
-
-        color = centers[0].astype(np.uint8)
-
-        return (
-            int(color[2]),
-            int(color[1]),
-            int(color[0]),
-        )
+        return ColorDescriptor.dominant_color_rgb(image_bgr)
 
     # --------------------------------------------------------
 
