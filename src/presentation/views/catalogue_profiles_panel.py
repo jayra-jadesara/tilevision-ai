@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.services.catalogue_master_service import CatalogueMaster, CatalogueMasterService
-from src.theme.theme_manager import get_palette, get_shared_view_qss
+from src.theme.theme_manager import get_shared_view_qss, get_settings_view_qss
 from src.utils.profile_validation import (
     validate_email,
     validate_logo_path,
@@ -54,6 +54,7 @@ class CatalogueProfilesPanel(QWidget):
         self._apply_styles()
 
     def _build_ui(self) -> None:
+        self.setObjectName("CatalogueProfilesPanel")
         outer = QVBoxLayout(self)
         outer.setContentsMargins(12, 12, 12, 12)
         outer.setSpacing(10)
@@ -70,10 +71,10 @@ class CatalogueProfilesPanel(QWidget):
         splitter.setChildrenCollapsible(False)
 
         left = QFrame()
-        left.setObjectName("ProfileSidebar")
+        left.setObjectName("ProfileSidebarCard")
         left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 8, 0)
-        left_layout.setSpacing(8)
+        left_layout.setContentsMargins(12, 12, 12, 12)
+        left_layout.setSpacing(10)
 
         left_header = QHBoxLayout()
         left_header.addWidget(QLabel("Saved Profiles"))
@@ -100,11 +101,13 @@ class CatalogueProfilesPanel(QWidget):
         scroll.setObjectName("ProfileEditorScroll")
 
         editor = QWidget()
+        editor.setObjectName("ProfileEditorPage")
         editor_layout = QVBoxLayout(editor)
         editor_layout.setContentsMargins(0, 0, 0, 0)
         editor_layout.setSpacing(12)
 
         company_box = QGroupBox("Company Details")
+        company_box.setObjectName("SettingsSection")
         company_form = QFormLayout(company_box)
         company_form.setSpacing(10)
 
@@ -168,6 +171,7 @@ class CatalogueProfilesPanel(QWidget):
         editor_layout.addWidget(company_box)
 
         export_box = QGroupBox("Export Options")
+        export_box.setObjectName("SettingsSection")
         export_form = QFormLayout(export_box)
         export_form.setSpacing(10)
 
@@ -457,75 +461,4 @@ class CatalogueProfilesPanel(QWidget):
         self._apply_styles()
 
     def _apply_styles(self) -> None:
-        p = get_palette(self._theme)
-        self.setStyleSheet(
-            get_shared_view_qss(self._theme)
-            + f"""
-            #ProfileSidebar {{
-                background: transparent;
-            }}
-            #ProfileList {{
-                background-color: {p['bg_panel']};
-                border: 1px solid {p['border']};
-                border-radius: 8px;
-                color: {p['text_primary']};
-                padding: 4px;
-            }}
-            #ProfileList::item {{
-                padding: 8px 10px;
-                border-radius: 6px;
-            }}
-            #ProfileList::item:selected {{
-                background-color: {p['accent_soft']};
-                color: {p['text_primary']};
-            }}
-            #ToolbarButton {{
-                background: transparent;
-                color: {p['accent_text']};
-                border: none;
-                border-radius: 6px;
-                padding: 4px 10px;
-                font-size: 12px;
-                font-weight: 600;
-            }}
-            #ToolbarButton:hover:enabled {{
-                background-color: {p['button_hover']};
-            }}
-            QGroupBox {{
-                color: {p['text_primary']};
-                background-color: {p['bg_panel']};
-                border: 1px solid {p['border']};
-                border-radius: 8px;
-                margin-top: 14px;
-                padding: 12px 12px 8px 12px;
-                font-weight: 600;
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 6px;
-                color: {p['accent_text']};
-            }}
-            QLineEdit, QSpinBox {{
-                background-color: {p['bg_input']};
-                border: 1px solid {p['border_strong']};
-                border-radius: 6px;
-                padding: 6px 8px;
-                color: {p['text_primary']};
-            }}
-            QLineEdit[invalid="true"] {{
-                border: 2px solid {p['danger_text']};
-            }}
-            #FieldError {{
-                color: {p['danger_text']};
-                font-size: 12px;
-                font-weight: 600;
-                padding-left: 2px;
-            }}
-            QCheckBox {{
-                color: {p['text_secondary']};
-                spacing: 8px;
-            }}
-            QLabel {{ color: {p['text_secondary']}; }}
-            """
-        )
+        self.setStyleSheet(get_shared_view_qss(self._theme) + get_settings_view_qss(self._theme))

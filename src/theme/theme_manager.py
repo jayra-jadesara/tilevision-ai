@@ -191,7 +191,7 @@ _DARK_PALETTE = {
     "bg_panel": "#1E293B",
     "bg_panel_alt": "#172033",
     "bg_sidebar": "#0B1120",
-    "bg_input": "#1E293B",
+    "bg_input": "#172033",
     "text_primary": "#F1F5F9",
     "text_secondary": "#CBD5E1",
     "text_muted": "#94A3B8",
@@ -224,7 +224,7 @@ _LIGHT_PALETTE = {
     "bg_panel": "#FFFFFF",
     "bg_panel_alt": "#F8FAFC",
     "bg_sidebar": "#FFFFFF",
-    "bg_input": "#FFFFFF",
+    "bg_input": "#F8FAFC",
     "text_primary": "#0F172A",
     "text_secondary": "#334155",
     "text_muted": "#64748B",
@@ -338,6 +338,256 @@ def get_shared_view_qss(theme: str) -> str:
     #SecondaryButton:disabled, #BrowseButton:disabled, #ClearLogButton:disabled {{
         color: {p['text_faint']};
         border-color: {p['border']};
+    }}
+    QCheckBox {{
+        color: {p['text_secondary']};
+        spacing: 8px;
+    }}
+    QCheckBox::indicator {{
+        width: 16px;
+        height: 16px;
+        border: 1px solid {p['border_strong']};
+        border-radius: 4px;
+        background-color: {p['bg_input']};
+    }}
+    QCheckBox::indicator:checked {{
+        background-color: {p['accent']};
+        border-color: {p['accent']};
+    }}
+    QScrollBar:vertical {{
+        background: {p['bg_app']};
+        width: 10px;
+        margin: 0;
+    }}
+    QScrollBar::handle:vertical {{
+        background: {p['border_strong']};
+        border-radius: 5px;
+        min-height: 24px;
+    }}
+    QScrollBar::handle:vertical:hover {{
+        background: {p['accent']};
+    }}
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+        height: 0;
+    }}
+    QScrollBar:horizontal {{
+        background: {p['bg_app']};
+        height: 10px;
+        margin: 0;
+    }}
+    QScrollBar::handle:horizontal {{
+        background: {p['border_strong']};
+        border-radius: 5px;
+        min-width: 24px;
+    }}
+    QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+        width: 0;
+    }}
+    """
+
+
+def get_settings_view_qss(theme: str) -> str:
+    """Shared stylesheet for Settings and Export Profiles tabs."""
+    p = get_palette(theme)
+    return f"""
+    #SettingsView, #CatalogueProfilesPanel, #SettingsGeneralPage, #ProfileEditorPage {{
+        background-color: {p['bg_app']};
+    }}
+    #SettingsGeneralScroll, #ProfileEditorScroll {{
+        background-color: {p['bg_app']};
+        border: none;
+    }}
+    #SettingsGeneralScroll > QWidget > QWidget, #ProfileEditorScroll > QWidget > QWidget {{
+        background-color: {p['bg_app']};
+    }}
+    #PageSubtitle {{
+        color: {p['text_muted']};
+        font-size: 13px;
+        margin-bottom: 4px;
+    }}
+    QTabWidget::pane {{
+        border: none;
+        background-color: transparent;
+        top: 0;
+    }}
+    QTabBar::tab {{
+        background-color: {p['bg_panel']};
+        color: {p['text_secondary']};
+        border: 1px solid {p['border']};
+        border-bottom: none;
+        border-top-left-radius: 8px;
+        border-top-right-radius: 8px;
+        padding: 10px 22px;
+        margin-right: 6px;
+        min-width: 100px;
+    }}
+    QTabBar::tab:selected {{
+        background-color: {p['bg_panel']};
+        color: {p['accent_text']};
+        border: 1px solid {p['accent']};
+        border-bottom: 2px solid {p['bg_panel']};
+        font-weight: 600;
+    }}
+    QTabBar::tab:hover:!selected {{
+        background-color: {p['button_hover']};
+        color: {p['text_primary']};
+    }}
+    #StatCard {{
+        background-color: {p['bg_panel']};
+        border: 1px solid {p['border']};
+        border-radius: 10px;
+        padding: 4px;
+    }}
+    #StatCardTitle {{
+        color: {p['text_muted']};
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+    }}
+    #StatCardValue {{
+        color: {p['text_primary']};
+        font-size: 14px;
+        font-weight: 600;
+    }}
+    #SettingsSection, QGroupBox#SettingsSection {{
+        background-color: {p['bg_panel']};
+        color: {p['text_primary']};
+        border: 1px solid {p['border']};
+        border-radius: 10px;
+        margin-top: 16px;
+        padding: 16px 14px 14px 14px;
+        font-size: 13px;
+        font-weight: 600;
+    }}
+    #SettingsSection::title, QGroupBox#SettingsSection::title {{
+        subcontrol-origin: margin;
+        left: 12px;
+        padding: 0 8px;
+        color: {p['accent_text']};
+        background-color: {p['bg_panel']};
+    }}
+    #ProfileSidebarCard {{
+        background-color: {p['bg_panel']};
+        border: 1px solid {p['border']};
+        border-radius: 10px;
+        padding: 8px;
+    }}
+    #SectionNote {{
+        color: {p['text_muted']};
+        font-size: 12px;
+        background: transparent;
+        padding-bottom: 4px;
+    }}
+    #SettingsFormLabel {{
+        color: {p['text_secondary']};
+        font-size: 12px;
+        font-weight: 600;
+        min-width: 140px;
+    }}
+    QLabel {{
+        color: {p['text_secondary']};
+        background: transparent;
+    }}
+    #PageTitle {{
+        color: {p['text_primary']};
+    }}
+    #FoldersList, #ProfileList {{
+        background-color: {p['bg_input']};
+        border: 1px solid {p['border_strong']};
+        border-radius: 8px;
+        color: {p['text_primary']};
+        padding: 4px;
+    }}
+    #FoldersList {{
+        min-height: 120px;
+    }}
+    #FoldersList::item, #ProfileList::item {{
+        padding: 8px 10px;
+        border-radius: 6px;
+        color: {p['text_primary']};
+    }}
+    #FoldersList::item:selected, #ProfileList::item:selected {{
+        background-color: {p['highlight_bg']};
+        color: {p['text_primary']};
+        border: 1px solid {p['accent']};
+    }}
+    #FoldersList::item:hover, #ProfileList::item:hover {{
+        background-color: {p['button_hover']};
+    }}
+    QLineEdit, QSpinBox, QComboBox {{
+        background-color: {p['bg_input']};
+        border: 1px solid {p['border_strong']};
+        border-radius: 8px;
+        padding: 8px 10px;
+        color: {p['text_primary']};
+        min-height: 20px;
+    }}
+    QLineEdit:focus, QSpinBox:focus, QComboBox:focus {{
+        border: 1px solid {p['accent']};
+    }}
+    QLineEdit[invalid="true"] {{
+        border: 2px solid {p['danger_text']};
+    }}
+    #FieldError {{
+        color: {p['danger_text']};
+        font-size: 11px;
+        font-weight: 600;
+        background: transparent;
+    }}
+    QComboBox::drop-down {{
+        subcontrol-origin: padding;
+        subcontrol-position: top right;
+        width: 28px;
+        border-left: 1px solid {p['border_strong']};
+        border-top-right-radius: 8px;
+        border-bottom-right-radius: 8px;
+    }}
+    QComboBox::down-arrow {{
+        width: 0;
+        height: 0;
+        border-left: 5px solid transparent;
+        border-right: 5px solid transparent;
+        border-top: 6px solid {p['text_muted']};
+    }}
+    QComboBox QAbstractItemView {{
+        background-color: {p['bg_panel']};
+        color: {p['text_primary']};
+        border: 1px solid {p['border_strong']};
+        selection-background-color: {p['highlight_bg']};
+        selection-color: {p['text_primary']};
+    }}
+    #SecondaryButton, #BrowseButton, #ToolbarButton {{
+        background-color: {p['button_bg']};
+        color: {p['text_secondary']};
+        border: 1px solid {p['border_strong']};
+        border-radius: 8px;
+        padding: 8px 16px;
+        font-size: 12px;
+        font-weight: 600;
+        min-height: 18px;
+    }}
+    #SecondaryButton:hover:enabled, #BrowseButton:hover:enabled, #ToolbarButton:hover:enabled {{
+        background-color: {p['button_hover']};
+        color: {p['text_primary']};
+        border-color: {p['accent']};
+    }}
+    #PrimaryButton {{
+        background: qlineargradient(
+            x1: 0, y1: 0, x2: 1, y2: 0,
+            stop: 0 {p['accent_deep']},
+            stop: 1 {p['accent']}
+        );
+        color: {p['button_text']};
+        border: none;
+        border-radius: 8px;
+        padding: 10px 20px;
+        font-weight: 600;
+        min-height: 20px;
+    }}
+    QSplitter::handle {{
+        background-color: {p['border']};
+        width: 1px;
     }}
     """
 

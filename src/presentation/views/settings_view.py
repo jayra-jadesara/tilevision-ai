@@ -34,6 +34,8 @@ from PySide6.QtWidgets import (
     QProgressDialog,
     QTabWidget,
     QScrollArea,
+    QFrame,
+    QGridLayout,
 )
 
 from src.ai.feature_versions import CURRENT_FEATURE_VERSION, FeatureVersionStatus
@@ -43,7 +45,7 @@ from src.core.use_cases.index_images import IndexImagesUseCase
 from src.presentation.workers.rebuild_index_worker import RebuildIndexWorker
 from src.utils.logger import get_log_file_path
 from src.presentation.views.catalogue_profiles_panel import CatalogueProfilesPanel
-from src.theme.theme_manager import get_palette, get_shared_view_qss
+from src.theme.theme_manager import get_shared_view_qss, get_settings_view_qss
 
 logger = logging.getLogger("tilevision.presentation.views.settings_view")
 
@@ -153,18 +155,30 @@ class SettingsView(QWidget):
         title.setObjectName("PageTitle")
         layout.addWidget(title)
 
+        subtitle = QLabel(
+            "Configure search preferences, auto folder monitoring, maintenance tools, "
+            "and export catalogue profiles."
+        )
+        subtitle.setObjectName("PageSubtitle")
+        subtitle.setWordWrap(True)
+        layout.addWidget(subtitle)
+
         self._tabs = QTabWidget()
         self._tabs.setObjectName("SettingsTabs")
 
         general_page = QWidget()
         general_page.setObjectName("SettingsGeneralPage")
         general_layout = QVBoxLayout(general_page)
-        general_layout.setContentsMargins(0, 0, 0, 0)
-        general_layout.setSpacing(16)
-        general_layout.addWidget(self._build_overview_section())
+        general_layout.setContentsMargins(4, 8, 4, 8)
+        general_layout.setSpacing(20)
+        general_layout.addWidget(self._build_overview_row())
         general_layout.addWidget(self._build_watched_folders_section())
-        general_layout.addWidget(self._build_preferences_section())
-        general_layout.addWidget(self._build_maintenance_section())
+
+        columns = QHBoxLayout()
+        columns.setSpacing(16)
+        columns.addWidget(self._build_preferences_section(), stretch=1)
+        columns.addWidget(self._build_maintenance_section(), stretch=1)
+        general_layout.addLayout(columns)
         general_layout.addStretch()
 
         general_scroll = QScrollArea()
@@ -184,32 +198,68 @@ class SettingsView(QWidget):
         if index >= 0:
             self._tabs.setCurrentIndex(index)
 
-    def _build_overview_section(self) -> QGroupBox:
-        box = QGroupBox("Overview")
-        form = QFormLayout(box)
+    def _make_stat_card(self, title: str, value: str) -> tuple[QFrame, QLabel]:
+        card = QFrame()
+        card.setObjectName("StatCard")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(14, 12, 14, 12)
+        card_layout.setSpacing(4)
+
+        title_label = QLabel(title.upper())
+        title_label.setObjectName("StatCardTitle")
+        value_label = QLabel(value)
+        value_label.setObjectName("StatCardValue")
+        value_label.setWordWrap(True)
+
+        card_layout.addWidget(title_label)
+        card_layout.addWidget(value_label)
+        return card, value_label
+
+    def _build_overview_row(self) -> QWidget:
+        row_widget = QWidget()
+        row = QHBoxLayout(row_widget)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(12)
 
         catalog_count = self._catalog_count_provider() if self._catalog_count_provider else "—"
-        form.addRow("Indexed Tiles:", QLabel(str(catalog_count)))
+        tiles_card, _ = self._make_stat_card("Indexed Tiles", str(catalog_count))
+        row.addWidget(tiles_card, stretch=1)
 
-        self._feature_status_label = QLabel("—")
-        form.addRow("Feature Index:", self._feature_status_label)
+        feature_card, self._feature_status_label = self._make_stat_card("Feature Index", "—")
+        row.addWidget(feature_card, stretch=1)
 
-        self._gpu_status_label = QLabel(self._gpu_summary_text())
-        form.addRow("AI Device:", self._gpu_status_label)
+        gpu_card, self._gpu_status_label = self._make_stat_card(
+            "AI Device", self._gpu_summary_text()
+        )
+        row.addWidget(gpu_card, stretch=1)
 
         if self._license_details.get("is_trial"):
             days = self._license_details.get("days_remaining", 0)
-            license_text = f"Trial — {days} day(s) remaining"
+            license_text = f"Trial · {days} day(s) left"
         elif self._license_details:
-            license_text = f"{self._license_details.get('license_type', 'Licensed')} — {self._license_details.get('customer_name', '')}"
+            license_text = (
+                f"{self._license_details.get('license_type', 'Licensed')} · "
+                f"{self._license_details.get('customer_name', '')}"
+            )
         else:
             license_text = "Unlicensed"
-        form.addRow("License:", QLabel(license_text))
+        license_card, _ = self._make_stat_card("License", license_text)
+        row.addWidget(license_card, stretch=1)
 
+        return row_widget
+
+    def _section_box(self, title: str) -> QGroupBox:
+        box = QGroupBox(title)
+        box.setObjectName("SettingsSection")
         return box
 
+    def _form_label(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("SettingsFormLabel")
+        return label
+
     def _build_watched_folders_section(self) -> QGroupBox:
-        box = QGroupBox("Auto Folder Monitoring (Feature 7)")
+        box = self._section_box("Auto Folder Monitoring")
         layout = QVBoxLayout(box)
 
         note = QLabel(
@@ -228,6 +278,7 @@ class SettingsView(QWidget):
         layout.addWidget(self._folders_list)
 
         button_row = QHBoxLayout()
+        button_row.setSpacing(10)
         add_button = QPushButton("Add Folder")
         add_button.setObjectName("SecondaryButton")
         add_button.clicked.connect(self._on_add_folder)
@@ -243,8 +294,10 @@ class SettingsView(QWidget):
         return box
 
     def _build_preferences_section(self) -> QGroupBox:
-        box = QGroupBox("Preferences")
+        box = self._section_box("Preferences")
         form = QFormLayout(box)
+        form.setSpacing(12)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         self._top_k_combo = QComboBox()
         _RESULT_COUNT_OPTIONS = ["5", "10", "15", "20", "25"]
@@ -259,7 +312,7 @@ class SettingsView(QWidget):
             idx = 0
         self._top_k_combo.setCurrentIndex(idx)
         self._top_k_combo.currentTextChanged.connect(self._on_top_k_changed)
-        form.addRow("Search Results Shown:", self._top_k_combo)
+        form.addRow(self._form_label("Search Results"), self._top_k_combo)
 
         self._theme_combo = QComboBox()
         self._theme_combo.addItems(["dark", "light"])
@@ -267,18 +320,18 @@ class SettingsView(QWidget):
         idx = self._theme_combo.findText(current_theme)
         self._theme_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self._theme_combo.currentTextChanged.connect(self._on_theme_selected)
-        form.addRow("Theme:", self._theme_combo)
+        form.addRow(self._form_label("Theme"), self._theme_combo)
 
         self._language_combo = QComboBox()
         self._language_combo.addItem("English")
         self._language_combo.setEnabled(False)
         self._language_combo.setToolTip("Additional languages coming in a future release.")
-        form.addRow("Language:", self._language_combo)
+        form.addRow(self._form_label("Language"), self._language_combo)
 
         return box
 
     def _build_maintenance_section(self) -> QGroupBox:
-        box = QGroupBox("Maintenance")
+        box = self._section_box("Maintenance")
         layout = QVBoxLayout(box)
 
         note = QLabel(
@@ -291,35 +344,42 @@ class SettingsView(QWidget):
         note.setWordWrap(True)
         layout.addWidget(note)
 
-        row1 = QHBoxLayout()
+        grid = QGridLayout()
+        grid.setSpacing(10)
+
         self._backup_button = QPushButton("Backup Database")
         self._backup_button.setObjectName("SecondaryButton")
         self._backup_button.clicked.connect(self._on_backup_database)
         self._backup_button.setEnabled(self._db_path_provider is not None)
-        row1.addWidget(self._backup_button)
 
         self._export_logs_button = QPushButton("Export Logs")
         self._export_logs_button.setObjectName("SecondaryButton")
         self._export_logs_button.clicked.connect(self._on_export_logs)
-        row1.addWidget(self._export_logs_button)
-        row1.addStretch()
-        layout.addLayout(row1)
 
-        row2 = QHBoxLayout()
         self._rebuild_button = QPushButton("Rebuild FAISS Index")
         self._rebuild_button.setObjectName("SecondaryButton")
         self._rebuild_button.clicked.connect(self._on_rebuild_faiss)
         self._rebuild_button.setEnabled(
             self._indexing_use_case is not None and self._indexed_folders_provider is not None
         )
-        row2.addWidget(self._rebuild_button)
 
         self._clear_cache_button = QPushButton("Clear Cache")
         self._clear_cache_button.setObjectName("SecondaryButton")
         self._clear_cache_button.clicked.connect(self._on_clear_cache)
-        row2.addWidget(self._clear_cache_button)
-        row2.addStretch()
-        layout.addLayout(row2)
+
+        for button in (
+            self._backup_button,
+            self._export_logs_button,
+            self._rebuild_button,
+            self._clear_cache_button,
+        ):
+            button.setMinimumHeight(36)
+
+        grid.addWidget(self._backup_button, 0, 0)
+        grid.addWidget(self._export_logs_button, 0, 1)
+        grid.addWidget(self._rebuild_button, 1, 0)
+        grid.addWidget(self._clear_cache_button, 1, 1)
+        layout.addLayout(grid)
 
         return box
 
@@ -545,100 +605,4 @@ class SettingsView(QWidget):
         self._apply_styles()
 
     def _apply_styles(self) -> None:
-        p = get_palette(self._theme)
-        self.setStyleSheet(
-            get_shared_view_qss(self._theme)
-            + f"""
-            #SettingsView {{
-                background-color: {p['bg_app']};
-            }}
-            #SettingsGeneralScroll, #SettingsGeneralScroll QWidget {{
-                background-color: {p['bg_app']};
-                border: none;
-            }}
-            #SettingsGeneralPage {{
-                background-color: {p['bg_app']};
-            }}
-            QTabWidget::pane {{
-                border: none;
-                background-color: transparent;
-                top: 0;
-            }}
-            QTabBar::tab {{
-                background-color: transparent;
-                color: {p['text_secondary']};
-                border: none;
-                border-bottom: 2px solid transparent;
-                border-top-left-radius: 0;
-                border-top-right-radius: 0;
-                padding: 10px 18px;
-                margin-right: 4px;
-            }}
-            QTabBar::tab:selected {{
-                background-color: transparent;
-                color: {p['accent_text']};
-                border-bottom: 2px solid {p['accent']};
-                font-weight: 600;
-            }}
-            QTabBar::tab:hover {{
-                color: {p['text_primary']};
-            }}
-            QGroupBox {{
-                background-color: {p['bg_panel']};
-                color: {p['text_primary']};
-                border: 1px solid {p['border']};
-                border-radius: 8px;
-                margin-top: 14px;
-                padding: 14px 12px 12px 12px;
-                font-weight: 600;
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 6px;
-                color: {p['accent_text']};
-            }}
-            QLabel {{
-                color: {p['text_secondary']};
-                background: transparent;
-            }}
-            #PageTitle {{
-                color: {p['text_primary']};
-            }}
-            #SectionNote {{
-                color: {p['text_muted']};
-                background: transparent;
-            }}
-            #FoldersList {{
-                background-color: {p['bg_input']};
-                border: 1px solid {p['border_strong']};
-                border-radius: 6px;
-                color: {p['text_primary']};
-                min-height: 100px;
-                padding: 4px;
-            }}
-            #FoldersList::item {{
-                padding: 6px 8px;
-                border-radius: 4px;
-                color: {p['text_primary']};
-            }}
-            #FoldersList::item:selected {{
-                background-color: {p['highlight_bg']};
-                color: {p['text_primary']};
-            }}
-            QComboBox {{
-                background-color: {p['bg_input']};
-                border: 1px solid {p['border_strong']};
-                border-radius: 6px;
-                padding: 4px 8px;
-                color: {p['text_primary']};
-            }}
-            QComboBox QAbstractItemView {{
-                background-color: {p['bg_panel']};
-                color: {p['text_primary']};
-                border: 1px solid {p['border_strong']};
-                selection-background-color: {p['highlight_bg']};
-                selection-color: {p['text_primary']};
-            }}
-            """
-        )
+        self.setStyleSheet(get_shared_view_qss(self._theme) + get_settings_view_qss(self._theme))
