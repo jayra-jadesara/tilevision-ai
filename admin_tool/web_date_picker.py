@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 from PySide6.QtCore import QDate, QPoint, QSize, Qt, Signal
-from PySide6.QtGui import QMouseEvent
+from PySide6.QtGui import QGuiApplication, QMouseEvent
 from PySide6.QtWidgets import (
     QCalendarWidget,
     QFrame,
@@ -18,7 +18,10 @@ from PySide6.QtWidgets import (
 )
 
 _FIELD_HEIGHT = 36
+_FIELD_WIDTH = 210
 _CALENDAR_BTN_WIDTH = 40
+_POPUP_WIDTH = 286
+_POPUP_HEIGHT = 268
 
 
 class _ClickableLineEdit(QLineEdit):
@@ -35,14 +38,23 @@ class _CalendarPopup(QFrame):
         super().__init__(None, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
         self._picker = picker
         self.setObjectName("WebDatePopup")
+        self.setFixedSize(_POPUP_WIDTH, _POPUP_HEIGHT)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(0)
 
         self._calendar = QCalendarWidget()
         self._calendar.setObjectName("WebDateCalendar")
         self._calendar.setGridVisible(True)
-        layout.addWidget(self._calendar)
+        self._calendar.setVerticalHeaderFormat(
+            QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader
+        )
+        self._calendar.setHorizontalHeaderFormat(
+            QCalendarWidget.HorizontalHeaderFormat.ShortDayNames
+        )
+        self._calendar.setFixedSize(_POPUP_WIDTH - 16, _POPUP_HEIGHT - 16)
+        layout.addWidget(self._calendar, alignment=Qt.AlignmentFlag.AlignCenter)
 
         self._calendar.clicked.connect(self._on_date_chosen)
         self._calendar.activated.connect(self._on_date_chosen)
@@ -74,8 +86,8 @@ class WebDatePicker(QWidget):
         self._popup: Optional[_CalendarPopup] = None
 
         self.setObjectName("WebDatePicker")
-        self.setFixedHeight(_FIELD_HEIGHT)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFixedSize(_FIELD_WIDTH, _FIELD_HEIGHT)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(1, 1, 1, 1)
@@ -102,10 +114,10 @@ class WebDatePicker(QWidget):
         self._refresh_display()
 
     def sizeHint(self) -> QSize:
-        return QSize(280, _FIELD_HEIGHT)
+        return QSize(_FIELD_WIDTH, _FIELD_HEIGHT)
 
     def minimumSizeHint(self) -> QSize:
-        return QSize(200, _FIELD_HEIGHT)
+        return QSize(_FIELD_WIDTH, _FIELD_HEIGHT)
 
     def setMinimumDate(self, date: QDate) -> None:
         self._min_date = date
@@ -148,9 +160,19 @@ class WebDatePicker(QWidget):
             self._popup.setStyleSheet(self._get_qss())
 
         self._popup.sync_from_picker()
-        anchor = self.mapToGlobal(QPoint(0, self.height() + 2))
-        self._popup.move(anchor)
-        self._popup.setFixedWidth(max(self.width(), 320))
+
+        anchor = self.mapToGlobal(QPoint(0, self.height() + 4))
+        x, y = anchor.x(), anchor.y()
+
+        screen = QGuiApplication.screenAt(anchor) or QGuiApplication.primaryScreen()
+        if screen is not None:
+            bounds = screen.availableGeometry()
+            if x + _POPUP_WIDTH > bounds.right():
+                x = max(bounds.left() + 8, bounds.right() - _POPUP_WIDTH - 8)
+            if y + _POPUP_HEIGHT > bounds.bottom():
+                y = self.mapToGlobal(QPoint(0, 0)).y() - _POPUP_HEIGHT - 4
+
+        self._popup.move(x, y)
         self._popup.show()
         self._popup.raise_()
         self._popup._calendar.setFocus()

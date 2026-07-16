@@ -234,7 +234,14 @@ class AdminLicenseWindow(QMainWindow):
         self._expiry.setDisplayFormat("yyyy-MM-dd")
         self._expiry.setMinimumDate(QDate.currentDate())
         self._prepare_form_field(self._expiry)
-        form.addRow("Expiry Date:", self._expiry)
+
+        expiry_row = QWidget()
+        expiry_row_layout = QHBoxLayout(expiry_row)
+        expiry_row_layout.setContentsMargins(0, 0, 0, 0)
+        expiry_row_layout.setSpacing(0)
+        expiry_row_layout.addWidget(self._expiry, alignment=Qt.AlignmentFlag.AlignLeft)
+        expiry_row_layout.addStretch()
+        form.addRow("Expiry Date:", expiry_row)
         self._on_license_type_changed(self._license_type.currentText())
 
         self._notes = QLineEdit()
@@ -389,8 +396,8 @@ class AdminLicenseWindow(QMainWindow):
         """Give form rows enough height so styled inputs are not clipped."""
         widget.setMinimumHeight(36)
         if isinstance(widget, WebDatePicker):
-            widget.setFixedHeight(36)
-        if hasattr(widget, "setMinimumWidth"):
+            widget.setFixedSize(210, 36)
+        elif hasattr(widget, "setMinimumWidth"):
             widget.setMinimumWidth(280)
 
     def _on_license_type_changed(self, license_type: str) -> None:

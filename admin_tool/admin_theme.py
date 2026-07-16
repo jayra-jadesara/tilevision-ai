@@ -112,6 +112,8 @@ def get_admin_qss(theme: str) -> str:
         border-radius: 8px;
         min-height: 36px;
         max-height: 36px;
+        min-width: 210px;
+        max-width: 210px;
     }}
     #WebDatePicker:disabled {{
         background-color: {p['bg_panel_alt']};
@@ -156,6 +158,40 @@ def get_admin_qss(theme: str) -> str:
         background-color: {p['bg_panel']};
         border: 1px solid {p['border_strong']};
         border-radius: 10px;
+    }}
+    #WebDateCalendar {{
+        background-color: {p['bg_panel']};
+        color: {p['text_primary']};
+    }}
+    #WebDateCalendar QWidget {{
+        background-color: {p['bg_panel']};
+        color: {p['text_primary']};
+    }}
+    #WebDateCalendar QAbstractItemView:enabled {{
+        background-color: {p['bg_input']};
+        color: {p['text_primary']};
+        selection-background-color: {p['accent']};
+        selection-color: {p['button_text']};
+        font-size: 12px;
+        outline: none;
+    }}
+    #WebDateCalendar QToolButton {{
+        background-color: {p['button_bg']};
+        color: {p['text_primary']};
+        border: 1px solid {p['border']};
+        border-radius: 4px;
+        padding: 2px 6px;
+        min-height: 22px;
+        max-height: 22px;
+        font-size: 11px;
+    }}
+    #WebDateCalendar QSpinBox {{
+        background-color: {p['bg_input']};
+        color: {p['text_primary']};
+        border: 1px solid {p['border_strong']};
+        min-height: 22px;
+        max-height: 22px;
+        font-size: 11px;
     }}
     QCalendarWidget {{
         background-color: {p['bg_panel']};
