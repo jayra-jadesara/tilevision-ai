@@ -70,6 +70,7 @@ thumbnails/
 
 # Vendor secrets — NEVER commit these
 dev_tools/private_key.pem
+dev_tools/dev_private_key.pem
 dev_tools/test_license.txt
 
 # VS Code / IDEs
