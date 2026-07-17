@@ -21,6 +21,7 @@ from cryptography.hazmat.primitives.serialization import (
     PublicFormat,
     NoEncryption,
     load_pem_private_key,
+    load_pem_public_key,
 )
 
 from PySide6.QtCore import Qt, QDate, QTimer
@@ -60,6 +61,7 @@ from src.licensing.validator import (
     LIFETIME_EXPIRY_SENTINEL,
     compute_expiry_date,
     generate_license_key,
+    EMBEDDED_PUBLIC_KEY_PEM,
 )
 from src.utils.brand_assets import APP_ICON_PATH, logo_pixmap
 from src.theme.theme_manager import get_palette
@@ -89,6 +91,7 @@ class AdminLicenseWindow(QMainWindow):
         self._setup_ui()
         self._apply_styles()
         self._auto_load_signing_key()
+        self._warn_if_signing_key_mismatch()
         self._refresh_backup_status()
         self._trigger_vendor_backup(silent=True)
         self._refresh_all()
@@ -641,6 +644,39 @@ class AdminLicenseWindow(QMainWindow):
     def _ensure_vendor_dir(self) -> None:
         _VENDOR_DIR.mkdir(parents=True, exist_ok=True)
 
+    def _signing_key_matches_customer_app(self) -> bool:
+        if not self._private_key_pem:
+            return True
+        try:
+            vendor_public = load_pem_private_key(self._private_key_pem, password=None).public_key()
+            app_public = load_pem_public_key(EMBEDDED_PUBLIC_KEY_PEM)
+            vendor_pem = vendor_public.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
+            app_pem = app_public.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
+            return vendor_pem == app_pem
+        except Exception:
+            return False
+
+    def _warn_if_signing_key_mismatch(self) -> None:
+        if not self._private_key_pem or self._signing_key_matches_customer_app():
+            return
+        QMessageBox.warning(
+            self,
+            "Signing Key Mismatch",
+            "Your vendor private key does NOT match the customer app's public key.\n\n"
+            "License keys you generate will fail with 'invalid signature' until you fix this:\n\n"
+            "For local testing:\n"
+            f"  Import Key File → {_DEV_KEY_PATH}\n\n"
+            "For production:\n"
+            "  Use Create New Key, paste the public key into\n"
+            "  src/licensing/validator.py, then rebuild the customer app.",
+        )
+        self._keypair_status.setText(
+            f"Warning: signing key does not match customer app — keys will fail activation."
+        )
+        self._keypair_status.setProperty("loaded", False)
+        self._keypair_status.style().unpolish(self._keypair_status)
+        self._keypair_status.style().polish(self._keypair_status)
+
     def _set_key_status(self, loaded: bool, message: str) -> None:
         self._keypair_status.setText(message)
         self._keypair_status.setProperty("loaded", loaded)
@@ -759,6 +795,7 @@ class AdminLicenseWindow(QMainWindow):
         self._save_vendor_private_key(private_pem)
         self._private_key_pem = private_pem
         self._set_key_status(True, f"Ready — new key saved to {_VENDOR_DIR.name}")
+        self._warn_if_signing_key_mismatch()
         self._output.setPlainText(
             "Paste into src/licensing/validator.py as EMBEDDED_PUBLIC_KEY_PEM:\n\n"
             + public_pem.decode("utf-8")
