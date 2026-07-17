@@ -183,7 +183,7 @@ def get_admin_qss(theme: str) -> str:
     #WebDateNavButton:hover {{
         background-color: {p['button_hover']};
     }}
-    #WebDateMonth, #WebDateYear {{
+    #WebDateMonth {{
         background-color: {p['bg_input']};
         color: {p['text_primary']};
         border: 1px solid {p['border_strong']};
@@ -191,18 +191,13 @@ def get_admin_qss(theme: str) -> str:
         padding: 2px 8px;
         min-height: 28px;
         max-height: 28px;
-    }}
-    #WebDateMonth {{
         min-width: 96px;
     }}
-    #WebDateYear {{
-        min-width: 72px;
-    }}
-    #WebDateMonth::drop-down, #WebDateYear::drop-down {{
+    #WebDateMonth::drop-down {{
         border: none;
         width: 18px;
     }}
-    #WebDateMonth QAbstractItemView, #WebDateYear QAbstractItemView {{
+    #WebDateMonth QAbstractItemView {{
         background-color: {p['bg_panel']};
         color: {p['text_primary']};
         border: 1px solid {p['border_strong']};
@@ -211,19 +206,28 @@ def get_admin_qss(theme: str) -> str:
         outline: none;
         padding: 2px;
     }}
-    #WebDateYear QAbstractItemView {{
+    #WebDateYear {{
+        background-color: {p['bg_input']};
+        color: {p['text_primary']};
+        border: 1px solid {p['border_strong']};
+        border-radius: 6px;
+        padding: 2px 4px;
+        min-height: 28px;
+        max-height: 28px;
         min-width: 72px;
-        max-height: 214px;
+        max-width: 76px;
     }}
-    #WebDateYear QScrollBar:vertical {{
-        background: {p['bg_panel_alt']};
-        width: 10px;
-        border-radius: 5px;
+    #WebDateYear::up-button, #WebDateYear::down-button {{
+        width: 16px;
+        border: none;
+        background-color: {p['button_bg']};
     }}
-    #WebDateYear QScrollBar::handle:vertical {{
-        background: {p['border_strong']};
-        border-radius: 5px;
-        min-height: 24px;
+    #WebDateYear::up-button:hover, #WebDateYear::down-button:hover {{
+        background-color: {p['button_hover']};
+    }}
+    #WebDateYear::up-arrow, #WebDateYear::down-arrow {{
+        width: 8px;
+        height: 8px;
     }}
     #WebDateCalendar {{
         background-color: {p['bg_panel']};

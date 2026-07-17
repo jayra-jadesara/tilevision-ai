@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QSizePolicy,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -24,33 +25,6 @@ _CALENDAR_BTN_WIDTH = 40
 _POPUP_WIDTH = 272
 _POPUP_HEIGHT = 252
 _MAX_YEAR = 2099
-_COMBO_VISIBLE_ITEMS = 8
-_COMBO_ROW_HEIGHT = 26
-
-
-class _ScrollableComboBox(QComboBox):
-    """QComboBox with a fixed-height scrollable dropdown list."""
-
-    def __init__(
-        self,
-        parent: Optional[QWidget] = None,
-        *,
-        visible_rows: int = _COMBO_VISIBLE_ITEMS,
-        row_height: int = _COMBO_ROW_HEIGHT,
-    ) -> None:
-        super().__init__(parent)
-        self._visible_rows = visible_rows
-        self._row_height = row_height
-        self.setMaxVisibleItems(visible_rows)
-
-    def showPopup(self) -> None:
-        view = self.view()
-        if view is not None:
-            rows = min(max(self.count(), 1), self._visible_rows)
-            view.setFixedHeight(rows * self._row_height + 6)
-            view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-            view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        super().showPopup()
 
 
 class _ClickableLineEdit(QLineEdit):
@@ -85,13 +59,19 @@ class _CalendarPopup(QFrame):
         self._prev_btn.setFixedSize(28, 28)
         self._prev_btn.setToolTip("Previous month")
 
-        self._month_combo = _ScrollableComboBox(visible_rows=6)
+        self._month_combo = QComboBox()
         self._month_combo.setObjectName("WebDateMonth")
+        self._month_combo.setMaxVisibleItems(12)
         for month in range(1, 13):
             self._month_combo.addItem(QDate(2000, month, 1).toString("MMMM"), month)
 
-        self._year_combo = _ScrollableComboBox(visible_rows=_COMBO_VISIBLE_ITEMS)
-        self._year_combo.setObjectName("WebDateYear")
+        # QSpinBox avoids broken QComboBox popups inside a Popup window on Windows.
+        self._year_spin = QSpinBox()
+        self._year_spin.setObjectName("WebDateYear")
+        self._year_spin.setFixedWidth(76)
+        self._year_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._year_spin.setButtonSymbols(QSpinBox.ButtonSymbols.UpDownArrows)
+        self._year_spin.setWrapping(False)
 
         self._next_btn = QPushButton("\u203a")
         self._next_btn.setObjectName("WebDateNavButton")
@@ -100,7 +80,7 @@ class _CalendarPopup(QFrame):
 
         nav_layout.addWidget(self._prev_btn)
         nav_layout.addWidget(self._month_combo, stretch=1)
-        nav_layout.addWidget(self._year_combo)
+        nav_layout.addWidget(self._year_spin)
         nav_layout.addWidget(self._next_btn)
         layout.addWidget(nav)
 
@@ -120,46 +100,47 @@ class _CalendarPopup(QFrame):
 
         self._prev_btn.clicked.connect(self._calendar.showPreviousMonth)
         self._next_btn.clicked.connect(self._calendar.showNextMonth)
-        self._month_combo.currentIndexChanged.connect(self._on_nav_changed)
-        self._year_combo.currentIndexChanged.connect(self._on_nav_changed)
+        self._month_combo.currentIndexChanged.connect(self._on_month_changed)
+        self._year_spin.valueChanged.connect(self._on_year_changed)
         self._calendar.currentPageChanged.connect(self._sync_nav_from_calendar)
         self._calendar.clicked.connect(self._on_date_chosen)
         self._calendar.activated.connect(self._on_date_chosen)
 
-    def _populate_years(self, focus_year: int) -> None:
+    def _configure_year_range(self, focus_year: int) -> None:
         min_year = self._picker.minimumDate().year()
         max_year = max(_MAX_YEAR, focus_year)
-        self._year_combo.blockSignals(True)
-        self._year_combo.clear()
-        for year in range(min_year, max_year + 1):
-            self._year_combo.addItem(str(year), year)
-        index = self._year_combo.findData(focus_year)
-        if index >= 0:
-            self._year_combo.setCurrentIndex(index)
-        self._year_combo.blockSignals(False)
+        self._year_spin.blockSignals(True)
+        self._year_spin.setRange(min_year, max_year)
+        self._year_spin.setValue(focus_year)
+        self._year_spin.blockSignals(False)
 
     def _sync_nav_controls(self, year: int, month: int) -> None:
         self._month_combo.blockSignals(True)
-        self._year_combo.blockSignals(True)
+        self._year_spin.blockSignals(True)
         self._month_combo.setCurrentIndex(max(0, month - 1))
-        year_index = self._year_combo.findData(year)
-        if year_index >= 0:
-            self._year_combo.setCurrentIndex(year_index)
+        self._year_spin.setValue(year)
         self._month_combo.blockSignals(False)
-        self._year_combo.blockSignals(False)
+        self._year_spin.blockSignals(False)
 
     def _sync_nav_from_calendar(self, year: int, month: int) -> None:
         if self._updating_nav:
             return
         self._sync_nav_controls(year, month)
 
-    def _on_nav_changed(self) -> None:
+    def _on_month_changed(self) -> None:
         month = self._month_combo.currentData()
-        year = self._year_combo.currentData()
-        if month is None or year is None:
+        if month is None:
             return
         self._updating_nav = True
-        self._calendar.setCurrentPage(int(year), int(month))
+        self._calendar.setCurrentPage(self._year_spin.value(), int(month))
+        self._updating_nav = False
+
+    def _on_year_changed(self, year: int) -> None:
+        month = self._month_combo.currentData()
+        if month is None:
+            return
+        self._updating_nav = True
+        self._calendar.setCurrentPage(year, int(month))
         self._updating_nav = False
 
     def sync_from_picker(self) -> None:
@@ -167,7 +148,7 @@ class _CalendarPopup(QFrame):
         minimum = self._picker.minimumDate()
         self._calendar.setMinimumDate(minimum)
         self._calendar.setSelectedDate(selected)
-        self._populate_years(selected.year())
+        self._configure_year_range(selected.year())
         self._updating_nav = True
         self._calendar.setCurrentPage(selected.year(), selected.month())
         self._updating_nav = False
