@@ -6,10 +6,13 @@ decoupling of the business logic from data storage implementations.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 from src.ai.feature_versions import FeatureVersionStatus
 from src.core.models import TileImage, LicenseInfo, IndexedFolderState, SearchHistoryEntry, ActivityLogEntry
+
+if TYPE_CHECKING:
+    from src.services.catalogue_master_service import CatalogueMaster
 
 
 class IImageRepository(ABC):
@@ -331,4 +334,53 @@ class IActivityLogRepository(ABC):
         Returns:
             A list of ActivityLogEntry, newest first.
         """
+        pass
+
+
+class ICatalogueProfileRepository(ABC):
+    """Abstract interface for export catalogue company profiles (per license customer)."""
+
+    @abstractmethod
+    def list_for_customer(self, license_customer_name: str) -> List["CatalogueMaster"]:
+        """Return all export profiles for the licensed customer, newest first."""
+        pass
+
+    @abstractmethod
+    def get_by_id(self, license_customer_name: str, profile_id: str) -> Optional["CatalogueMaster"]:
+        pass
+
+    @abstractmethod
+    def find_by_display_name(
+        self,
+        license_customer_name: str,
+        display_name: str,
+        *,
+        exclude_id: Optional[str] = None,
+    ) -> Optional["CatalogueMaster"]:
+        pass
+
+    @abstractmethod
+    def add(self, license_customer_name: str, profile: "CatalogueMaster") -> "CatalogueMaster":
+        pass
+
+    @abstractmethod
+    def update(self, license_customer_name: str, profile: "CatalogueMaster") -> "CatalogueMaster":
+        pass
+
+    @abstractmethod
+    def delete(self, license_customer_name: str, profile_id: str) -> None:
+        pass
+
+    @abstractmethod
+    def get_last_selected_id(self, license_customer_name: str) -> Optional[str]:
+        pass
+
+    @abstractmethod
+    def set_last_selected_id(
+        self, license_customer_name: str, profile_id: Optional[str]
+    ) -> None:
+        pass
+
+    @abstractmethod
+    def count_for_customer(self, license_customer_name: str) -> int:
         pass

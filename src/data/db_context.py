@@ -113,9 +113,38 @@ class DatabaseContext:
                 created_at TIMESTAMP NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
             );
             """,
+            """
+            CREATE TABLE IF NOT EXISTS catalogue_profiles (
+                id TEXT PRIMARY KEY,
+                license_customer_name TEXT NOT NULL,
+                display_name TEXT NOT NULL COLLATE NOCASE,
+                company_name TEXT DEFAULT '',
+                logo_path TEXT DEFAULT '',
+                email TEXT DEFAULT '',
+                phone TEXT DEFAULT '',
+                website TEXT DEFAULT '',
+                address TEXT DEFAULT '',
+                default_pdf_folder TEXT DEFAULT '',
+                include_search_image INTEGER NOT NULL DEFAULT 1,
+                include_image_path INTEGER NOT NULL DEFAULT 0,
+                export_only_selected INTEGER NOT NULL DEFAULT 0,
+                watermark_text TEXT DEFAULT '',
+                max_results INTEGER NOT NULL DEFAULT 12,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(license_customer_name, display_name)
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS catalogue_profile_prefs (
+                license_customer_name TEXT PRIMARY KEY,
+                last_selected_id TEXT
+            );
+            """,
             "CREATE INDEX IF NOT EXISTS idx_tiles_file_name ON tiles(file_name);",
             "CREATE INDEX IF NOT EXISTS idx_search_history_searched_at ON search_history(searched_at);",
-            "CREATE INDEX IF NOT EXISTS idx_activity_log_created_at ON activity_log(created_at);"
+            "CREATE INDEX IF NOT EXISTS idx_activity_log_created_at ON activity_log(created_at);",
+            "CREATE INDEX IF NOT EXISTS idx_catalogue_profiles_customer ON catalogue_profiles(license_customer_name);",
         ]
 
         logger.info(f"Initializing SQLite schema at: {self._db_path}")

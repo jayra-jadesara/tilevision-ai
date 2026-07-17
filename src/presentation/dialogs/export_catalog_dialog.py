@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
-from src.services.catalogue_master_service import CatalogueMaster, CatalogueMasterService
+from src.services.catalogue_master_service import CatalogueMaster
 from src.services.pdf_export_service import PdfExportOptions
 from src.theme.theme_manager import get_palette, get_shared_view_qss
 
@@ -34,13 +34,16 @@ class ExportCatalogDialog(QDialog):
         *,
         theme: str = "light",
         on_open_profiles_settings: Optional[Callable[[], None]] = None,
+        catalogue_master_service=None,
     ) -> None:
         self._default_name = (
             f"tilevision_catalogue_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
         )
         self._theme = theme
         self._on_open_profiles_settings = on_open_profiles_settings
-        self._service = CatalogueMasterService()
+        if catalogue_master_service is None:
+            raise ValueError("catalogue_master_service is required")
+        self._service = catalogue_master_service
         self._output_path: Optional[str] = None
         self._loading_profile = False
         self._current_master: Optional[CatalogueMaster] = None

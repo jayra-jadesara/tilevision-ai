@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
 )
 
-from src.services.catalogue_master_service import CatalogueMaster, CatalogueMasterService
+from src.services.catalogue_master_service import CatalogueMaster
 from src.theme.theme_manager import get_shared_view_qss, get_settings_view_qss
 from src.utils.profile_validation import (
     validate_email,
@@ -43,10 +43,20 @@ class CatalogueProfilesPanel(QWidget):
 
     profiles_changed = Signal()
 
-    def __init__(self, *, theme: str = "light", parent=None) -> None:
+    def __init__(
+        self,
+        *,
+        theme: str = "light",
+        catalogue_master_service=None,
+        license_customer_name: str = "",
+        parent=None,
+    ) -> None:
         super().__init__(parent)
         self._theme = theme
-        self._service = CatalogueMasterService()
+        self._license_customer_name = license_customer_name.strip()
+        if catalogue_master_service is None:
+            raise ValueError("catalogue_master_service is required")
+        self._service = catalogue_master_service
         self._editing_id: Optional[str] = None
         self._field_errors: dict[str, QLabel] = {}
         self._build_ui()
@@ -61,7 +71,9 @@ class CatalogueProfilesPanel(QWidget):
 
         hint = QLabel(
             "Configure company details and export options once here. On Search, pick a profile "
-            "and export — no extra editing needed."
+            "and export — no extra editing needed.\n\n"
+            "Profiles are saved in your TileVision database for the licensed customer on this PC. "
+            "Each profile name must be unique for that customer."
         )
         hint.setWordWrap(True)
         hint.setObjectName("PageSubtitle")
@@ -113,6 +125,11 @@ class CatalogueProfilesPanel(QWidget):
 
         self._display_name = QLineEdit()
         self._display_name.setPlaceholderText("e.g. ABC Ceramic")
+        if self._license_customer_name:
+            self._display_name.setToolTip(
+                f"Use your licensed customer name ({self._license_customer_name}). "
+                "Each name can appear only once."
+            )
         company_form.addRow(
             "Profile Name",
             self._wrap_validated_field(
@@ -399,6 +416,9 @@ class CatalogueProfilesPanel(QWidget):
 
     def _on_new(self) -> None:
         self._clear_form()
+        if self._license_customer_name:
+            self._display_name.setText(self._license_customer_name)
+            self._company_name.setText(self._license_customer_name)
         self._display_name.setFocus()
 
     def _on_save(self) -> None:
@@ -412,9 +432,16 @@ class CatalogueProfilesPanel(QWidget):
             else:
                 saved = self._service.add(master)
                 self._editing_id = saved.id
+        except ValueError as exc:
+            QMessageBox.warning(self, "Cannot Save Profile", str(exc))
+            return
         except KeyError:
-            saved = self._service.add(self._form_master())
-            self._editing_id = saved.id
+            try:
+                saved = self._service.add(self._form_master())
+                self._editing_id = saved.id
+            except ValueError as exc:
+                QMessageBox.warning(self, "Cannot Save Profile", str(exc))
+                return
 
         self._refresh_list(select_id=self._editing_id)
         self.profiles_changed.emit()

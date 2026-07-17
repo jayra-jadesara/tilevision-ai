@@ -61,6 +61,7 @@ class SettingsView(QWidget):
         self,
         settings: AppSettings,
         license_details: Optional[dict] = None,
+        catalogue_master_service=None,
         catalog_count_provider: Optional[Callable[[], int]] = None,
         on_theme_changed: Optional[Callable[[str], None]] = None,
         db_path_provider: Optional[Callable[[], Path]] = None,
@@ -97,6 +98,7 @@ class SettingsView(QWidget):
         self._theme = theme
         self._settings = settings
         self._license_details = license_details or {}
+        self._catalogue_master_service = catalogue_master_service
         self._catalog_count_provider = catalog_count_provider
         self._on_theme_changed = on_theme_changed
         self._db_path_provider = db_path_provider
@@ -198,7 +200,11 @@ class SettingsView(QWidget):
         general_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         general_scroll.setWidget(general_page)
 
-        self._export_profiles_panel = CatalogueProfilesPanel(theme=self._theme)
+        self._export_profiles_panel = CatalogueProfilesPanel(
+            theme=self._theme,
+            catalogue_master_service=self._catalogue_master_service,
+            license_customer_name=str(self._license_details.get("customer_name") or ""),
+        )
         self._tabs.addTab(general_scroll, "General")
         self._tabs.addTab(self._export_profiles_panel, "Export Profiles")
         layout.addWidget(self._tabs, stretch=1)

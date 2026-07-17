@@ -33,6 +33,7 @@ from src.data.db_protection import seal_database
 from src.data.sqlite_repository import (
     SQLiteImageRepository, SQLiteLicenseRepository, SQLiteIndexedFolderRepository,
     SQLiteSearchHistoryRepository, SQLiteActivityLogRepository,
+    SQLiteCatalogueProfileRepository,
 )
 
 from src.ai.vector_index import FaissIndexManager
@@ -143,6 +144,7 @@ def build_application() -> int:
     indexed_folder_repository = SQLiteIndexedFolderRepository(db_context=db_context)
     search_history_repository = SQLiteSearchHistoryRepository(db_context=db_context)
     activity_log_repository = SQLiteActivityLogRepository(db_context=db_context)
+    catalogue_profile_repository = SQLiteCatalogueProfileRepository(db_context=db_context)
 
     # ── 5. Construct Licensing Layer ──────────────────────────────────────────
     logger.info("Initializing license validator...")
@@ -185,6 +187,17 @@ def build_application() -> int:
             )
         else:
             logger.info(f"Valid license found for: {customer}")
+
+    customer_name = str((license_details or {}).get("customer_name") or "").strip()
+    from src.services.catalogue_master_service import CatalogueMasterService
+
+    catalogue_master_service = CatalogueMasterService(
+        repository=catalogue_profile_repository,
+        license_customer_name=customer_name,
+    )
+    if customer_name:
+        catalogue_master_service.migrate_legacy_storage_if_needed()
+        catalogue_master_service.ensure_profile_for_customer(customer_name)
 
     # ── 7. Construct AI Layer ─────────────────────────────────────────────────
     from src.ai.embedder import DINOv2Embedder
@@ -371,6 +384,7 @@ def build_application() -> int:
         indexing_viewmodel=indexing_viewmodel,
         search_viewmodel=search_viewmodel,
         license_details=license_details,
+        catalogue_master_service=catalogue_master_service,
         find_duplicates_use_case=find_duplicates_use_case,
         settings=settings,
         catalog_count_provider=lambda: len(image_repository.get_all()),

@@ -39,3 +39,17 @@ def logo_pixmap(size: int = 56) -> QPixmap:
 
 def nav_icon_size() -> QSize:
     return QSize(24, 24)
+
+
+def license_status_icon(theme: str, *, is_trial: bool = False) -> QIcon:
+    """Return a theme-aware license badge icon for the status bar."""
+    icon_name = "license_trial" if is_trial else "license"
+    safe_theme = "light" if theme == "light" else "dark"
+    icon_path = _ICONS_DIR / safe_theme / f"nav_{icon_name}.svg"
+    if icon_path.exists():
+        return QIcon(str(icon_path))
+    return QIcon()
+
+
+def license_status_icon_size() -> QSize:
+    return QSize(16, 16)

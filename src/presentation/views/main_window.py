@@ -52,7 +52,14 @@ from src.presentation.views.settings_view import SettingsView
 from src.presentation.views.dashboard_view import DashboardView
 from src.presentation.views.help_view import HelpView
 from src.theme.theme_manager import adapt_legacy_stylesheet, get_app_stylesheet, get_palette
-from src.utils.brand_assets import APP_ICON_PATH, logo_pixmap, nav_icon, nav_icon_size
+from src.utils.brand_assets import (
+    APP_ICON_PATH,
+    license_status_icon,
+    license_status_icon_size,
+    logo_pixmap,
+    nav_icon,
+    nav_icon_size,
+)
 
 logger = logging.getLogger("tilevision.presentation.views.main_window")
 
@@ -117,6 +124,7 @@ class MainWindow(QMainWindow):
         indexing_viewmodel: IndexingViewModel,
         search_viewmodel: Optional[SearchViewModel] = None,
         license_details: Optional[dict] = None,
+        catalogue_master_service=None,
         find_duplicates_use_case=None,
         settings=None,
         catalog_count_provider: Optional[Callable[[], int]] = None,
@@ -166,6 +174,7 @@ class MainWindow(QMainWindow):
         self._indexing_viewmodel = indexing_viewmodel
         self._search_viewmodel = search_viewmodel
         self._license_details = license_details or {}
+        self._catalogue_master_service = catalogue_master_service
         self._find_duplicates_use_case = find_duplicates_use_case
         self._settings = settings
         self._catalog_count_provider = catalog_count_provider
@@ -249,6 +258,7 @@ class MainWindow(QMainWindow):
                 self._search_viewmodel,
                 theme=self._current_theme,
                 on_open_profiles_settings=self.navigate_to_settings_export_profiles,
+                catalogue_master_service=self._catalogue_master_service,
             )
             self._content_stack.addWidget(self._search_view)  # index 1
             self._nav_search_button.setEnabled(True)
@@ -294,6 +304,7 @@ class MainWindow(QMainWindow):
             self._settings_view = SettingsView(
                 settings=self._settings,
                 license_details=self._license_details,
+                catalogue_master_service=self._catalogue_master_service,
                 catalog_count_provider=self._catalog_count_provider,
                 on_theme_changed=self._on_theme_changed_request,
                 db_path_provider=self._db_path_provider,
@@ -417,10 +428,23 @@ class MainWindow(QMainWindow):
         self._status_label.setObjectName("StatusBarLabel")
         status_bar.addWidget(self._status_label)
 
-        # Right-side permanent label showing licensing info
-        self._license_status_label = QLabel(self._format_license_status())
+        self._license_status_widget = QWidget()
+        license_layout = QHBoxLayout(self._license_status_widget)
+        license_layout.setContentsMargins(0, 0, 12, 0)
+        license_layout.setSpacing(6)
+
+        self._license_status_icon = QLabel()
+        self._license_status_icon.setObjectName("LicenseStatusIcon")
+        self._license_status_icon.setFixedSize(license_status_icon_size())
+        self._license_status_icon.setScaledContents(True)
+
+        self._license_status_label = QLabel()
         self._license_status_label.setObjectName("LicenseStatusLabel")
-        status_bar.addPermanentWidget(self._license_status_label)
+
+        license_layout.addWidget(self._license_status_icon)
+        license_layout.addWidget(self._license_status_label)
+        status_bar.addPermanentWidget(self._license_status_widget)
+        self._refresh_license_status_display()
 
     def _format_license_status(self) -> str:
         """Build the status bar license indicator text from license_details."""
@@ -435,6 +459,47 @@ class MainWindow(QMainWindow):
 
         license_type = self._license_details.get("license_type", "Licensed")
         return license_type
+
+    def _format_license_status_tooltip(self) -> str:
+        """Build hover text for the status bar license indicator."""
+        if not self._license_details:
+            return "No active license"
+
+        parts = [self._format_license_status()]
+        customer = self._license_details.get("customer_name", "").strip()
+        if customer:
+            parts.append(customer)
+        expires_at = self._license_details.get("expires_at")
+        if expires_at:
+            parts.append(f"Expires {expires_at}")
+        return " · ".join(parts)
+
+    def _refresh_license_status_display(self) -> None:
+        """Update license icon, text, color, and tooltip in the status bar."""
+        text = self._format_license_status()
+        is_trial = bool(self._license_details.get("is_trial"))
+        self._license_status_label.setText(text)
+        self._license_status_icon.setPixmap(
+            license_status_icon(self._current_theme, is_trial=is_trial).pixmap(
+                license_status_icon_size()
+            )
+        )
+
+        if not self._license_details:
+            status_class = "unlicensed"
+        elif is_trial:
+            status_class = "trial"
+        else:
+            status_class = "active"
+
+        self._license_status_label.setProperty("licenseState", status_class)
+        self._license_status_label.style().unpolish(self._license_status_label)
+        self._license_status_label.style().polish(self._license_status_label)
+
+        tooltip = self._format_license_status_tooltip()
+        self._license_status_widget.setToolTip(tooltip)
+        self._license_status_icon.setToolTip(tooltip)
+        self._license_status_label.setToolTip(tooltip)
 
     # ── Signals ───────────────────────────────────────────────────────────────
 
@@ -610,6 +675,8 @@ class MainWindow(QMainWindow):
         ):
             btn.set_nav_theme(theme)
 
+        self._refresh_license_status_display()
+
         logger.info(f"Applied '{theme}' theme.")
         self._apply_stale_banner_style()
 
@@ -771,10 +838,18 @@ class MainWindow(QMainWindow):
                 font-size: 11px;
                 padding-left: 8px;
             }}
+            #LicenseStatusIcon {{
+                background: transparent;
+            }}
             #LicenseStatusLabel {{
                 color: {p['success_text']};
                 font-size: 11px;
-                padding-right: 12px;
+            }}
+            #LicenseStatusLabel[licenseState="trial"] {{
+                color: {p['warning_text']};
+            }}
+            #LicenseStatusLabel[licenseState="unlicensed"] {{
+                color: {p['danger_text']};
             }}
 
             /* ── General QLabel ──────────────────────────────────────────── */

@@ -26,7 +26,7 @@ from src.ai.feature_versions import (
 from src.data.db_context import DatabaseContext
 from src.data.repository_interface import (
     IImageRepository, ILicenseRepository, IIndexedFolderRepository,
-    ISearchHistoryRepository, IActivityLogRepository,
+    ISearchHistoryRepository, IActivityLogRepository, ICatalogueProfileRepository,
 )
 
 logger = logging.getLogger("tilevision.data.sqlite_repository")
@@ -1049,3 +1049,258 @@ class SQLiteActivityLogRepository(IActivityLogRepository):
         except sqlite3.Error as e:
             logger.error(f"Failed to fetch recent activity: {e}")
             return []
+
+
+class SQLiteCatalogueProfileRepository(ICatalogueProfileRepository):
+    """SQLite-backed export catalogue profiles scoped to license customer."""
+
+    def __init__(self, db_context: DatabaseContext) -> None:
+        self._db = db_context
+
+    @staticmethod
+    def _row_to_master(row: sqlite3.Row):
+        from src.services.catalogue_master_service import CatalogueMaster
+
+        return CatalogueMaster(
+            id=row["id"],
+            display_name=row["display_name"],
+            company_name=row["company_name"] or "",
+            logo_path=row["logo_path"] or "",
+            email=row["email"] or "",
+            phone=row["phone"] or "",
+            website=row["website"] or "",
+            address=row["address"] or "",
+            default_pdf_folder=row["default_pdf_folder"] or "",
+            include_search_image=bool(row["include_search_image"]),
+            include_image_path=bool(row["include_image_path"]),
+            export_only_selected=bool(row["export_only_selected"]),
+            watermark_text=row["watermark_text"] or "",
+            max_results=int(row["max_results"] or 12),
+        )
+
+    @staticmethod
+    def _master_values(profile) -> tuple:
+        return (
+            profile.display_name.strip(),
+            profile.company_name.strip(),
+            profile.logo_path.strip(),
+            profile.email.strip(),
+            profile.phone.strip(),
+            profile.website.strip(),
+            profile.address.strip(),
+            profile.default_pdf_folder.strip(),
+            int(profile.include_search_image),
+            int(profile.include_image_path),
+            int(profile.export_only_selected),
+            profile.watermark_text.strip(),
+            max(1, min(100, int(profile.max_results))),
+        )
+
+    def list_for_customer(self, license_customer_name: str):
+        customer = license_customer_name.strip()
+        if not customer:
+            return []
+        query = """
+            SELECT * FROM catalogue_profiles
+            WHERE license_customer_name = ?
+            ORDER BY updated_at DESC, created_at DESC;
+        """
+        try:
+            with self._db.session() as conn:
+                rows = conn.execute(query, (customer,)).fetchall()
+                return [self._row_to_master(row) for row in rows]
+        except sqlite3.Error as e:
+            logger.error(f"Failed to list catalogue profiles: {e}")
+            return []
+
+    def get_by_id(self, license_customer_name: str, profile_id: str):
+        customer = license_customer_name.strip()
+        if not customer or not profile_id:
+            return None
+        query = """
+            SELECT * FROM catalogue_profiles
+            WHERE license_customer_name = ? AND id = ?;
+        """
+        try:
+            with self._db.session() as conn:
+                row = conn.execute(query, (customer, profile_id)).fetchone()
+                return self._row_to_master(row) if row else None
+        except sqlite3.Error as e:
+            logger.error(f"Failed to get catalogue profile: {e}")
+            return None
+
+    def find_by_display_name(
+        self,
+        license_customer_name: str,
+        display_name: str,
+        *,
+        exclude_id: Optional[str] = None,
+    ):
+        customer = license_customer_name.strip()
+        target = " ".join(display_name.strip().split()).casefold()
+        if not customer or not target:
+            return None
+        for master in self.list_for_customer(customer):
+            if exclude_id and master.id == exclude_id:
+                continue
+            if " ".join(master.display_name.strip().split()).casefold() == target:
+                return master
+        return None
+
+    def add(self, license_customer_name: str, profile):
+        customer = license_customer_name.strip()
+        if not customer:
+            raise ValueError("Licensed customer name is required to save export profiles.")
+        values = self._master_values(profile)
+        query = """
+            INSERT INTO catalogue_profiles (
+                id, license_customer_name, display_name, company_name, logo_path,
+                email, phone, website, address, default_pdf_folder,
+                include_search_image, include_image_path, export_only_selected,
+                watermark_text, max_results
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """
+        try:
+            with self._db.session() as conn:
+                conn.execute(
+                    query,
+                    (profile.id, customer, *values),
+                )
+                conn.commit()
+            return profile
+        except sqlite3.IntegrityError as e:
+            raise ValueError(
+                f'A profile named "{profile.display_name.strip()}" already exists. '
+                "Each customer can have only one profile."
+            ) from e
+        except sqlite3.Error as e:
+            logger.error(f"Failed to add catalogue profile: {e}")
+            raise RuntimeError(f"Database error saving export profile: {e}") from e
+
+    def update(self, license_customer_name: str, profile):
+        customer = license_customer_name.strip()
+        if not customer:
+            raise ValueError("Licensed customer name is required to save export profiles.")
+        values = self._master_values(profile)
+        query = """
+            UPDATE catalogue_profiles
+            SET display_name = ?, company_name = ?, logo_path = ?,
+                email = ?, phone = ?, website = ?, address = ?,
+                default_pdf_folder = ?, include_search_image = ?,
+                include_image_path = ?, export_only_selected = ?,
+                watermark_text = ?, max_results = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE license_customer_name = ? AND id = ?;
+        """
+        try:
+            with self._db.session() as conn:
+                cursor = conn.execute(
+                    query,
+                    (*values, customer, profile.id),
+                )
+                if cursor.rowcount == 0:
+                    raise KeyError(f"Profile not found: {profile.id}")
+                conn.commit()
+            return profile
+        except sqlite3.IntegrityError as e:
+            raise ValueError(
+                f'A profile named "{profile.display_name.strip()}" already exists. '
+                "Each customer can have only one profile."
+            ) from e
+        except sqlite3.Error as e:
+            logger.error(f"Failed to update catalogue profile: {e}")
+            raise RuntimeError(f"Database error updating export profile: {e}") from e
+
+    def delete(self, license_customer_name: str, profile_id: str) -> None:
+        customer = license_customer_name.strip()
+        if not customer:
+            return
+        try:
+            with self._db.session() as conn:
+                conn.execute(
+                    """
+                    DELETE FROM catalogue_profiles
+                    WHERE license_customer_name = ? AND id = ?;
+                    """,
+                    (customer, profile_id),
+                )
+                prefs = conn.execute(
+                    """
+                    SELECT last_selected_id FROM catalogue_profile_prefs
+                    WHERE license_customer_name = ?;
+                    """,
+                    (customer,),
+                ).fetchone()
+                if prefs and prefs["last_selected_id"] == profile_id:
+                    conn.execute(
+                        "DELETE FROM catalogue_profile_prefs WHERE license_customer_name = ?;",
+                        (customer,),
+                    )
+                conn.commit()
+        except sqlite3.Error as e:
+            logger.error(f"Failed to delete catalogue profile: {e}")
+            raise RuntimeError(f"Database error deleting export profile: {e}") from e
+
+    def get_last_selected_id(self, license_customer_name: str) -> Optional[str]:
+        customer = license_customer_name.strip()
+        if not customer:
+            return None
+        try:
+            with self._db.session() as conn:
+                row = conn.execute(
+                    """
+                    SELECT last_selected_id FROM catalogue_profile_prefs
+                    WHERE license_customer_name = ?;
+                    """,
+                    (customer,),
+                ).fetchone()
+                if row and row["last_selected_id"]:
+                    return str(row["last_selected_id"])
+        except sqlite3.Error as e:
+            logger.error(f"Failed to read catalogue profile prefs: {e}")
+        return None
+
+    def set_last_selected_id(
+        self, license_customer_name: str, profile_id: Optional[str]
+    ) -> None:
+        customer = license_customer_name.strip()
+        if not customer:
+            return
+        try:
+            with self._db.session() as conn:
+                if profile_id:
+                    conn.execute(
+                        """
+                        INSERT INTO catalogue_profile_prefs (license_customer_name, last_selected_id)
+                        VALUES (?, ?)
+                        ON CONFLICT(license_customer_name) DO UPDATE SET
+                            last_selected_id = excluded.last_selected_id;
+                        """,
+                        (customer, profile_id),
+                    )
+                else:
+                    conn.execute(
+                        "DELETE FROM catalogue_profile_prefs WHERE license_customer_name = ?;",
+                        (customer,),
+                    )
+                conn.commit()
+        except sqlite3.Error as e:
+            logger.error(f"Failed to save catalogue profile prefs: {e}")
+
+    def count_for_customer(self, license_customer_name: str) -> int:
+        customer = license_customer_name.strip()
+        if not customer:
+            return 0
+        try:
+            with self._db.session() as conn:
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS count FROM catalogue_profiles
+                    WHERE license_customer_name = ?;
+                    """,
+                    (customer,),
+                ).fetchone()
+                return int(row["count"]) if row else 0
+        except sqlite3.Error as e:
+            logger.error(f"Failed to count catalogue profiles: {e}")
+            return 0

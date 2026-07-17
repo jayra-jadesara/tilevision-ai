@@ -272,6 +272,7 @@ class SearchView(QWidget):
     def __init__(
         self, viewmodel: SearchViewModel, theme: str = "dark", parent: Optional[QWidget] = None,
         on_open_profiles_settings: Optional[Callable[[], None]] = None,
+        catalogue_master_service=None,
     ) -> None:
         """
         Initialize the SearchView.
@@ -285,6 +286,7 @@ class SearchView(QWidget):
         self._theme = theme
         self._viewmodel = viewmodel
         self._on_open_profiles_settings = on_open_profiles_settings
+        self._catalogue_master_service = catalogue_master_service
         self._current_results: List[SearchResult] = []
         self._current_query_image_path: Optional[str] = None
         self._preview_panel = _ResultPreviewPanel(self, theme=theme)
@@ -425,6 +427,7 @@ class SearchView(QWidget):
             self,
             theme=self._theme,
             on_open_profiles_settings=self._on_open_profiles_settings,
+            catalogue_master_service=self._catalogue_master_service,
         )
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
