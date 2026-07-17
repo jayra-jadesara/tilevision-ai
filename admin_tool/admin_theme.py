@@ -114,6 +114,13 @@ def get_admin_qss(theme: str) -> str:
         max-height: 36px;
         min-width: 210px;
         max-width: 210px;
+        padding: 0;
+        margin: 0;
+    }}
+    #ExpiryDateRow {{
+        background: transparent;
+        min-height: 40px;
+        max-height: 40px;
     }}
     #WebDatePicker:disabled {{
         background-color: {p['bg_panel_alt']};
@@ -126,7 +133,6 @@ def get_admin_qss(theme: str) -> str:
         padding: 0 10px;
         margin: 0;
         min-height: 0px;
-        max-height: 34px;
     }}
     #WebDateEdit:disabled {{
         color: {p['text_muted']};
@@ -141,7 +147,6 @@ def get_admin_qss(theme: str) -> str:
         min-width: 40px;
         max-width: 40px;
         min-height: 0px;
-        max-height: 34px;
         padding: 0;
         margin: 0;
         font-size: 15px;
@@ -204,6 +209,10 @@ def get_admin_qss(theme: str) -> str:
         selection-background-color: {p['highlight_bg']};
         selection-color: {p['text_primary']};
         outline: none;
+        padding: 2px;
+    }}
+    #WebDateYear QAbstractItemView {{
+        min-width: 72px;
     }}
     #WebDateCalendar {{
         background-color: {p['bg_panel']};

@@ -21,9 +21,10 @@ from PySide6.QtWidgets import (
 _FIELD_HEIGHT = 36
 _FIELD_WIDTH = 210
 _CALENDAR_BTN_WIDTH = 40
-_POPUP_WIDTH = 260
-_POPUP_HEIGHT = 248
-_YEAR_SPAN = 16
+_POPUP_WIDTH = 272
+_POPUP_HEIGHT = 252
+_MAX_YEAR = 2099
+_COMBO_VISIBLE_ITEMS = 10
 
 
 class _ClickableLineEdit(QLineEdit):
@@ -60,11 +61,13 @@ class _CalendarPopup(QFrame):
 
         self._month_combo = QComboBox()
         self._month_combo.setObjectName("WebDateMonth")
+        self._month_combo.setMaxVisibleItems(_COMBO_VISIBLE_ITEMS)
         for month in range(1, 13):
             self._month_combo.addItem(QDate(2000, month, 1).toString("MMMM"), month)
 
         self._year_combo = QComboBox()
         self._year_combo.setObjectName("WebDateYear")
+        self._year_combo.setMaxVisibleItems(_COMBO_VISIBLE_ITEMS)
 
         self._next_btn = QPushButton("\u203a")
         self._next_btn.setObjectName("WebDateNavButton")
@@ -85,9 +88,10 @@ class _CalendarPopup(QFrame):
             QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader
         )
         self._calendar.setHorizontalHeaderFormat(
-            QCalendarWidget.HorizontalHeaderFormat.SingleLetterDayNames
+            QCalendarWidget.HorizontalHeaderFormat.ShortDayNames
         )
-        self._calendar.setFixedHeight(188)
+        self._calendar.setMinimumWidth(_POPUP_WIDTH - 20)
+        self._calendar.setFixedHeight(192)
         layout.addWidget(self._calendar)
 
         self._prev_btn.clicked.connect(self._calendar.showPreviousMonth)
@@ -100,7 +104,7 @@ class _CalendarPopup(QFrame):
 
     def _populate_years(self, focus_year: int) -> None:
         min_year = self._picker.minimumDate().year()
-        max_year = min_year + _YEAR_SPAN
+        max_year = max(_MAX_YEAR, focus_year)
         self._year_combo.blockSignals(True)
         self._year_combo.clear()
         for year in range(min_year, max_year + 1):
@@ -172,7 +176,7 @@ class WebDatePicker(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(1, 1, 1, 1)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
         inner_height = _FIELD_HEIGHT - 2
