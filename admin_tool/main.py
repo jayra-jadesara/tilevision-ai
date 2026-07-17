@@ -361,16 +361,28 @@ class AdminLicenseWindow(QMainWindow):
         filter_row = QHBoxLayout()
         filter_row.addWidget(QLabel("Status:"))
         self._status_filter = QComboBox()
-        self._status_filter.addItems(["all", "active", "cancelled", "superseded"])
+        for label, value in (
+            ("All", "all"),
+            ("Active", "active"),
+            ("Trial (active)", "trial"),
+            ("Suspended", "cancelled"),
+            ("Old key", "superseded"),
+        ):
+            self._status_filter.addItem(label, value)
         self._prepare_form_field(self._status_filter)
-        self._status_filter.currentTextChanged.connect(self._refresh_registry_table)
+        self._status_filter.currentIndexChanged.connect(self._refresh_registry_table)
         filter_row.addWidget(self._status_filter)
 
         filter_row.addWidget(QLabel("Category:"))
         self._category_filter = QComboBox()
-        self._category_filter.addItems(["all", "trials", "official"])
+        for label, value in (
+            ("All types", "all"),
+            ("Trials only", "trials"),
+            ("Full licenses", "official"),
+        ):
+            self._category_filter.addItem(label, value)
         self._prepare_form_field(self._category_filter)
-        self._category_filter.currentTextChanged.connect(self._refresh_registry_table)
+        self._category_filter.currentIndexChanged.connect(self._refresh_registry_table)
         filter_row.addWidget(self._category_filter)
 
         filter_row.addWidget(QLabel("Search:"))
@@ -457,12 +469,29 @@ class AdminLicenseWindow(QMainWindow):
         self._stat_expiring.setText(str(stats.expiring_soon))
         self._refresh_registry_table()
 
+    def _status_filter_value(self) -> str:
+        value = self._status_filter.currentData()
+        return str(value) if value else "all"
+
+    def _category_filter_value(self) -> str:
+        value = self._category_filter.currentData()
+        return str(value) if value else "all"
+
     def _refresh_registry_table(self) -> None:
-        records = self._ledger.list_licenses(
-            status_filter=self._status_filter.currentText(),
-            category_filter=self._category_filter.currentText(),
-            search_text=self._search_edit.text(),
-        )
+        status_filter = self._status_filter_value()
+        category_filter = self._category_filter_value()
+        if status_filter == "trial":
+            records = self._ledger.list_licenses(
+                status_filter="active",
+                category_filter="trials",
+                search_text=self._search_edit.text(),
+            )
+        else:
+            records = self._ledger.list_licenses(
+                status_filter=status_filter,
+                category_filter=category_filter,
+                search_text=self._search_edit.text(),
+            )
         self._registry_table.setRowCount(len(records))
         for row, rec in enumerate(records):
             self._registry_table.setItem(row, 0, QTableWidgetItem(rec.customer_name))
@@ -476,28 +505,36 @@ class AdminLicenseWindow(QMainWindow):
             self._registry_table.setItem(row, 7, QTableWidgetItem(rec.license_id))
 
     def _make_status_table_item(self, rec: LicenseRecord) -> QTableWidgetItem:
-        """Status column with color coding: green active, yellow trial, red suspended."""
+        """Status column: green active, yellow trial, red suspended, gray old key."""
         p = get_palette(self._current_theme)
         status = rec.status.lower()
 
-        if status in ("cancelled", "superseded"):
-            label = "Suspended" if status == "cancelled" else "Superseded"
+        if status == "cancelled":
+            label = "Suspended"
             bg, fg = p["danger_bg"], p["danger_text"]
+            tip = "Cancelled by vendor — new keys blocked until Allow Re-issue."
+        elif status == "superseded":
+            label = "Old key"
+            bg, fg = p["bg_panel_alt"], p["text_muted"]
+            tip = "Replaced when you issued a newer key — do not send this key to the customer."
         elif status == "active" and is_trial_license_type(rec.license_type):
             label = "Trial"
             bg, fg = p["warning_bg"], p["warning_text"]
+            tip = "Active trial license — send this key to the customer."
         elif status == "active":
             label = "Active"
             bg, fg = p["success_bg"], p["success_text"]
+            tip = "Active full license — send this key to the customer."
         else:
             label = rec.status
             bg, fg = p["bg_panel"], p["text_primary"]
+            tip = rec.status
 
         item = QTableWidgetItem(label)
         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         item.setBackground(QBrush(QColor(bg)))
         item.setForeground(QBrush(QColor(fg)))
-        item.setToolTip(f"Registry status: {rec.status} · {rec.license_type}")
+        item.setToolTip(tip)
         return item
 
     def _update_status_legend(self) -> None:
@@ -505,13 +542,15 @@ class AdminLicenseWindow(QMainWindow):
             return
         p = get_palette(self._current_theme)
         self._registry_legend.setText(
-            "Status column: "
+            "Status: "
             f"<span style='background:{p['success_bg']};color:{p['success_text']};"
             "padding:2px 8px;border-radius:4px;'>Active</span> "
             f"<span style='background:{p['warning_bg']};color:{p['warning_text']};"
             "padding:2px 8px;border-radius:4px;'>Trial</span> "
             f"<span style='background:{p['danger_bg']};color:{p['danger_text']};"
-            "padding:2px 8px;border-radius:4px;'>Suspended</span>"
+            "padding:2px 8px;border-radius:4px;'>Suspended</span> "
+            f"<span style='background:{p['bg_panel_alt']};color:{p['text_muted']};"
+            "padding:2px 8px;border-radius:4px;'>Old key</span>"
         )
 
     def _copy_to_clipboard_with_feedback(

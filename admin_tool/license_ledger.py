@@ -157,7 +157,7 @@ class LicenseLedger:
                     """
                     UPDATE licenses
                     SET status = 'superseded',
-                        notes = COALESCE(notes, '') || ' Superseded by renewal.'
+                        notes = COALESCE(notes, '') || ' Replaced by newer key.'
                     WHERE license_id = ?
                     """,
                     (supersede_license_id,),
