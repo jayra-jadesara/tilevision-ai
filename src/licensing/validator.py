@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import uuid
+from pathlib import Path
 from typing import Dict, Any, Optional
 
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -58,6 +59,27 @@ EMBEDDED_PUBLIC_KEY_PEM = b"""-----BEGIN PUBLIC KEY-----
 MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE8oV3FXs5Mzc25mxzta6K9Snbtxaa
 7iXvMu4Srxuht3u0B7qFavlLuoYhrmqD8zV9sBY5QyJj5Yir8iZhTBGwrA==
 -----END PUBLIC KEY-----"""
+
+# When the vendor tool runs on the same PC as the customer app (typical dev/setup),
+# it auto-writes the matching public key here. Customer PCs in the field do not
+# have this folder — they rely on EMBEDDED_PUBLIC_KEY_PEM baked into the build.
+VENDOR_PUBLIC_KEY_PATH = Path.home() / ".tilevision_ai_vendor" / "vendor_public_key.pem"
+
+
+def resolve_verification_public_key_pem() -> bytes:
+    """
+    Return the public key PEM used to verify license signatures.
+
+    Prefers the auto-synced vendor public key on the local vendor PC when
+    present, otherwise falls back to the embedded production key.
+    """
+    if VENDOR_PUBLIC_KEY_PATH.is_file():
+        logger.info(
+            "Using vendor public key from local vendor folder: %s",
+            VENDOR_PUBLIC_KEY_PATH,
+        )
+        return VENDOR_PUBLIC_KEY_PATH.read_bytes()
+    return EMBEDDED_PUBLIC_KEY_PEM
 
 def _resolve_developer_mode() -> bool:
     """
@@ -175,7 +197,7 @@ class LicenseValidator:
         Args:
             public_key_pem: Optional override PEM key bytes. Defaults to the embedded key.
         """
-        self._public_key_pem = public_key_pem or EMBEDDED_PUBLIC_KEY_PEM
+        self._public_key_pem = public_key_pem or resolve_verification_public_key_pem()
         self._public_key = None
 
         if not _DEVELOPER_MODE:

@@ -62,6 +62,7 @@ from src.licensing.validator import (
     compute_expiry_date,
     generate_license_key,
     EMBEDDED_PUBLIC_KEY_PEM,
+    VENDOR_PUBLIC_KEY_PATH,
 )
 from src.utils.brand_assets import APP_ICON_PATH, logo_pixmap
 from src.theme.theme_manager import get_palette
@@ -91,7 +92,7 @@ class AdminLicenseWindow(QMainWindow):
         self._setup_ui()
         self._apply_styles()
         self._auto_load_signing_key()
-        self._warn_if_signing_key_mismatch()
+        self._sync_signing_key_for_local_app()
         self._refresh_backup_status()
         self._trigger_vendor_backup(silent=True)
         self._refresh_all()
@@ -167,6 +168,10 @@ class AdminLicenseWindow(QMainWindow):
 
         hint = QLabel(
             f"Signing key (fixed): {_VENDOR_KEY_PATH}\n"
+            f"Public key auto-sync: {VENDOR_PUBLIC_KEY_PATH}\n"
+            "On this PC the customer app loads that public key automatically. "
+            "For customer showrooms (no vendor folder), embed the public key in "
+            "src/licensing/validator.py before shipping.\n"
             "Automatic backup copies your vendor folder to OneDrive/Documents "
             "(cloud-synced) whenever you open the tool or issue a license."
         )
@@ -195,6 +200,14 @@ class AdminLicenseWindow(QMainWindow):
         backup_btn.setToolTip("Copy vendor data to OneDrive/Documents now")
         backup_btn.clicked.connect(self._on_backup_now)
         row.addWidget(backup_btn)
+
+        show_pub_btn = QPushButton("Show Public Key for Customer App")
+        show_pub_btn.setToolTip(
+            "Display the public key that must be in src/licensing/validator.py "
+            "to match your vendor private key on this PC"
+        )
+        show_pub_btn.clicked.connect(self._on_show_public_key_for_app)
+        row.addWidget(show_pub_btn)
         row.addStretch()
         layout.addLayout(row)
         return box
@@ -644,38 +657,63 @@ class AdminLicenseWindow(QMainWindow):
     def _ensure_vendor_dir(self) -> None:
         _VENDOR_DIR.mkdir(parents=True, exist_ok=True)
 
+    def _derived_public_pem_from_private(self) -> Optional[bytes]:
+        if not self._private_key_pem:
+            return None
+        try:
+            public_key = load_pem_private_key(self._private_key_pem, password=None).public_key()
+            return public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
+        except Exception:
+            return None
+
+    def _sync_signing_key_for_local_app(self) -> bool:
+        """
+        Write vendor_public_key.pem so the customer app on this PC auto-matches
+        the loaded vendor private key (no manual validator.py edit needed).
+        """
+        public_pem = self._derived_public_pem_from_private()
+        if not public_pem:
+            return False
+        try:
+            self._ensure_vendor_dir()
+            VENDOR_PUBLIC_KEY_PATH.write_bytes(public_pem)
+            self._set_key_status(
+                True,
+                f"Ready — key loaded from {_VENDOR_DIR.name} "
+                f"(public key synced for customer app on this PC)",
+            )
+            return True
+        except Exception as exc:
+            self._set_key_status(
+                False,
+                f"Key loaded but public key sync failed: {exc}",
+            )
+            QMessageBox.warning(
+                self,
+                "Public Key Sync Failed",
+                f"Could not write {VENDOR_PUBLIC_KEY_PATH}.\n\n{exc}",
+            )
+            return False
+
     def _signing_key_matches_customer_app(self) -> bool:
         if not self._private_key_pem:
             return True
+        derived = self._derived_public_pem_from_private()
+        if not derived:
+            return False
+        if VENDOR_PUBLIC_KEY_PATH.is_file() and VENDOR_PUBLIC_KEY_PATH.read_bytes() == derived:
+            return True
         try:
-            vendor_public = load_pem_private_key(self._private_key_pem, password=None).public_key()
             app_public = load_pem_public_key(EMBEDDED_PUBLIC_KEY_PEM)
-            vendor_pem = vendor_public.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
             app_pem = app_public.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
-            return vendor_pem == app_pem
+            return derived == app_pem
         except Exception:
             return False
 
     def _warn_if_signing_key_mismatch(self) -> None:
-        if not self._private_key_pem or self._signing_key_matches_customer_app():
-            return
-        QMessageBox.warning(
-            self,
-            "Signing Key Mismatch",
-            "Your vendor private key does NOT match the customer app's public key.\n\n"
-            "License keys you generate will fail with 'invalid signature' until you fix this:\n\n"
-            "For local testing:\n"
-            f"  Import Key File → {_DEV_KEY_PATH}\n\n"
-            "For production:\n"
-            "  Use Create New Key, paste the public key into\n"
-            "  src/licensing/validator.py, then rebuild the customer app.",
-        )
-        self._keypair_status.setText(
-            f"Warning: signing key does not match customer app — keys will fail activation."
-        )
-        self._keypair_status.setProperty("loaded", False)
-        self._keypair_status.style().unpolish(self._keypair_status)
-        self._keypair_status.style().polish(self._keypair_status)
+        """Legacy hook — sync handles local matching automatically."""
+        if self._private_key_pem and not self._signing_key_matches_customer_app():
+            self._sync_signing_key_for_local_app()
 
     def _set_key_status(self, loaded: bool, message: str) -> None:
         self._keypair_status.setText(message)
@@ -695,6 +733,7 @@ class AdminLicenseWindow(QMainWindow):
             load_pem_private_key(pem, password=None)
             self._private_key_pem = pem
             self._set_key_status(True, f"Ready — key loaded from {_VENDOR_DIR.name}")
+            self._sync_signing_key_for_local_app()
             return True
         except Exception as exc:
             self._private_key_pem = None
@@ -715,6 +754,7 @@ class AdminLicenseWindow(QMainWindow):
         self._save_vendor_private_key(pem)
         self._private_key_pem = pem
         self._set_key_status(True, f"Ready — key saved to {_VENDOR_DIR.name}")
+        self._sync_signing_key_for_local_app()
         self._trigger_vendor_backup(silent=True)
         return True
 
@@ -763,6 +803,44 @@ class AdminLicenseWindow(QMainWindow):
             return
         self._import_private_key_file(Path(path_str))
 
+    def _on_show_public_key_for_app(self) -> None:
+        if not self._private_key_pem:
+            QMessageBox.warning(
+                self,
+                "No Signing Key",
+                "Load or create a vendor private key first.",
+            )
+            return
+
+        private_key = load_pem_private_key(self._private_key_pem, password=None)
+        public_pem = private_key.public_key().public_bytes(
+            Encoding.PEM, PublicFormat.SubjectPublicKeyInfo
+        ).decode("utf-8")
+
+        self._tabs.setCurrentIndex(1)
+        self._output.setPlainText(
+            "Paste into src/licensing/validator.py as EMBEDDED_PUBLIC_KEY_PEM "
+            "(replace the existing block, keep the b\"\"\" wrapper):\n\n"
+            + public_pem
+        )
+
+        if self._signing_key_matches_customer_app():
+            QMessageBox.information(
+                self,
+                "Already Matched",
+                "This public key already matches the customer app.\n\n"
+                "If activation still fails, regenerate the license key and check Machine ID.",
+            )
+        else:
+            QMessageBox.information(
+                self,
+                "Public Key Ready",
+                "The matching public key is shown on the Generate Key tab.\n\n"
+                "1. Copy it into src/licensing/validator.py\n"
+                "2. Restart the customer app (python main.py)\n"
+                "3. Generate a NEW license key and send it to the customer",
+            )
+
     def _on_generate_keypair(self) -> None:
         if _VENDOR_KEY_PATH.exists():
             overwrite = QMessageBox.question(
@@ -795,7 +873,7 @@ class AdminLicenseWindow(QMainWindow):
         self._save_vendor_private_key(private_pem)
         self._private_key_pem = private_pem
         self._set_key_status(True, f"Ready — new key saved to {_VENDOR_DIR.name}")
-        self._warn_if_signing_key_mismatch()
+        self._sync_signing_key_for_local_app()
         self._output.setPlainText(
             "Paste into src/licensing/validator.py as EMBEDDED_PUBLIC_KEY_PEM:\n\n"
             + public_pem.decode("utf-8")
