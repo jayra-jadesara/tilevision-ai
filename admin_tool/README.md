@@ -21,10 +21,9 @@ signing key.
 4. Rebuild/re-package the customer application with the real public key
    embedded.
 
-From then on, each time you open the Admin tool you'll **Load Private Key**
-(step 1 in the tool) rather than generating a new one — generating a new
-keypair invalidates every key you've issued so far, since the app only
-trusts the public key baked into it at build time.
+From then on, each time you open the Admin tool the signing key loads automatically from
+`%USERPROFILE%\.tilevision_ai_vendor\vendor_private_key.pem`. Use **Import Key File**
+only if you need to copy a key from elsewhere into that folder.
 
 ## Issuing a license
 

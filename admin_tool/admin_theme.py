@@ -50,6 +50,16 @@ def get_admin_qss(theme: str) -> str:
         font-size: 11px;
         background: transparent;
     }}
+    #KeyStatus {{
+        font-weight: 600;
+        background: transparent;
+    }}
+    #KeyStatus[loaded="true"] {{
+        color: {p['accent']};
+    }}
+    #KeyStatus[loaded="false"] {{
+        color: {p['warning_text']};
+    }}
     #ThemeLabel {{
         color: {p['text_muted']};
         font-size: 11px;

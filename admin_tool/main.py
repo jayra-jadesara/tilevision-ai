@@ -6,6 +6,7 @@ Run: python admin_tool/main.py
 
 import base64
 import json
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -50,6 +51,7 @@ from PySide6.QtWidgets import (
 
 from license_ledger import LicenseLedger, LicenseRecord
 from admin_theme import get_admin_qss
+from vendor_backup import get_last_backup_summary, resolve_backup_dir, run_vendor_backup
 from web_date_picker import WebDatePicker
 from src.licensing.validator import (
     VENDOR_LICENSE_TYPES,
@@ -59,7 +61,11 @@ from src.licensing.validator import (
 )
 from src.utils.brand_assets import APP_ICON_PATH, logo_pixmap
 
-_SETTINGS_PATH = Path.home() / ".tilevision_ai_vendor" / "admin_settings.json"
+_VENDOR_DIR = Path.home() / ".tilevision_ai_vendor"
+_SETTINGS_PATH = _VENDOR_DIR / "admin_settings.json"
+_VENDOR_KEY_PATH = _VENDOR_DIR / "vendor_private_key.pem"
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_DEV_KEY_PATH = _PROJECT_ROOT / "dev_tools" / "dev_private_key.pem"
 
 
 class AdminLicenseWindow(QMainWindow):
@@ -79,7 +85,9 @@ class AdminLicenseWindow(QMainWindow):
         self._load_settings()
         self._setup_ui()
         self._apply_styles()
-        self._load_saved_private_key()
+        self._auto_load_signing_key()
+        self._refresh_backup_status()
+        self._trigger_vendor_backup(silent=True)
         self._refresh_all()
 
     def _setup_ui(self) -> None:
@@ -142,16 +150,46 @@ class AdminLicenseWindow(QMainWindow):
         layout.addWidget(self._tabs, stretch=1)
 
     def _build_keypair_section(self) -> QGroupBox:
-        box = QGroupBox("Signing Key (one-time setup)")
-        row = QHBoxLayout(box)
-        self._keypair_status = QLabel("No private key loaded.")
-        row.addWidget(self._keypair_status, stretch=1)
-        load_btn = QPushButton("Load Private Key")
-        load_btn.clicked.connect(self._on_load_private_key)
-        row.addWidget(load_btn)
-        gen_btn = QPushButton("Generate New Keypair")
-        gen_btn.clicked.connect(self._on_generate_keypair)
-        row.addWidget(gen_btn)
+        box = QGroupBox("Signing Key")
+        layout = QVBoxLayout(box)
+        layout.setSpacing(8)
+
+        self._keypair_status = QLabel("No signing key loaded.")
+        self._keypair_status.setObjectName("KeyStatus")
+        layout.addWidget(self._keypair_status)
+
+        hint = QLabel(
+            f"Signing key (fixed): {_VENDOR_KEY_PATH}\n"
+            "Automatic backup copies your vendor folder to OneDrive/Documents "
+            "(cloud-synced) whenever you open the tool or issue a license."
+        )
+        hint.setObjectName("Hint")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        self._backup_status = QLabel(get_last_backup_summary())
+        self._backup_status.setObjectName("Hint")
+        self._backup_status.setWordWrap(True)
+        layout.addWidget(self._backup_status)
+
+        row = QHBoxLayout()
+        open_btn = QPushButton("Import Key File...")
+        open_btn.setObjectName("PrimaryButton")
+        open_btn.setToolTip("Copy a .pem file into your vendor folder and load it")
+        open_btn.clicked.connect(self._on_load_private_key)
+        row.addWidget(open_btn)
+
+        create_btn = QPushButton("Create New Key (First Setup)")
+        create_btn.setToolTip("Only when starting fresh for real customers — not for daily use")
+        create_btn.clicked.connect(self._on_generate_keypair)
+        row.addWidget(create_btn)
+
+        backup_btn = QPushButton("Backup Now")
+        backup_btn.setToolTip("Copy vendor data to OneDrive/Documents now")
+        backup_btn.clicked.connect(self._on_backup_now)
+        row.addWidget(backup_btn)
+        row.addStretch()
+        layout.addLayout(row)
         return box
 
     def _build_overview_tab(self) -> QWidget:
@@ -451,42 +489,140 @@ class AdminLicenseWindow(QMainWindow):
         self._save_settings(theme=theme)
         self._apply_styles()
 
-    def _save_private_key_path(self, path: Path) -> None:
-        self._save_settings(private_key_path=str(path))
+    def _refresh_backup_status(self) -> None:
+        if hasattr(self, "_backup_status"):
+            backup_dir = resolve_backup_dir()
+            base = get_last_backup_summary()
+            if backup_dir is not None:
+                self._backup_status.setText(
+                    f"{base}\nAuto-backup folder: {backup_dir}"
+                )
+            else:
+                self._backup_status.setText(
+                    f"{base}\nAuto-backup folder not found — install/sync OneDrive or use Documents."
+                )
 
-    def _load_saved_private_key(self) -> None:
-        if not _SETTINGS_PATH.exists():
-            return
-        try:
-            data = json.loads(_SETTINGS_PATH.read_text(encoding="utf-8"))
-            path = Path(data.get("private_key_path", ""))
-            if path.exists():
-                pem = path.read_bytes()
-                load_pem_private_key(pem, password=None)
-                self._private_key_pem = pem
-                self._keypair_status.setText(f"Loaded: {path.name}")
-        except Exception:
-            pass
+    def _trigger_vendor_backup(self, *, silent: bool = False) -> None:
+        ok, message = run_vendor_backup()
+        self._refresh_backup_status()
+        if not silent and not ok:
+            QMessageBox.warning(self, "Backup", message)
+        elif not silent and ok:
+            QMessageBox.information(self, "Backup", message)
 
-    def _on_load_private_key(self) -> None:
-        path_str, _ = QFileDialog.getOpenFileName(self, "Load Private Key", "", "PEM Files (*.pem)")
-        if not path_str:
-            return
+    def _on_backup_now(self) -> None:
+        self._trigger_vendor_backup(silent=False)
+
+    def _ensure_vendor_dir(self) -> None:
+        _VENDOR_DIR.mkdir(parents=True, exist_ok=True)
+
+    def _set_key_status(self, loaded: bool, message: str) -> None:
+        self._keypair_status.setText(message)
+        self._keypair_status.setProperty("loaded", loaded)
+        self._keypair_status.style().unpolish(self._keypair_status)
+        self._keypair_status.style().polish(self._keypair_status)
+
+    def _save_vendor_private_key(self, pem: bytes) -> None:
+        self._ensure_vendor_dir()
+        _VENDOR_KEY_PATH.write_bytes(pem)
+
+    def _load_vendor_private_key(self) -> bool:
+        if not _VENDOR_KEY_PATH.exists():
+            return False
         try:
-            pem = Path(path_str).read_bytes()
+            pem = _VENDOR_KEY_PATH.read_bytes()
             load_pem_private_key(pem, password=None)
             self._private_key_pem = pem
-            self._keypair_status.setText(f"Loaded: {Path(path_str).name}")
-            self._save_private_key_path(Path(path_str))
+            self._set_key_status(True, f"Ready — key loaded from {_VENDOR_DIR.name}")
+            return True
         except Exception as exc:
+            self._private_key_pem = None
+            self._set_key_status(False, "Invalid signing key in vendor folder.")
             QMessageBox.critical(self, "Invalid Key", str(exc))
+            return False
+
+    def _import_private_key_file(self, source: Path) -> bool:
+        try:
+            pem = source.read_bytes()
+            load_pem_private_key(pem, password=None)
+        except Exception as exc:
+            self._private_key_pem = None
+            self._set_key_status(False, f"Invalid key file: {source.name}")
+            QMessageBox.critical(self, "Invalid Key", str(exc))
+            return False
+
+        self._save_vendor_private_key(pem)
+        self._private_key_pem = pem
+        self._set_key_status(True, f"Ready — key saved to {_VENDOR_DIR.name}")
+        self._trigger_vendor_backup(silent=True)
+        return True
+
+    def _migrate_legacy_key_path(self) -> bool:
+        if not _SETTINGS_PATH.exists():
+            return False
+        try:
+            data = json.loads(_SETTINGS_PATH.read_text(encoding="utf-8"))
+            legacy = Path(data.get("private_key_path", ""))
+            if not legacy.exists() or legacy.resolve() == _VENDOR_KEY_PATH.resolve():
+                return False
+            shutil.copy2(legacy, _VENDOR_KEY_PATH)
+            data.pop("private_key_path", None)
+            _SETTINGS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            return self._load_vendor_private_key()
+        except Exception:
+            return False
+
+    def _seed_dev_key_if_needed(self) -> bool:
+        if _VENDOR_KEY_PATH.exists() or not _DEV_KEY_PATH.exists():
+            return False
+        try:
+            shutil.copy2(_DEV_KEY_PATH, _VENDOR_KEY_PATH)
+            return self._load_vendor_private_key()
+        except Exception:
+            return False
+
+    def _auto_load_signing_key(self) -> None:
+        if self._load_vendor_private_key():
+            return
+        if self._migrate_legacy_key_path():
+            return
+        if self._seed_dev_key_if_needed():
+            return
+        self._set_key_status(
+            False,
+            f"No signing key — import a .pem or create one. Saved to:\n{_VENDOR_KEY_PATH}",
+        )
+
+    def _on_load_private_key(self) -> None:
+        start_dir = str(_VENDOR_DIR if _VENDOR_DIR.exists() else Path.home())
+        path_str, _ = QFileDialog.getOpenFileName(
+            self, "Import Private Key File", start_dir, "PEM Files (*.pem)"
+        )
+        if not path_str:
+            return
+        self._import_private_key_file(Path(path_str))
 
     def _on_generate_keypair(self) -> None:
+        if _VENDOR_KEY_PATH.exists():
+            overwrite = QMessageBox.question(
+                self,
+                "Replace Signing Key",
+                f"A key already exists at:\n{_VENDOR_KEY_PATH}\n\n"
+                "Replace it with a new keypair? Old license keys will stop working "
+                "unless the customer app has the matching public key.",
+            )
+            if overwrite != QMessageBox.StandardButton.Yes:
+                return
+
         if QMessageBox.question(
             self,
-            "Generate Keypair",
-            "Create a new signing keypair? Embed the new PUBLIC key in "
-            "src/licensing/validator.py before customer builds accept new keys.",
+            "Create New Signing Key",
+            "Use this only for first-time production setup.\n\n"
+            "This creates a NEW private/public key pair. You must:\n"
+            "1. Key is saved to your vendor folder automatically\n"
+            "2. Paste the public key into src/licensing/validator.py\n"
+            "3. Rebuild the customer app\n\n"
+            "Continue?",
         ) != QMessageBox.StandardButton.Yes:
             return
 
@@ -495,22 +631,29 @@ class AdminLicenseWindow(QMainWindow):
         public_pem = private_key.public_key().public_bytes(
             Encoding.PEM, PublicFormat.SubjectPublicKeyInfo
         )
-        save_path, _ = QFileDialog.getSaveFileName(
-            self, "Save Private Key", "tilevision_private_key.pem", "PEM Files (*.pem)"
-        )
-        if save_path:
-            Path(save_path).write_bytes(private_pem)
-            self._save_private_key_path(Path(save_path))
+        self._save_vendor_private_key(private_pem)
         self._private_key_pem = private_pem
-        self._keypair_status.setText("New keypair generated.")
+        self._set_key_status(True, f"Ready — new key saved to {_VENDOR_DIR.name}")
         self._output.setPlainText(
             "Paste into src/licensing/validator.py as EMBEDDED_PUBLIC_KEY_PEM:\n\n"
             + public_pem.decode("utf-8")
         )
+        QMessageBox.information(
+            self,
+            "Key Created",
+            f"Private key saved to:\n{_VENDOR_KEY_PATH}\n\n"
+            "Public key is shown in the output box below. "
+            "Embed it in validator.py before shipping the customer app.",
+        )
+        self._trigger_vendor_backup(silent=True)
 
     def _on_generate_license(self) -> None:
         if not self._private_key_pem:
-            QMessageBox.warning(self, "No Key", "Load or generate a private signing key first.")
+            QMessageBox.warning(
+                self,
+                "No Signing Key",
+                "Open your private key .pem file first (Signing Key section at the top).",
+            )
             return
 
         customer = self._customer_name.text().strip()
@@ -563,6 +706,7 @@ class AdminLicenseWindow(QMainWindow):
         self._renew_from_id = None
         self._renew_label.setText("")
         self._refresh_all()
+        self._trigger_vendor_backup(silent=True)
         self._tabs.setCurrentIndex(2)
         QMessageBox.information(
             self,

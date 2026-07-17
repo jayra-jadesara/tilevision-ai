@@ -8,7 +8,9 @@
    ```powershell
    python admin_tool/main.py
    ```
-4. Load your **private signing key** (`.pem` file — never give this to customers).
+4. Load your **private signing key** — saved automatically at
+   `%USERPROFILE%\.tilevision_ai_vendor\vendor_private_key.pem` (or use **Import Key File**
+   / **Create New Key** on first setup).
 5. Enter customer name, paste Machine ID, choose license type, click **Generate License Key**.
 6. Copy the key and email/WhatsApp it to the customer.
 7. Customer pastes the key into TileVision AI → software works **fully offline** until expiry.
@@ -39,6 +41,17 @@ The built-in **15-day auto trial** (no key) still starts automatically on first 
 The admin tool saves every issued key locally in:
 
 `%USERPROFILE%\.tilevision_ai_vendor\license_ledger.db`
+
+Your **private signing key** is stored in one fixed place (same folder):
+
+`%USERPROFILE%\.tilevision_ai_vendor\vendor_private_key.pem`
+
+The tool loads it automatically on startup — no need to browse each time.
+
+**Automatic cloud backup:** each time you open the vendor tool or issue a license,
+a zip backup is saved under `%USERPROFILE%\OneDrive\TileVision-Vendor-Backup\`
+(or `Documents\TileVision-Vendor-Backup\` if OneDrive is not available). If you
+use OneDrive/Google Drive sync on that folder, your key survives PC loss.
 
 Use the **License Registry** tab to:
 
