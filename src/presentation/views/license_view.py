@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPlainTextEdit,
     QPushButton,
     QFrame,
     QWidget,
@@ -32,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.core.use_cases.validate_license import ValidateLicenseUseCase
+from src.utils.brand_assets import logo_pixmap
 
 logger = logging.getLogger("tilevision.presentation.views.license_view")
 
@@ -49,6 +51,7 @@ class LicenseView(QDialog):
     def __init__(
         self,
         validate_use_case: ValidateLicenseUseCase,
+        activation_mode: Optional[str] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         """
@@ -56,14 +59,16 @@ class LicenseView(QDialog):
 
         Args:
             validate_use_case: Fully configured license validation use case.
+            activation_mode: Optional "trial" or "license" for first-run hints.
             parent: Optional parent widget.
         """
         super().__init__(parent)
         self._use_case = validate_use_case
+        self._activation_mode = activation_mode
         self._is_activated = False
 
         self.setWindowTitle("TileVision AI — License Activation")
-        self.setFixedSize(560, 480)
+        self.setFixedSize(560, 580)
         self.setWindowFlags(
             Qt.WindowType.Dialog |
             Qt.WindowType.WindowCloseButtonHint |
@@ -126,11 +131,17 @@ class LicenseView(QDialog):
         layout.setSpacing(4)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        logo_label = QLabel("🟦")
+        logo_label = QLabel()
+        logo_scaled = logo_pixmap(64)
+        if not logo_scaled.isNull():
+            logo_label.setPixmap(logo_scaled)
+        else:
+            logo_label.setText("TileVision")
+            logo_font = QFont()
+            logo_font.setPointSize(18)
+            logo_font.setBold(True)
+            logo_label.setFont(logo_font)
         logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        logo_font = QFont()
-        logo_font.setPointSize(36)
-        logo_label.setFont(logo_font)
 
         title_label = QLabel("TileVision AI")
         title_label.setObjectName("DialogTitle")
@@ -208,16 +219,26 @@ class LicenseView(QDialog):
         section_title.setObjectName("SectionTitle")
         section_title.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
 
-        self._license_key_edit = QLineEdit()
+        if self._activation_mode == "trial":
+            hint = QLabel(
+                "Paste the trial license key from your vendor. "
+                "If you do not have one yet, copy your Machine ID above and request a trial key."
+            )
+        else:
+            hint = QLabel("Paste the license key your TileVision vendor sent you.")
+        hint.setObjectName("InfoText")
+        hint.setWordWrap(True)
+
+        self._license_key_edit = QPlainTextEdit()
         self._license_key_edit.setObjectName("LicenseKeyEdit")
         self._license_key_edit.setPlaceholderText(
-            "Paste your license key here (e.g. TVAI-XXXX-XXXX-XXXX-XXXX)"
+            "Paste your license key here — trial keys and full license keys use the same field."
         )
-        self._license_key_edit.setFixedHeight(40)
-        # Allow Enter key to trigger activation
-        self._license_key_edit.returnPressed.connect(self._on_activate_clicked)
+        self._license_key_edit.setFixedHeight(96)
+        self._license_key_edit.setTabChangesFocus(True)
 
         layout.addWidget(section_title)
+        layout.addWidget(hint)
         layout.addWidget(self._license_key_edit)
         return container
 
@@ -254,7 +275,7 @@ class LicenseView(QDialog):
         Validate the entered license key against the hardware fingerprint.
         Accept the dialog if the key is valid.
         """
-        license_key = self._license_key_edit.text().strip()
+        license_key = self._normalize_license_key(self._license_key_edit.toPlainText())
 
         if not license_key:
             self._show_status("Warning: Please enter a license key before activating.", error=True)
@@ -292,6 +313,11 @@ class LicenseView(QDialog):
             )
             self._license_key_edit.selectAll()
             self._license_key_edit.setFocus()
+
+    @staticmethod
+    def _normalize_license_key(raw: str) -> str:
+        """Strip whitespace and line breaks from pasted license keys."""
+        return "".join(raw.split())
 
     def _show_status(self, message: str, error: bool = False) -> None:
         """
@@ -359,9 +385,8 @@ class LicenseView(QDialog):
                 border-radius: 6px;
                 color: #E8EAF6;
                 font-family: "Consolas", "Courier New", monospace;
-                font-size: 13px;
-                letter-spacing: 2px;
-                padding: 6px 10px;
+                font-size: 12px;
+                padding: 8px 10px;
             }
             #LicenseKeyEdit:focus {
                 border-color: #0EA5E9;
@@ -419,10 +444,9 @@ class LicenseView(QDialog):
 
 class LicenseStartupChoiceDialog(QDialog):
     """
-    First-run dialog: user chooses 15-day trial or license activation.
+    First-run dialog: user chooses trial key request or full license activation.
 
-    The trial is not started automatically — the caller must invoke
-    start_trial_access() only after the user picks the trial option.
+    Both paths require a vendor-generated license key entered on the next screen.
     """
 
     def __init__(
@@ -435,7 +459,7 @@ class LicenseStartupChoiceDialog(QDialog):
         self._choice: Optional[str] = None
 
         self.setWindowTitle("TileVision AI — Get Started")
-        self.setFixedSize(540, 460)
+        self.setFixedSize(540, 500)
         self.setModal(True)
         self.setWindowFlags(
             Qt.WindowType.Dialog |
@@ -461,26 +485,37 @@ class LicenseStartupChoiceDialog(QDialog):
         title.setObjectName("DialogTitle")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setFont(QFont("Segoe UI", 18, QFont.Weight.Bold))
-        layout.addWidget(title)
+
+        logo_label = QLabel()
+        logo_scaled = logo_pixmap(56)
+        if not logo_scaled.isNull():
+            logo_label.setPixmap(logo_scaled)
+        logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         subtitle = QLabel(
             "How would you like to get started?\n"
-            "Choose a free trial or activate with your license key."
+            "Both trial and full access require a license key from your vendor."
         )
         subtitle.setObjectName("DialogSubtitle")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subtitle.setWordWrap(True)
+
+        layout.addWidget(logo_label)
+        layout.addWidget(title)
         layout.addWidget(subtitle)
 
         layout.addSpacing(8)
 
-        trial_btn = QPushButton("Start 15-Day Free Trial")
+        trial_btn = QPushButton("Request Trial Key")
         trial_btn.setObjectName("TrialButton")
         trial_btn.setFixedHeight(52)
         trial_btn.clicked.connect(self._on_trial_clicked)
         layout.addWidget(trial_btn)
 
-        trial_hint = QLabel("No license key needed — full access for 15 days on this PC.")
+        trial_hint = QLabel(
+            "Copy your Machine ID below and send it to your vendor. "
+            "They will generate a trial license key for you to paste in."
+        )
         trial_hint.setObjectName("ChoiceHint")
         trial_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         trial_hint.setWordWrap(True)
@@ -494,7 +529,7 @@ class LicenseStartupChoiceDialog(QDialog):
         license_btn.clicked.connect(self._on_license_clicked)
         layout.addWidget(license_btn)
 
-        license_hint = QLabel("Enter the key your TileVision vendor sent you.")
+        license_hint = QLabel("Already received a full license key from your vendor.")
         license_hint.setObjectName("ChoiceHint")
         license_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         license_hint.setWordWrap(True)
@@ -636,11 +671,11 @@ class LicenseStartupChoiceDialog(QDialog):
 
 
 class MachineIdWelcomeDialog(QDialog):
-    """Shown once on first trial start so customers know how to request a license."""
+    """Optional helper shown after trial key activation."""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("TileVision AI — Get Your License")
+        self.setWindowTitle("TileVision AI — Trial Activated")
         self.setFixedSize(520, 320)
         self.setModal(True)
 
@@ -648,15 +683,16 @@ class MachineIdWelcomeDialog(QDialog):
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(12)
 
-        title = QLabel("15-Day Trial Started")
+        title = QLabel("Trial License Activated")
         title.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
         layout.addWidget(title)
 
         steps = QLabel(
-            "To buy a full license later:\n"
+            "Your trial license key is active.\n"
+            "To upgrade to a full license later:\n"
             "1. Copy your Machine ID below\n"
             "2. Send it to your TileVision vendor\n"
-            "3. Paste the license key in Settings or restart the app"
+            "3. Paste the new license key in Settings or restart the app"
         )
         steps.setWordWrap(True)
         layout.addWidget(steps)
@@ -671,7 +707,7 @@ class MachineIdWelcomeDialog(QDialog):
         layout.addWidget(copy_btn)
 
         layout.addStretch()
-        ok_btn = QPushButton("Continue with Trial")
+        ok_btn = QPushButton("Continue")
         ok_btn.setMinimumHeight(40)
         ok_btn.clicked.connect(self.accept)
         layout.addWidget(ok_btn)

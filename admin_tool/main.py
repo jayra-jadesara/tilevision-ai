@@ -135,8 +135,9 @@ class AdminLicenseWindow(QMainWindow):
 
         warning = QLabel(
             "Vendor tool only. Tracks keys YOU issue here. "
-            "Built-in 15-day auto-trials on customer PCs are offline and not listed "
-            "(no internet). Cancellation blocks new activations; ship revocation updates "
+            "Trial and full licenses both require a key generated here — "
+            "choose a Trial type (e.g. 15-Day Trial) when issuing trial keys. "
+            "Cancellation blocks new activations; ship revocation updates "
             "to enforce refunds on already-activated PCs."
         )
         warning.setObjectName("Warning")

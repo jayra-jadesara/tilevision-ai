@@ -2,8 +2,8 @@
 License validation use case module for TileVision AI.
 
 Orchestrates checking local licenses on startup and validating/installing new activation
-keys provided by the user. Falls back to the offline 15-day trial (see
-TrialManager) when no paid license is installed.
+keys provided by the user. Trial access uses vendor-issued trial license keys
+(same activation flow as full licenses).
 """
 
 from datetime import datetime
@@ -14,22 +14,25 @@ from src.core.models import LicenseInfo
 from src.data.repository_interface import ILicenseRepository
 from src.licensing.validator import LicenseValidator, LicenseError
 from src.licensing.hardware import get_machine_fingerprint
-from src.licensing.trial_manager import TrialManager, TrialStatus
 
 logger = logging.getLogger("tilevision.core.use_cases.validate_license")
 
 
+def _is_trial_license_type(license_type: str) -> bool:
+    return "Trial" in license_type
+
+
 class ValidateLicenseUseCase:
     """
-    Use case to check and register software licenses offline, with an
-    optional 15-day trial when the user explicitly chooses it on first run.
+    Use case to check and register software licenses offline.
+
+    Both trial and full licenses require a vendor-generated license key.
     """
 
     def __init__(
         self,
         license_repository: ILicenseRepository,
         validator: LicenseValidator,
-        trial_manager: Optional[TrialManager] = None,
     ) -> None:
         """
         Initialize the use case.
@@ -37,93 +40,35 @@ class ValidateLicenseUseCase:
         Args:
             license_repository: Repository interface for database license access.
             validator: Cryptographic LicenseValidator service.
-            trial_manager: Optional TrialManager for the offline trial
-                fallback. Defaults to a standard TrialManager instance.
         """
         self._repo = license_repository
         self._validator = validator
-        self._trial_manager = trial_manager or TrialManager()
+
+    def has_stored_license(self) -> bool:
+        """True if any license key has been saved locally (valid or not)."""
+        return self._repo.get_license() is not None
 
     def verify_existing_license(self) -> Optional[Dict[str, Any]]:
         """
-        Check if a valid, unexpired, hardware-locked license is currently
-        installed. If not, checks whether an offline trial is already active
-        (does not start a new trial — that requires an explicit user choice
-        via start_trial_access()).
+        Check if a valid, unexpired, hardware-locked license key is installed.
 
         Returns:
-            A dict with license/trial details (customer_name, expires_at,
-            is_trial, days_remaining if trial) if access is currently
-            granted, None if the user must choose trial, enter a license,
-            or activate after an expired/tampered trial.
+            License details (including is_trial and days_remaining) if access
+            is granted, None if the user must enter or renew a license key.
         """
         logger.info("Verifying installed offline license key...")
         license_entity = self._repo.get_license()
 
-        if license_entity:
-            try:
-                license_details = self._validator.validate_license(license_entity.license_key)
-                license_details["is_trial"] = False
-                return license_details
-            except LicenseError as e:
-                logger.error(f"Installed license verification failed: {e}")
-                # Fall through to trial check rather than immediately
-                # locking the user out — an expired/invalid paid license
-                # shouldn't be worse than having no license at all.
-
-        logger.info("No valid paid license installed — checking trial status.")
-        trial_status = self._trial_manager.get_status()
-
-        if trial_status.is_tampered:
-            logger.warning("Trial data appears invalid (tampered or copied from another machine).")
+        if not license_entity:
+            logger.info("No license key installed.")
             return None
 
-        if not trial_status.is_active:
-            if trial_status.start_date is None:
-                logger.info("No trial started yet — user must choose trial or license.")
-            else:
-                logger.info("Trial has expired.")
+        try:
+            license_details = self._validator.validate_license(license_entity.license_key)
+            return self._enrich_license_details(license_details)
+        except LicenseError as e:
+            logger.error(f"Installed license verification failed: {e}")
             return None
-
-        return self._trial_details_from_status(trial_status)
-
-    def start_trial_access(self) -> Optional[Dict[str, Any]]:
-        """
-        Start the offline trial when the user explicitly chooses it on first
-        run, or return details for an already-active trial.
-
-        Returns:
-            Trial access details if the trial is active after this call,
-            None if the trial could not be started (tampered state, etc.).
-        """
-        logger.info("User chose 15-day trial — starting or resuming trial.")
-        trial_status = self._trial_manager.get_or_start_trial()
-
-        if trial_status.is_tampered or not trial_status.is_active:
-            logger.warning("Trial could not be started or is no longer active.")
-            return None
-
-        return self._trial_details_from_status(trial_status)
-
-    def _trial_details_from_status(self, trial_status: TrialStatus) -> Dict[str, Any]:
-        return {
-            "customer_name": "Trial User",
-            "expires_at": None,
-            "hardware_hash": get_machine_fingerprint(),
-            "license_type": "15-Day Trial",
-            "is_trial": True,
-            "days_remaining": trial_status.days_remaining,
-        }
-
-    def get_trial_status(self) -> TrialStatus:
-        """
-        Read-only trial status check (does not start a trial as a side
-        effect), for display purposes (e.g. a "X days left" banner).
-
-        Returns:
-            The current TrialStatus.
-        """
-        return self._trial_manager.get_status()
 
     def activate_new_license(self, license_string: str) -> Dict[str, Any]:
         """
@@ -139,11 +84,9 @@ class ValidateLicenseUseCase:
             LicenseError: If verification of the license string fails.
         """
         logger.info("Attempting to activate new license key...")
-        
-        # 1. Verify the license key cryptographically first
+
         license_details = self._validator.validate_license(license_string)
-        
-        # 2. Convert to LicenseInfo domain entity
+
         license_entity = LicenseInfo(
             license_key=license_string,
             hardware_hash=license_details["hardware_hash"],
@@ -151,15 +94,14 @@ class ValidateLicenseUseCase:
             expires_at=license_details["expires_at"],
             activated_date=datetime.now(),
         )
-        
-        # 3. Persist in database
+
         success = self._repo.save_license(license_entity)
         if not success:
             logger.error("Failed to save validated license key to database.")
             raise LicenseError("Database write error during activation.")
-            
+
         logger.info("New license key successfully installed and activated.")
-        return license_details
+        return self._enrich_license_details(license_details)
 
     def get_hardware_fingerprint(self) -> str:
         """
@@ -189,3 +131,16 @@ class ValidateLicenseUseCase:
         except Exception as e:
             logger.warning(f"validate_and_save failed: {e}")
             return False
+
+    def _enrich_license_details(self, license_details: Dict[str, Any]) -> Dict[str, Any]:
+        license_type = license_details.get("license_type", "Custom")
+        license_details["is_trial"] = _is_trial_license_type(license_type)
+
+        expires_at = license_details.get("expires_at")
+        if expires_at:
+            expiry = datetime.strptime(expires_at, "%Y-%m-%d").date()
+            license_details["days_remaining"] = max(0, (expiry - datetime.now().date()).days)
+        else:
+            license_details["days_remaining"] = None
+
+        return license_details

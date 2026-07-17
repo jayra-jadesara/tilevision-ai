@@ -32,7 +32,12 @@ No internet is required on the customer PC after activation.
 | 3-Year | 1,095 days |
 | Lifetime | No expiry |
 
-On first run with no paid license, the customer is asked to choose either the **15-day free trial** (no key) or **license activation**.
+On first run, the customer chooses **trial key** or **full license**, then pastes the vendor-generated key. Trials use the same key format — issue a **15-Day Trial** (or other trial type) from this tool.
+
+**Trial workflow:**
+1. Customer copies Machine ID and requests a trial.
+2. You generate a key with license type **15-Day Trial** (or 1-Month Trial, etc.).
+3. Customer pastes that key — same activation screen as a full license.
 
 ---
 
