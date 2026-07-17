@@ -23,8 +23,8 @@ from cryptography.hazmat.primitives.serialization import (
     load_pem_private_key,
 )
 
-from PySide6.QtCore import Qt, QDate
-from PySide6.QtGui import QGuiApplication, QIcon
+from PySide6.QtCore import Qt, QDate, QTimer
+from PySide6.QtGui import QBrush, QColor, QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -51,7 +51,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
 )
 
-from license_ledger import LicenseLedger, LicenseRecord
+from license_ledger import LicenseLedger, LicenseRecord, is_trial_license_type
 from admin_theme import get_admin_qss
 from vendor_backup import get_last_backup_summary, resolve_backup_dir, run_vendor_backup
 from web_date_picker import WebDatePicker
@@ -62,6 +62,7 @@ from src.licensing.validator import (
     generate_license_key,
 )
 from src.utils.brand_assets import APP_ICON_PATH, logo_pixmap
+from src.theme.theme_manager import get_palette
 
 _VENDOR_DIR = Path.home() / ".tilevision_ai_vendor"
 _SETTINGS_PATH = _VENDOR_DIR / "admin_settings.json"
@@ -325,9 +326,12 @@ class AdminLicenseWindow(QMainWindow):
         self._output.setMinimumHeight(72)
         self._output.setMaximumHeight(120)
         output_layout.addWidget(self._output)
-        copy_btn = QPushButton("Copy Key to Clipboard")
-        copy_btn.clicked.connect(self._on_copy_key)
-        output_layout.addWidget(copy_btn)
+        self._copy_key_btn = QPushButton("Copy Key to Clipboard")
+        self._copy_key_btn.clicked.connect(self._on_copy_key)
+        output_layout.addWidget(self._copy_key_btn)
+        self._copy_key_status = QLabel("")
+        self._copy_key_status.setObjectName("CopyFeedback")
+        output_layout.addWidget(self._copy_key_status)
         layout.addWidget(output_box)
         layout.addStretch()
 
@@ -375,6 +379,13 @@ class AdminLicenseWindow(QMainWindow):
         self._registry_table.doubleClicked.connect(self._on_renew_selected)
         layout.addWidget(self._registry_table, stretch=1)
 
+        legend = QLabel("")
+        legend.setObjectName("Hint")
+        legend.setTextFormat(Qt.TextFormat.RichText)
+        self._registry_legend = legend
+        self._update_status_legend()
+        layout.addWidget(legend)
+
         action_row = QHBoxLayout()
         renew_btn = QPushButton("Renew / Extend Selected")
         renew_btn.clicked.connect(self._on_renew_selected)
@@ -382,6 +393,7 @@ class AdminLicenseWindow(QMainWindow):
 
         copy_again_btn = QPushButton("Copy Stored Key")
         copy_again_btn.clicked.connect(self._on_copy_stored_key)
+        self._copy_stored_key_btn = copy_again_btn
         action_row.addWidget(copy_again_btn)
 
         cancel_btn = QPushButton("Cancel Selected")
@@ -433,11 +445,91 @@ class AdminLicenseWindow(QMainWindow):
             self._registry_table.setItem(row, 1, QTableWidgetItem(rec.contact))
             self._registry_table.setItem(row, 2, QTableWidgetItem(rec.license_type))
             self._registry_table.setItem(row, 3, QTableWidgetItem(rec.expires_at))
-            self._registry_table.setItem(row, 4, QTableWidgetItem(rec.status))
+            self._registry_table.setItem(row, 4, self._make_status_table_item(rec))
             machine_short = rec.machine_id if len(rec.machine_id) <= 24 else rec.machine_id[:21] + "..."
             self._registry_table.setItem(row, 5, QTableWidgetItem(machine_short))
             self._registry_table.setItem(row, 6, QTableWidgetItem(rec.issued_at))
             self._registry_table.setItem(row, 7, QTableWidgetItem(rec.license_id))
+
+    def _make_status_table_item(self, rec: LicenseRecord) -> QTableWidgetItem:
+        """Status column with color coding: green active, yellow trial, red suspended."""
+        p = get_palette(self._current_theme)
+        status = rec.status.lower()
+
+        if status in ("cancelled", "superseded"):
+            label = "Suspended" if status == "cancelled" else "Superseded"
+            bg, fg = p["danger_bg"], p["danger_text"]
+        elif status == "active" and is_trial_license_type(rec.license_type):
+            label = "Trial"
+            bg, fg = p["warning_bg"], p["warning_text"]
+        elif status == "active":
+            label = "Active"
+            bg, fg = p["success_bg"], p["success_text"]
+        else:
+            label = rec.status
+            bg, fg = p["bg_panel"], p["text_primary"]
+
+        item = QTableWidgetItem(label)
+        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        item.setBackground(QBrush(QColor(bg)))
+        item.setForeground(QBrush(QColor(fg)))
+        item.setToolTip(f"Registry status: {rec.status} · {rec.license_type}")
+        return item
+
+    def _update_status_legend(self) -> None:
+        if not hasattr(self, "_registry_legend"):
+            return
+        p = get_palette(self._current_theme)
+        self._registry_legend.setText(
+            "Status column: "
+            f"<span style='background:{p['success_bg']};color:{p['success_text']};"
+            "padding:2px 8px;border-radius:4px;'>Active</span> "
+            f"<span style='background:{p['warning_bg']};color:{p['warning_text']};"
+            "padding:2px 8px;border-radius:4px;'>Trial</span> "
+            f"<span style='background:{p['danger_bg']};color:{p['danger_text']};"
+            "padding:2px 8px;border-radius:4px;'>Suspended</span>"
+        )
+
+    def _copy_to_clipboard_with_feedback(
+        self,
+        text: str,
+        *,
+        button: Optional[QPushButton] = None,
+        status_label: Optional[QLabel] = None,
+        empty_title: str = "Nothing to Copy",
+        empty_message: str = "Generate a license key first, then copy it.",
+        log_message: Optional[str] = None,
+    ) -> None:
+        cleaned = text.strip()
+        if not cleaned:
+            QMessageBox.warning(self, empty_title, empty_message)
+            if status_label is not None:
+                status_label.setText("")
+            return
+
+        QGuiApplication.clipboard().setText(cleaned)
+
+        if button is not None:
+            original = button.text()
+            button.setText("Copied!")
+            button.setEnabled(False)
+
+            def _reset_button() -> None:
+                button.setText(original)
+                button.setEnabled(True)
+
+            QTimer.singleShot(2500, _reset_button)
+
+        if status_label is not None:
+            p = get_palette(self._current_theme)
+            status_label.setStyleSheet(
+                f"color: {p['success_text']}; font-weight: 600; font-size: 11px;"
+            )
+            status_label.setText("Copied to clipboard.")
+            QTimer.singleShot(4000, status_label.clear)
+
+        if log_message:
+            self._registry_log.append(f"[{datetime.now():%H:%M:%S}] {log_message}")
 
     def _selected_record(self) -> Optional[LicenseRecord]:
         license_id = self._selected_license_id()
@@ -740,9 +832,12 @@ class AdminLicenseWindow(QMainWindow):
         )
 
     def _on_copy_key(self) -> None:
-        text = self._output.toPlainText().strip()
-        if text:
-            QGuiApplication.clipboard().setText(text)
+        self._copy_to_clipboard_with_feedback(
+            self._output.toPlainText(),
+            button=self._copy_key_btn,
+            status_label=self._copy_key_status,
+            empty_message="Generate a license key first, then click Copy.",
+        )
 
     def _on_renew_selected(self) -> None:
         rec = self._selected_record()
@@ -773,11 +868,15 @@ class AdminLicenseWindow(QMainWindow):
                 "This record has no stored key (older entry). Generate a renewal instead.",
             )
             return
-        QGuiApplication.clipboard().setText(rec.license_key)
-        self._output.setPlainText(rec.license_key)
-        self._registry_log.append(
-            f"[{datetime.now():%H:%M:%S}] Copied stored key for {rec.customer_name}"
+        self._copy_to_clipboard_with_feedback(
+            rec.license_key,
+            button=self._copy_stored_key_btn,
+            empty_title="No Stored Key",
+            empty_message="This record has no stored key (older entry). Generate a renewal instead.",
+            log_message=f"Copied stored key for {rec.customer_name}",
         )
+        if rec.license_key:
+            self._output.setPlainText(rec.license_key)
 
     def _on_cancel_selected(self) -> None:
         license_id = self._selected_license_id()
@@ -833,6 +932,9 @@ class AdminLicenseWindow(QMainWindow):
 
     def _apply_styles(self) -> None:
         self.setStyleSheet(get_admin_qss(self._current_theme))
+        self._update_status_legend()
+        if hasattr(self, "_registry_table"):
+            self._refresh_registry_table()
         if hasattr(self, "_theme_combo"):
             idx = self._theme_combo.findText(self._current_theme)
             if idx >= 0 and self._theme_combo.currentIndex() != idx:

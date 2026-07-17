@@ -12,7 +12,14 @@ from typing import Dict, Any, Optional
 
 from src.core.models import LicenseInfo
 from src.data.repository_interface import ILicenseRepository
-from src.licensing.validator import LicenseValidator, LicenseError
+from src.licensing.validator import (
+    LicenseValidator,
+    LicenseError,
+    LicenseValidationError,
+    LicenseExpiredError,
+    LicenseHardwareMismatchError,
+    LicenseRevokedError,
+)
 from src.licensing.hardware import get_machine_fingerprint
 
 logger = logging.getLogger("tilevision.core.use_cases.validate_license")
@@ -115,7 +122,7 @@ class ValidateLicenseUseCase:
         """
         return get_machine_fingerprint()
 
-    def validate_and_save(self, license_key: str) -> bool:
+    def validate_and_save(self, license_key: str) -> tuple[bool, str]:
         """
         Convenience wrapper: validate a license key and save it if valid.
 
@@ -123,14 +130,35 @@ class ValidateLicenseUseCase:
             license_key: Raw license key string entered by the user.
 
         Returns:
-            True if the key is valid and was saved, False otherwise.
+            (True, success message) if saved, else (False, user-facing error message).
         """
         try:
             self.activate_new_license(license_key)
-            return True
+            return True, "License activated successfully."
+        except LicenseHardwareMismatchError:
+            return False, (
+                "This license key is for a different PC. "
+                "Copy the Machine ID from Step 1 above, send it to your vendor, "
+                "and ask them to generate a new key for this exact Machine ID."
+            )
+        except LicenseExpiredError as e:
+            return False, str(e)
+        except LicenseRevokedError as e:
+            return False, str(e)
+        except LicenseValidationError as e:
+            msg = str(e)
+            if "signature" in msg.lower():
+                return False, (
+                    "License signature is invalid. The vendor signing key may not match "
+                    "this app build. Ask your vendor to use the correct private key, or "
+                    "rebuild the app with the matching public key."
+                )
+            return False, msg
         except Exception as e:
             logger.warning(f"validate_and_save failed: {e}")
-            return False
+            return False, (
+                "Invalid license key. Please check the key and try again, or contact support."
+            )
 
     def _enrich_license_details(self, license_details: Dict[str, Any]) -> Dict[str, Any]:
         license_type = license_details.get("license_type", "Custom")

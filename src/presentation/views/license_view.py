@@ -284,10 +284,12 @@ class LicenseView(QDialog):
         self._activate_button.setText("Validating...")
 
         try:
-            is_valid = self._use_case.validate_and_save(license_key)
+            is_valid, message = self._use_case.validate_and_save(license_key)
         except Exception as e:
             logger.error(f"License validation raised an exception: {e}")
-            is_valid = False
+            is_valid, message = False, (
+                "Invalid license key. Please check the key and try again, or contact support."
+            )
 
         self._activate_button.setEnabled(True)
         self._activate_button.setText("Activate License")
@@ -303,11 +305,8 @@ class LicenseView(QDialog):
             )
             self.accept()
         else:
-            logger.warning("License key validation failed.")
-            self._show_status(
-                "Invalid license key. Please check the key and try again, or contact support.",
-                error=True,
-            )
+            logger.warning(f"License key validation failed: {message}")
+            self._show_status(message, error=True)
             self._license_key_edit.selectAll()
             self._license_key_edit.setFocus()
 
