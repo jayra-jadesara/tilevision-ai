@@ -11,6 +11,7 @@ import logging
 from typing import List, Optional
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -26,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from src.config.settings import AppSettings
 from src.theme.theme_manager import get_palette
+from src.utils.brand_assets import APP_ICON_PATH, logo_pixmap
 from src.utils.dependency_check import (
     CURRENT_SETUP_VERSION,
     INSTALL_STEPS,
@@ -58,6 +60,8 @@ class SetupWizardDialog(QDialog):
         self.setWindowTitle("TileVision AI — First-Time Setup")
         self.setModal(True)
         self.setMinimumSize(640, 480)
+        if APP_ICON_PATH.exists():
+            self.setWindowIcon(QIcon(str(APP_ICON_PATH)))
         self._build_ui()
         self._apply_theme()
         self._refresh_step()
@@ -67,17 +71,33 @@ class SetupWizardDialog(QDialog):
         root.setContentsMargins(24, 20, 24, 20)
         root.setSpacing(14)
 
+        header_row = QHBoxLayout()
+        header_row.setSpacing(16)
+
+        self._logo_label = QLabel()
+        self._logo_label.setObjectName("WizardLogo")
+        logo = logo_pixmap(72)
+        if not logo.isNull():
+            self._logo_label.setPixmap(logo)
+            self._logo_label.setFixedSize(72, 72)
+            self._logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            header_row.addWidget(self._logo_label)
+
+        header_text = QVBoxLayout()
+        header_text.setSpacing(4)
         self._headline = QLabel("Welcome to TileVision AI")
         self._headline.setObjectName("WizardTitle")
-        root.addWidget(self._headline)
+        header_text.addWidget(self._headline)
 
         self._subtitle = QLabel(
             "Ceramic tile visual search for showrooms and catalog teams. "
-            "Install each step below in order. Already-installed packages are skipped automatically."
+            "Complete each step below in order — downloads start only when needed."
         )
         self._subtitle.setObjectName("WizardSubtitle")
         self._subtitle.setWordWrap(True)
-        root.addWidget(self._subtitle)
+        header_text.addWidget(self._subtitle)
+        header_row.addLayout(header_text, stretch=1)
+        root.addLayout(header_row)
 
         self._step_title = QLabel("")
         self._step_title.setObjectName("WizardStepTitle")
@@ -149,6 +169,62 @@ class SetupWizardDialog(QDialog):
             """
         )
 
+    _STEP_SUMMARY_LABELS = {
+        "core": "Application core",
+        "ai_stack": "AI search engine",
+        "gpu_optional": "GPU acceleration (optional)",
+    }
+
+    def _step_summary_label(self, step_id: str, fallback_title: str) -> str:
+        return self._STEP_SUMMARY_LABELS.get(step_id, fallback_title)
+
+    def _runtime_status_lines(self) -> list[tuple[str, bool]]:
+        """Customer-visible runtime checks: Python and SQLite only."""
+        if not self._step_statuses:
+            return []
+        runtime = self._step_statuses[0]
+        lines: list[tuple[str, bool]] = []
+        for pkg in runtime.packages:
+            if pkg.installed:
+                version = f" ({pkg.version})" if pkg.version else ""
+                lines.append((f"{pkg.spec.display_name}{version} — OK", True))
+            else:
+                note = f" — {pkg.note}" if pkg.note else " — required"
+                lines.append((f"{pkg.spec.display_name}{note}", False))
+        return lines
+
+    def _component_status_lines(self) -> list[tuple[str, bool]]:
+        """High-level component rows — never list third-party library names."""
+        lines: list[tuple[str, bool]] = []
+        for status in self._step_statuses:
+            if status.step.step_id == "runtime":
+                continue
+            label = self._step_summary_label(status.step.step_id, status.step.title)
+            missing_required = [
+                pkg
+                for pkg in status.packages
+                if not pkg.installed and not pkg.spec.optional and not pkg.spec.builtin
+            ]
+            if status.step.optional and not missing_required and not any(
+                not pkg.installed for pkg in status.packages
+            ):
+                continue
+            if status.step.optional and missing_required:
+                lines.append((f"{label} — available to install", False))
+            elif missing_required:
+                lines.append((f"{label} — install required", False))
+            elif step_is_complete(status):
+                lines.append((f"{label} — Ready", True))
+        return lines
+
+    def _fill_status_list(self) -> None:
+        self._package_list.clear()
+        for text, ok in self._runtime_status_lines() + self._component_status_lines():
+            item = QListWidgetItem(text)
+            if ok:
+                item.setForeground(Qt.GlobalColor.darkGreen)
+            self._package_list.addItem(item)
+
     def _refresh_step(self) -> None:
         self._step_statuses = check_all_steps()
         while self._step_index < len(INSTALL_STEPS):
@@ -165,21 +241,7 @@ class SetupWizardDialog(QDialog):
         self._step_title.setText(step.title)
         self._step_description.setText(step.description)
 
-        self._package_list.clear()
-        for pkg in status.packages:
-            if pkg.installed:
-                suffix = f" — OK ({pkg.version})" if pkg.version else " — OK"
-                text = f"{pkg.spec.display_name}{suffix}"
-            elif pkg.spec.optional:
-                text = f"{pkg.spec.display_name} — optional"
-            else:
-                text = f"{pkg.spec.display_name} — required"
-            if pkg.note:
-                text = f"{text} — {pkg.note}"
-            item = QListWidgetItem(text)
-            if pkg.installed:
-                item.setForeground(Qt.GlobalColor.darkGreen)
-            self._package_list.addItem(item)
+        self._fill_status_list()
 
         complete = step_is_complete(status)
         is_builtin_only = all(pkg.spec.builtin for pkg in status.packages)
@@ -194,14 +256,9 @@ class SetupWizardDialog(QDialog):
     def _show_complete_state(self) -> None:
         self._step_title.setText("Setup Complete")
         self._step_description.setText(
-            "All required packages are installed. Click Finish to open TileVision AI."
+            "All required components are installed. Click Finish to open TileVision AI."
         )
-        self._package_list.clear()
-        for status in self._step_statuses:
-            for pkg in status.packages:
-                self._package_list.addItem(
-                    QListWidgetItem(f"{pkg.spec.display_name} — OK")
-                )
+        self._fill_status_list()
         self._install_button.setEnabled(False)
         self._skip_button.setEnabled(False)
         self._finish_button.setEnabled(True)

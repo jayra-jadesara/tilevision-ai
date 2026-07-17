@@ -51,7 +51,7 @@ INSTALL_STEPS: List[InstallStep] = [
         ),
         packages=(
             PackageSpec("__python__", "", "Python 3.12+", builtin=True),
-            PackageSpec("__sqlite__", "", "SQLite (built-in)", builtin=True),
+            PackageSpec("__sqlite__", "", "SQLite Database (built-in)", builtin=True),
         ),
     ),
     InstallStep(
