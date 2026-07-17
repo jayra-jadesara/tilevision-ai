@@ -27,7 +27,7 @@ def _make_use_case(license_entity=None, validator_result=None, validator_error=N
         }
 
     trial_manager = MagicMock()
-    trial_manager.get_or_start_trial.return_value = trial_status or TrialStatus(
+    trial_manager.get_status.return_value = trial_status or TrialStatus(
         is_active=False, is_expired=True, is_tampered=False, days_remaining=0, start_date=None
     )
 
@@ -43,7 +43,7 @@ def test_valid_paid_license_short_circuits_trial_check():
 
     assert result["is_trial"] is False
     assert result["customer_name"] == "Acme"
-    trial_manager.get_or_start_trial.assert_not_called()
+    trial_manager.get_status.assert_not_called()
 
 
 def test_no_license_falls_back_to_active_trial():
@@ -101,6 +101,37 @@ def test_invalid_installed_license_falls_back_to_trial_rather_than_hard_locking(
     assert result is not None
     assert result["is_trial"] is True
     assert result["days_remaining"] == 3
+
+
+def test_no_trial_started_yet_returns_none_without_starting():
+    never_started = TrialStatus(
+        is_active=False, is_expired=False, is_tampered=False,
+        days_remaining=0, start_date=None,
+    )
+    use_case, repo, validator, trial_manager = _make_use_case(
+        license_entity=None, trial_status=never_started
+    )
+
+    result = use_case.verify_existing_license()
+
+    assert result is None
+    trial_manager.get_or_start_trial.assert_not_called()
+
+
+def test_start_trial_access_starts_and_returns_details():
+    active_trial = TrialStatus(
+        is_active=True, is_expired=False, is_tampered=False,
+        days_remaining=15, start_date="2026-07-17",
+    )
+    use_case, repo, validator, trial_manager = _make_use_case()
+    trial_manager.get_or_start_trial.return_value = active_trial
+
+    result = use_case.start_trial_access()
+
+    assert result is not None
+    assert result["is_trial"] is True
+    assert result["days_remaining"] == 15
+    trial_manager.get_or_start_trial.assert_called_once()
 
 
 def test_get_trial_status_delegates_to_trial_manager():

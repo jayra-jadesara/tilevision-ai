@@ -32,7 +32,7 @@ No internet is required on the customer PC after activation.
 | 3-Year | 1,095 days |
 | Lifetime | No expiry |
 
-The built-in **15-day auto trial** (no key) still starts automatically on first run if the customer has no paid license.
+On first run with no paid license, the customer is asked to choose either the **15-day free trial** (no key) or **license activation**.
 
 ---
 

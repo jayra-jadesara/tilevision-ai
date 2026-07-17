@@ -46,7 +46,11 @@ from src.licensing.validator import LicenseValidator
 from src.presentation.viewmodels.indexing_viewmodel import IndexingViewModel
 from src.presentation.viewmodels.search_viewmodel import SearchViewModel
 from src.presentation.views.main_window import MainWindow, DashboardDataProviders
-from src.presentation.views.license_view import LicenseView, MachineIdWelcomeDialog
+from src.presentation.views.license_view import (
+    LicenseView,
+    LicenseStartupChoiceDialog,
+    MachineIdWelcomeDialog,
+)
 from src.presentation.auto_index_notifier import AutoIndexNotifier
 from src.core.use_cases.monitor_folder import AutoIndexAction
 
@@ -155,30 +159,84 @@ def build_application() -> int:
 
     # ── 6. License Gate on Startup ────────────────────────────────────────────
     # verify_existing_license() returns a non-None result during an ACTIVE
-    # trial too (not just a paid license), so the blocking activation
-    # dialog below only appears when there's truly no paid license AND no
-    # active/valid trial remaining.
+    # trial too (not just a paid license). On first run with no trial yet,
+    # the user must choose trial or license before proceeding.
     logger.info("Checking startup license status...")
     license_details = validate_license_use_case.verify_existing_license()
 
     if license_details is None:
-        logger.warning("No valid license or active trial found — showing activation dialog.")
-        license_dialog = LicenseView(validate_use_case=validate_license_use_case)
-        result = license_dialog.exec()
+        trial_status = validate_license_use_case.get_trial_status()
+        is_first_run = (
+            not trial_status.is_tampered
+            and trial_status.start_date is None
+            and not trial_status.is_expired
+        )
 
-        if not license_dialog.is_activated:
-            logger.warning("License activation skipped or failed. Exiting.")
-            QMessageBox.critical(
-                None,
-                "License Required",
-                "TileVision AI requires a valid license or trial to run.\n\n"
-                "Please contact your supplier for a license key.\n\n"
-                "The application will now close.",
+        if is_first_run:
+            logger.info("First run — asking user to choose trial or license.")
+            choice_dialog = LicenseStartupChoiceDialog(
+                validate_use_case=validate_license_use_case,
             )
-            return 1
+            choice_dialog.exec()
 
-        # Re-fetch so the main window has fresh (post-activation) details.
-        license_details = validate_license_use_case.verify_existing_license()
+            if choice_dialog.choice == "trial":
+                license_details = validate_license_use_case.start_trial_access()
+                if license_details is None:
+                    logger.error("Trial could not be started after user selection.")
+                    QMessageBox.critical(
+                        None,
+                        "Trial Unavailable",
+                        "The trial could not be started on this PC.\n\n"
+                        "Please contact your supplier for a license key.\n\n"
+                        "The application will now close.",
+                    )
+                    return 1
+                if not settings.machine_id_welcome_shown:
+                    welcome = MachineIdWelcomeDialog()
+                    welcome.exec()
+                    settings.machine_id_welcome_shown = True
+            elif choice_dialog.choice == "license":
+                license_dialog = LicenseView(validate_use_case=validate_license_use_case)
+                license_dialog.exec()
+                if not license_dialog.is_activated:
+                    logger.warning("License activation skipped or failed. Exiting.")
+                    QMessageBox.critical(
+                        None,
+                        "License Required",
+                        "TileVision AI requires a valid license or trial to run.\n\n"
+                        "Please contact your supplier for a license key.\n\n"
+                        "The application will now close.",
+                    )
+                    return 1
+                license_details = validate_license_use_case.verify_existing_license()
+            else:
+                logger.warning("Startup choice dismissed — exiting.")
+                QMessageBox.information(
+                    None,
+                    "Setup Required",
+                    "TileVision AI needs either a 15-day trial or a license key to run.\n\n"
+                    "Restart the app when you are ready to continue.",
+                )
+                return 1
+        else:
+            logger.warning(
+                "No valid license or active trial found — showing activation dialog."
+            )
+            license_dialog = LicenseView(validate_use_case=validate_license_use_case)
+            license_dialog.exec()
+
+            if not license_dialog.is_activated:
+                logger.warning("License activation skipped or failed. Exiting.")
+                QMessageBox.critical(
+                    None,
+                    "License Required",
+                    "TileVision AI requires a valid license or trial to run.\n\n"
+                    "Please contact your supplier for a license key.\n\n"
+                    "The application will now close.",
+                )
+                return 1
+
+            license_details = validate_license_use_case.verify_existing_license()
     else:
         customer = license_details.get("customer_name", "Unknown")
         if license_details.get("is_trial"):

@@ -1,8 +1,8 @@
 """
 Offline trial management for TileVision AI.
 
-Every new installation gets a 15-day free trial with no license key
-required. This module owns that lifecycle: starting the trial on first
+Every new installation can start a 15-day free trial with no license key
+required, but only after the user explicitly chooses it on first run. This module owns that lifecycle: starting the trial on first
 run, computing days remaining on each subsequent run, and detecting two
 common ways client-side trials get abused:
 

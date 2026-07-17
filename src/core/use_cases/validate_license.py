@@ -22,7 +22,7 @@ logger = logging.getLogger("tilevision.core.use_cases.validate_license")
 class ValidateLicenseUseCase:
     """
     Use case to check and register software licenses offline, with an
-    automatic 15-day trial fallback when no paid license is present.
+    optional 15-day trial when the user explicitly chooses it on first run.
     """
 
     def __init__(
@@ -47,15 +47,15 @@ class ValidateLicenseUseCase:
     def verify_existing_license(self) -> Optional[Dict[str, Any]]:
         """
         Check if a valid, unexpired, hardware-locked license is currently
-        installed. If not, falls back to the offline trial: if a trial is
-        active, this still returns access details (with is_trial=True) so
-        the app can proceed without forcing the activation dialog.
+        installed. If not, checks whether an offline trial is already active
+        (does not start a new trial — that requires an explicit user choice
+        via start_trial_access()).
 
         Returns:
             A dict with license/trial details (customer_name, expires_at,
             is_trial, days_remaining if trial) if access is currently
-            granted, None if the user must activate a license (no paid
-            license AND no active/valid trial).
+            granted, None if the user must choose trial, enter a license,
+            or activate after an expired/tampered trial.
         """
         logger.info("Verifying installed offline license key...")
         license_entity = self._repo.get_license()
@@ -72,16 +72,40 @@ class ValidateLicenseUseCase:
                 # shouldn't be worse than having no license at all.
 
         logger.info("No valid paid license installed — checking trial status.")
-        trial_status = self._trial_manager.get_or_start_trial()
+        trial_status = self._trial_manager.get_status()
 
         if trial_status.is_tampered:
             logger.warning("Trial data appears invalid (tampered or copied from another machine).")
             return None
 
         if not trial_status.is_active:
-            logger.info("Trial has expired.")
+            if trial_status.start_date is None:
+                logger.info("No trial started yet — user must choose trial or license.")
+            else:
+                logger.info("Trial has expired.")
             return None
 
+        return self._trial_details_from_status(trial_status)
+
+    def start_trial_access(self) -> Optional[Dict[str, Any]]:
+        """
+        Start the offline trial when the user explicitly chooses it on first
+        run, or return details for an already-active trial.
+
+        Returns:
+            Trial access details if the trial is active after this call,
+            None if the trial could not be started (tampered state, etc.).
+        """
+        logger.info("User chose 15-day trial — starting or resuming trial.")
+        trial_status = self._trial_manager.get_or_start_trial()
+
+        if trial_status.is_tampered or not trial_status.is_active:
+            logger.warning("Trial could not be started or is no longer active.")
+            return None
+
+        return self._trial_details_from_status(trial_status)
+
+    def _trial_details_from_status(self, trial_status: TrialStatus) -> Dict[str, Any]:
         return {
             "customer_name": "Trial User",
             "expires_at": None,

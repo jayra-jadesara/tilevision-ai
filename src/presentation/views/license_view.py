@@ -417,6 +417,224 @@ class LicenseView(QDialog):
         """)
 
 
+class LicenseStartupChoiceDialog(QDialog):
+    """
+    First-run dialog: user chooses 15-day trial or license activation.
+
+    The trial is not started automatically — the caller must invoke
+    start_trial_access() only after the user picks the trial option.
+    """
+
+    def __init__(
+        self,
+        validate_use_case: ValidateLicenseUseCase,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._use_case = validate_use_case
+        self._choice: Optional[str] = None
+
+        self.setWindowTitle("TileVision AI — Get Started")
+        self.setFixedSize(540, 460)
+        self.setModal(True)
+        self.setWindowFlags(
+            Qt.WindowType.Dialog |
+            Qt.WindowType.WindowCloseButtonHint |
+            Qt.WindowType.MSWindowsFixedSizeDialogHint
+        )
+
+        self._setup_ui()
+        self._apply_styles()
+        self._load_hardware_id()
+
+    @property
+    def choice(self) -> Optional[str]:
+        """'trial', 'license', or None if the dialog was dismissed."""
+        return self._choice
+
+    def _setup_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(32, 28, 32, 28)
+        layout.setSpacing(16)
+
+        title = QLabel("Welcome to TileVision AI")
+        title.setObjectName("DialogTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setFont(QFont("Segoe UI", 18, QFont.Weight.Bold))
+        layout.addWidget(title)
+
+        subtitle = QLabel(
+            "How would you like to get started?\n"
+            "Choose a free trial or activate with your license key."
+        )
+        subtitle.setObjectName("DialogSubtitle")
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        subtitle.setWordWrap(True)
+        layout.addWidget(subtitle)
+
+        layout.addSpacing(8)
+
+        trial_btn = QPushButton("Start 15-Day Free Trial")
+        trial_btn.setObjectName("TrialButton")
+        trial_btn.setFixedHeight(52)
+        trial_btn.clicked.connect(self._on_trial_clicked)
+        layout.addWidget(trial_btn)
+
+        trial_hint = QLabel("No license key needed — full access for 15 days on this PC.")
+        trial_hint.setObjectName("ChoiceHint")
+        trial_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        trial_hint.setWordWrap(True)
+        layout.addWidget(trial_hint)
+
+        layout.addSpacing(12)
+
+        license_btn = QPushButton("I Have a License Key")
+        license_btn.setObjectName("LicenseButton")
+        license_btn.setFixedHeight(52)
+        license_btn.clicked.connect(self._on_license_clicked)
+        layout.addWidget(license_btn)
+
+        license_hint = QLabel("Enter the key your TileVision vendor sent you.")
+        license_hint.setObjectName("ChoiceHint")
+        license_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        license_hint.setWordWrap(True)
+        layout.addWidget(license_hint)
+
+        layout.addStretch()
+
+        machine_frame = QFrame()
+        machine_frame.setObjectName("InfoFrame")
+        machine_layout = QVBoxLayout(machine_frame)
+        machine_layout.setContentsMargins(12, 10, 12, 10)
+        machine_layout.setSpacing(6)
+
+        machine_title = QLabel("Your Machine ID (for license requests)")
+        machine_title.setObjectName("SectionTitle")
+        machine_title.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+
+        machine_row = QHBoxLayout()
+        machine_row.setSpacing(8)
+        self._hw_id_edit = QLineEdit()
+        self._hw_id_edit.setObjectName("HwIdEdit")
+        self._hw_id_edit.setReadOnly(True)
+        copy_btn = QPushButton("Copy")
+        copy_btn.setObjectName("CopyButton")
+        copy_btn.setFixedWidth(72)
+        copy_btn.clicked.connect(self._copy_hw_id)
+        machine_row.addWidget(self._hw_id_edit)
+        machine_row.addWidget(copy_btn)
+
+        machine_layout.addWidget(machine_title)
+        machine_layout.addLayout(machine_row)
+        layout.addWidget(machine_frame)
+
+    def _load_hardware_id(self) -> None:
+        try:
+            self._hw_id_edit.setText(self._use_case.get_hardware_fingerprint())
+        except Exception:
+            self._hw_id_edit.setText("")
+
+    def _copy_hw_id(self) -> None:
+        machine_id = self._hw_id_edit.text().strip()
+        if not machine_id:
+            QMessageBox.warning(self, "Unavailable", "Machine ID could not be read on this PC.")
+            return
+        QGuiApplication.clipboard().setText(machine_id)
+        QMessageBox.information(
+            self,
+            "Copied",
+            "Machine ID copied. Send it to your vendor to receive a license key.",
+        )
+
+    @Slot()
+    def _on_trial_clicked(self) -> None:
+        self._choice = "trial"
+        self.accept()
+
+    @Slot()
+    def _on_license_clicked(self) -> None:
+        self._choice = "license"
+        self.accept()
+
+    def _apply_styles(self) -> None:
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #1A1D26;
+                color: #E8EAF6;
+            }
+            #DialogTitle {
+                color: #E8EAF6;
+            }
+            #DialogSubtitle {
+                color: #9E9E9E;
+                font-size: 12px;
+            }
+            #ChoiceHint {
+                color: #7DD3FC;
+                font-size: 11px;
+            }
+            #InfoFrame {
+                background-color: #1E2130;
+                border: 1px solid #2D3250;
+                border-radius: 8px;
+            }
+            #SectionTitle {
+                color: #38BDF8;
+                font-size: 11px;
+            }
+            #HwIdEdit {
+                background-color: #252837;
+                border: 1px solid #3D4166;
+                border-radius: 6px;
+                color: #B0BEC5;
+                font-family: "Consolas", "Courier New", monospace;
+                font-size: 11px;
+                padding: 6px 10px;
+            }
+            #CopyButton {
+                background-color: #2D3250;
+                border: 1px solid #3D4166;
+                border-radius: 6px;
+                color: #B0BEC5;
+            }
+            #CopyButton:hover {
+                background-color: #3D4166;
+                color: #E8EAF6;
+            }
+            #TrialButton {
+                background: qlineargradient(
+                    x1: 0, y1: 0, x2: 1, y2: 0,
+                    stop: 0 #0369A1,
+                    stop: 1 #0EA5E9
+                );
+                border: none;
+                border-radius: 10px;
+                color: #FFFFFF;
+                font-size: 15px;
+                font-weight: bold;
+            }
+            #TrialButton:hover {
+                background: qlineargradient(
+                    x1: 0, y1: 0, x2: 1, y2: 0,
+                    stop: 0 #0EA5E9,
+                    stop: 1 #38BDF8
+                );
+            }
+            #LicenseButton {
+                background-color: #252837;
+                border: 2px solid #3D4166;
+                border-radius: 10px;
+                color: #E8EAF6;
+                font-size: 15px;
+                font-weight: bold;
+            }
+            #LicenseButton:hover {
+                border-color: #0EA5E9;
+                color: #FFFFFF;
+            }
+        """)
+
+
 class MachineIdWelcomeDialog(QDialog):
     """Shown once on first trial start so customers know how to request a license."""
 
