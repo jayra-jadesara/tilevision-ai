@@ -30,6 +30,63 @@ def test_record_and_cancel_license(tmp_path):
     assert ledger.is_machine_blocked("machine-abc")
 
 
+def test_unblock_machine_allows_new_keys_but_keeps_revocation(tmp_path):
+    ledger = LicenseLedger(db_path=tmp_path / "ledger.db")
+    ledger.record_issue(
+        license_id="id-1",
+        customer_name="Acme Tiles",
+        machine_id="machine-abc",
+        license_type="15-Day Trial",
+        expires_at="2026-08-01",
+        license_key="fake-key-data",
+    )
+    ledger.cancel_license("id-1")
+    assert ledger.is_machine_blocked("machine-abc")
+    assert ledger.active_revoked_ids() == ["id-1"]
+
+    assert ledger.unblock_machine("machine-abc", reason="Customer approved")
+    assert not ledger.is_machine_blocked("machine-abc")
+    assert ledger.is_machine_unblocked("machine-abc")
+    assert ledger.active_revoked_ids() == ["id-1"]
+
+    ledger.record_issue(
+        license_id="id-2",
+        customer_name="Acme Tiles",
+        machine_id="machine-abc",
+        license_type="15-Day Trial",
+        expires_at="2026-09-01",
+        license_key="new-key",
+    )
+    assert ledger.get_license("id-2").status == "active"
+
+
+def test_cancel_after_unblock_blocks_again(tmp_path):
+    ledger = LicenseLedger(db_path=tmp_path / "ledger.db")
+    ledger.record_issue(
+        license_id="id-1",
+        customer_name="Acme",
+        machine_id="m1",
+        license_type="1-Year",
+        expires_at="2027-01-01",
+        license_key="key-1",
+    )
+    ledger.cancel_license("id-1")
+    ledger.unblock_machine("m1")
+    assert not ledger.is_machine_blocked("m1")
+
+    ledger.record_issue(
+        license_id="id-2",
+        customer_name="Acme",
+        machine_id="m1",
+        license_type="1-Year",
+        expires_at="2028-01-01",
+        license_key="key-2",
+    )
+    ledger.cancel_license("id-2")
+    assert ledger.is_machine_blocked("m1")
+    assert not ledger.is_machine_unblocked("m1")
+
+
 def test_search_and_stats(tmp_path):
     ledger = LicenseLedger(db_path=tmp_path / "ledger.db")
     ledger.record_issue(

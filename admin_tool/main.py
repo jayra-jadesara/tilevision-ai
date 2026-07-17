@@ -401,6 +401,14 @@ class AdminLicenseWindow(QMainWindow):
         cancel_btn.clicked.connect(self._on_cancel_selected)
         action_row.addWidget(cancel_btn)
 
+        reissue_btn = QPushButton("Allow Re-issue")
+        reissue_btn.setToolTip(
+            "Clear the block on a Machine ID after a cancelled license, "
+            "so you can generate a new key for that PC."
+        )
+        reissue_btn.clicked.connect(self._on_allow_reissue)
+        action_row.addWidget(reissue_btn)
+
         action_row.addStretch()
 
         export_csv_btn = QPushButton("Export CSV")
@@ -786,12 +794,21 @@ class AdminLicenseWindow(QMainWindow):
             QMessageBox.warning(self, "Missing", "Machine ID is required (or enable DEV wildcard).")
             return
         if not use_wildcard and self._ledger.is_machine_blocked(machine_id):
-            QMessageBox.warning(
+            unblock = QMessageBox.question(
                 self,
                 "Machine Blocked",
-                "This Machine ID has a cancelled license. Resolve with the customer first.",
+                "This Machine ID has a cancelled license.\n\n"
+                "Do you want to allow re-issue for this PC now?\n"
+                "(Cancelled keys stay on the revocation list.)",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
-            return
+            if unblock == QMessageBox.StandardButton.Yes:
+                self._ledger.unblock_machine(machine_id, reason="Approved during key generation")
+                self._registry_log.append(
+                    f"[{datetime.now():%H:%M:%S}] Allowed re-issue for {machine_id[:16]}..."
+                )
+            else:
+                return
 
         hardware_hash = "*" if use_wildcard else machine_id
         try:
@@ -900,6 +917,67 @@ class AdminLicenseWindow(QMainWindow):
             self._refresh_all()
         else:
             QMessageBox.warning(self, "Not Found", "License ID not found.")
+
+    def _on_allow_reissue(self) -> None:
+        rec = self._selected_record()
+        if rec is None:
+            QMessageBox.information(
+                self,
+                "Select Row",
+                "Select a license row for the customer's Machine ID first.",
+            )
+            return
+
+        machine_id = rec.machine_id
+        if machine_id == "*":
+            QMessageBox.information(
+                self,
+                "Not Applicable",
+                "Wildcard DEV keys are not blocked by Machine ID.",
+            )
+            return
+
+        if not self._ledger.is_machine_blocked(machine_id):
+            if self._ledger.is_machine_unblocked(machine_id):
+                QMessageBox.information(
+                    self,
+                    "Already Allowed",
+                    "Re-issue is already allowed for this Machine ID.\n\n"
+                    "Go to Generate Key and create a new license.",
+                )
+            else:
+                QMessageBox.information(
+                    self,
+                    "Not Blocked",
+                    "This Machine ID has no cancelled license blocking new keys.",
+                )
+            return
+
+        confirm = QMessageBox.question(
+            self,
+            "Allow Re-issue",
+            f"Allow new license keys for this PC?\n\n"
+            f"Customer: {rec.customer_name}\n"
+            f"Machine ID: {machine_id}\n\n"
+            "Cancelled license(s) remain on the revocation list.\n"
+            "Only new key generation is unblocked.",
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        if self._ledger.unblock_machine(machine_id, reason="Vendor approved re-issue"):
+            self._registry_log.append(
+                f"[{datetime.now():%H:%M:%S}] Allowed re-issue for {rec.customer_name} "
+                f"({machine_id[:16]}...)"
+            )
+            self._refresh_all()
+            QMessageBox.information(
+                self,
+                "Re-issue Allowed",
+                "You can now generate a new key for this Machine ID on the Generate Key tab.",
+            )
+        else:
+            QMessageBox.warning(self, "Failed", "Could not unblock this Machine ID.")
 
     def _on_export_csv(self) -> None:
         path, _ = QFileDialog.getSaveFileName(

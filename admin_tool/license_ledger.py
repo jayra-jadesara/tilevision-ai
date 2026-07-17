@@ -88,6 +88,11 @@ class LicenseLedger:
                 CREATE INDEX IF NOT EXISTS idx_licenses_status ON licenses(status);
                 CREATE INDEX IF NOT EXISTS idx_licenses_customer ON licenses(customer_name);
                 CREATE INDEX IF NOT EXISTS idx_licenses_machine ON licenses(machine_id);
+                CREATE TABLE IF NOT EXISTS machine_unblocks (
+                    machine_id TEXT PRIMARY KEY,
+                    unblocked_at TEXT NOT NULL,
+                    reason TEXT DEFAULT ''
+                );
                 """
             )
             self._migrate_schema(conn)
@@ -96,6 +101,15 @@ class LicenseLedger:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(licenses)").fetchall()}
         if "license_key" not in columns:
             conn.execute("ALTER TABLE licenses ADD COLUMN license_key TEXT DEFAULT ''")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS machine_unblocks (
+                machine_id TEXT PRIMARY KEY,
+                unblocked_at TEXT NOT NULL,
+                reason TEXT DEFAULT ''
+            )
+            """
+        )
 
     @staticmethod
     def fingerprint_key(license_key: str) -> str:
@@ -173,10 +187,13 @@ class LicenseLedger:
     def cancel_license(self, license_id: str, reason: str = "") -> bool:
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT license_id FROM licenses WHERE license_id = ?", (license_id,)
+                "SELECT license_id, machine_id FROM licenses WHERE license_id = ?",
+                (license_id,),
             ).fetchone()
             if row is None:
                 return False
+            machine_id = row["machine_id"]
+            conn.execute("DELETE FROM machine_unblocks WHERE machine_id = ?", (machine_id,))
             note_suffix = f" Cancelled: {reason}" if reason else " Cancelled."
             conn.execute(
                 """
@@ -189,8 +206,51 @@ class LicenseLedger:
             )
             return True
 
-    def is_machine_blocked(self, machine_id: str) -> bool:
+    def unblock_machine(self, machine_id: str, reason: str = "") -> bool:
+        """
+        Allow new license keys for a Machine ID that was blocked by cancellation.
+
+        Cancelled license records stay cancelled (still on the revocation list).
+        Only the block on generating new keys is cleared.
+        """
+        machine_id = machine_id.strip()
+        if not machine_id or machine_id == "*":
+            return False
+        if not self.is_machine_blocked(machine_id):
+            return False
+
+        unblocked_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO machine_unblocks (machine_id, unblocked_at, reason)
+                VALUES (?, ?, ?)
+                ON CONFLICT(machine_id) DO UPDATE SET
+                    unblocked_at = excluded.unblocked_at,
+                    reason = excluded.reason
+                """,
+                (machine_id, unblocked_at, reason.strip()),
+            )
+        return True
+
+    def is_machine_unblocked(self, machine_id: str) -> bool:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM machine_unblocks WHERE machine_id = ? LIMIT 1",
+                (machine_id.strip(),),
+            ).fetchone()
+            return row is not None
+
+    def is_machine_blocked(self, machine_id: str) -> bool:
+        machine_id = machine_id.strip()
+        if not machine_id or machine_id == "*":
+            return False
+        with self._conn() as conn:
+            if conn.execute(
+                "SELECT 1 FROM machine_unblocks WHERE machine_id = ? LIMIT 1",
+                (machine_id,),
+            ).fetchone():
+                return False
             row = conn.execute(
                 """
                 SELECT 1 FROM licenses
