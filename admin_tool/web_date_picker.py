@@ -24,7 +24,33 @@ _CALENDAR_BTN_WIDTH = 40
 _POPUP_WIDTH = 272
 _POPUP_HEIGHT = 252
 _MAX_YEAR = 2099
-_COMBO_VISIBLE_ITEMS = 10
+_COMBO_VISIBLE_ITEMS = 8
+_COMBO_ROW_HEIGHT = 26
+
+
+class _ScrollableComboBox(QComboBox):
+    """QComboBox with a fixed-height scrollable dropdown list."""
+
+    def __init__(
+        self,
+        parent: Optional[QWidget] = None,
+        *,
+        visible_rows: int = _COMBO_VISIBLE_ITEMS,
+        row_height: int = _COMBO_ROW_HEIGHT,
+    ) -> None:
+        super().__init__(parent)
+        self._visible_rows = visible_rows
+        self._row_height = row_height
+        self.setMaxVisibleItems(visible_rows)
+
+    def showPopup(self) -> None:
+        view = self.view()
+        if view is not None:
+            rows = min(max(self.count(), 1), self._visible_rows)
+            view.setFixedHeight(rows * self._row_height + 6)
+            view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        super().showPopup()
 
 
 class _ClickableLineEdit(QLineEdit):
@@ -59,15 +85,13 @@ class _CalendarPopup(QFrame):
         self._prev_btn.setFixedSize(28, 28)
         self._prev_btn.setToolTip("Previous month")
 
-        self._month_combo = QComboBox()
+        self._month_combo = _ScrollableComboBox(visible_rows=6)
         self._month_combo.setObjectName("WebDateMonth")
-        self._month_combo.setMaxVisibleItems(_COMBO_VISIBLE_ITEMS)
         for month in range(1, 13):
             self._month_combo.addItem(QDate(2000, month, 1).toString("MMMM"), month)
 
-        self._year_combo = QComboBox()
+        self._year_combo = _ScrollableComboBox(visible_rows=_COMBO_VISIBLE_ITEMS)
         self._year_combo.setObjectName("WebDateYear")
-        self._year_combo.setMaxVisibleItems(_COMBO_VISIBLE_ITEMS)
 
         self._next_btn = QPushButton("\u203a")
         self._next_btn.setObjectName("WebDateNavButton")

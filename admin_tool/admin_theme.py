@@ -213,6 +213,17 @@ def get_admin_qss(theme: str) -> str:
     }}
     #WebDateYear QAbstractItemView {{
         min-width: 72px;
+        max-height: 214px;
+    }}
+    #WebDateYear QScrollBar:vertical {{
+        background: {p['bg_panel_alt']};
+        width: 10px;
+        border-radius: 5px;
+    }}
+    #WebDateYear QScrollBar::handle:vertical {{
+        background: {p['border_strong']};
+        border-radius: 5px;
+        min-height: 24px;
     }}
     #WebDateCalendar {{
         background-color: {p['bg_panel']};
