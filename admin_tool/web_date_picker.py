@@ -218,12 +218,12 @@ class WebDatePicker(QWidget):
     def minimumDate(self) -> QDate:
         return self._min_date
 
-    def setDate(self, date: QDate) -> None:
+    def setDate(self, date: QDate, *, force: bool = False) -> None:
         if not date.isValid():
             return
         if date < self._min_date:
             date = self._min_date
-        if date == self._date:
+        if date == self._date and not force:
             return
         self._date = date
         self._refresh_display()

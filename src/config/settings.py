@@ -59,6 +59,7 @@ class AppSettings:
             "gpu_index_batch_size": 24,
             "setup_wizard_completed": False,
             "setup_wizard_version": 0,
+            "machine_id_welcome_shown": False,
         }
         
         self._settings: Dict[str, Any] = self._defaults.copy()
@@ -287,4 +288,13 @@ class AppSettings:
     @setup_wizard_version.setter
     def setup_wizard_version(self, value: int) -> None:
         self._settings["setup_wizard_version"] = int(value)
+        self.save()
+
+    @property
+    def machine_id_welcome_shown(self) -> bool:
+        return bool(self._settings.get("machine_id_welcome_shown", False))
+
+    @machine_id_welcome_shown.setter
+    def machine_id_welcome_shown(self, value: bool) -> None:
+        self._settings["machine_id_welcome_shown"] = bool(value)
         self.save()

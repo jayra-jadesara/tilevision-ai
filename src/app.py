@@ -46,7 +46,7 @@ from src.licensing.validator import LicenseValidator
 from src.presentation.viewmodels.indexing_viewmodel import IndexingViewModel
 from src.presentation.viewmodels.search_viewmodel import SearchViewModel
 from src.presentation.views.main_window import MainWindow, DashboardDataProviders
-from src.presentation.views.license_view import LicenseView
+from src.presentation.views.license_view import LicenseView, MachineIdWelcomeDialog
 from src.presentation.auto_index_notifier import AutoIndexNotifier
 from src.core.use_cases.monitor_folder import AutoIndexAction
 
@@ -185,6 +185,10 @@ def build_application() -> int:
             logger.info(
                 f"Active trial: {license_details.get('days_remaining')} day(s) remaining."
             )
+            if not settings.machine_id_welcome_shown:
+                welcome = MachineIdWelcomeDialog()
+                welcome.exec()
+                settings.machine_id_welcome_shown = True
         else:
             logger.info(f"Valid license found for: {customer}")
 

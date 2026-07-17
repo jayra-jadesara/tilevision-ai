@@ -162,12 +162,13 @@ class LicenseView(QDialog):
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(8)
 
-        section_title = QLabel("🖥  Your Hardware Fingerprint")
+        section_title = QLabel("Step 1 — Your Machine ID")
         section_title.setObjectName("SectionTitle")
         section_title.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
 
         info_text = QLabel(
-            "Share this fingerprint with TileVision support to generate your license key:"
+            "Copy your Machine ID and send it to your TileVision vendor. "
+            "They will generate a license key for this PC."
         )
         info_text.setObjectName("InfoText")
         info_text.setWordWrap(True)
@@ -180,7 +181,7 @@ class LicenseView(QDialog):
         self._hw_id_edit.setReadOnly(True)
         self._hw_id_edit.setPlaceholderText("Computing hardware fingerprint...")
 
-        copy_button = QPushButton("Copy")
+        copy_button = QPushButton("Copy Machine ID")
         copy_button.setObjectName("CopyButton")
         copy_button.setFixedWidth(90)
         copy_button.setFixedHeight(32)
@@ -203,7 +204,7 @@ class LicenseView(QDialog):
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(8)
 
-        section_title = QLabel("🔑  Enter Your License Key")
+        section_title = QLabel("Step 2 — Enter License Key")
         section_title.setObjectName("SectionTitle")
         section_title.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
 
@@ -242,7 +243,7 @@ class LicenseView(QDialog):
         if hw_id and not hw_id.startswith("ERROR"):
             clipboard: QClipboard = QGuiApplication.clipboard()
             clipboard.setText(hw_id)
-            self._show_status("Hardware fingerprint copied to clipboard.", error=False)
+            self._show_status("Machine ID copied. Send it to your vendor.", error=False)
             logger.info("Hardware fingerprint copied to clipboard.")
         else:
             self._show_status("Warning: Nothing to copy — fingerprint is unavailable.", error=True)
@@ -414,3 +415,66 @@ class LicenseView(QDialog):
                 color: #E8EAF6;
             }
         """)
+
+
+class MachineIdWelcomeDialog(QDialog):
+    """Shown once on first trial start so customers know how to request a license."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("TileVision AI — Get Your License")
+        self.setFixedSize(520, 320)
+        self.setModal(True)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(12)
+
+        title = QLabel("15-Day Trial Started")
+        title.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
+        layout.addWidget(title)
+
+        steps = QLabel(
+            "To buy a full license later:\n"
+            "1. Copy your Machine ID below\n"
+            "2. Send it to your TileVision vendor\n"
+            "3. Paste the license key in Settings or restart the app"
+        )
+        steps.setWordWrap(True)
+        layout.addWidget(steps)
+
+        self._machine_id_edit = QLineEdit()
+        self._machine_id_edit.setReadOnly(True)
+        self._machine_id_edit.setPlaceholderText("Loading Machine ID...")
+        layout.addWidget(self._machine_id_edit)
+
+        copy_btn = QPushButton("Copy Machine ID")
+        copy_btn.clicked.connect(self._copy_machine_id)
+        layout.addWidget(copy_btn)
+
+        layout.addStretch()
+        ok_btn = QPushButton("Continue with Trial")
+        ok_btn.setMinimumHeight(40)
+        ok_btn.clicked.connect(self.accept)
+        layout.addWidget(ok_btn)
+
+        self._load_machine_id()
+
+    def _load_machine_id(self) -> None:
+        try:
+            from src.licensing.hardware import get_machine_fingerprint
+            self._machine_id_edit.setText(get_machine_fingerprint())
+        except Exception:
+            self._machine_id_edit.setText("")
+
+    def _copy_machine_id(self) -> None:
+        machine_id = self._machine_id_edit.text().strip()
+        if not machine_id:
+            QMessageBox.warning(self, "Unavailable", "Machine ID could not be read on this PC.")
+            return
+        QGuiApplication.clipboard().setText(machine_id)
+        QMessageBox.information(
+            self,
+            "Copied",
+            "Machine ID copied. Send it to your vendor to receive a license key.",
+        )

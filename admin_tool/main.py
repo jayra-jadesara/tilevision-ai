@@ -46,7 +46,9 @@ from PySide6.QtWidgets import (
     QWidget,
     QFileDialog,
     QCheckBox,
+    QFrame,
     QGridLayout,
+    QScrollArea,
 )
 
 from license_ledger import LicenseLedger, LicenseRecord
@@ -236,8 +238,15 @@ class AdminLicenseWindow(QMainWindow):
         return page
 
     def _build_generate_tab(self) -> QWidget:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
         page = QWidget()
         layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
 
         form_box = QGroupBox("Customer & License Details")
         form = QFormLayout(form_box)
@@ -265,6 +274,7 @@ class AdminLicenseWindow(QMainWindow):
         self._license_type = QComboBox()
         self._license_type.addItems(list(VENDOR_LICENSE_TYPES))
         self._license_type.currentTextChanged.connect(self._on_license_type_changed)
+        self._license_type.activated.connect(self._on_license_type_activated)
         self._prepare_form_field(self._license_type)
         form.addRow("License Type:", self._license_type)
 
@@ -282,6 +292,10 @@ class AdminLicenseWindow(QMainWindow):
         expiry_row_layout.addWidget(self._expiry, alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         expiry_row_layout.addStretch()
         form.addRow("Expiry Date:", expiry_row)
+
+        self._expiry_hint = QLabel("")
+        self._expiry_hint.setObjectName("Hint")
+        form.addRow("", self._expiry_hint)
         self._on_license_type_changed(self._license_type.currentText())
 
         self._notes = QLineEdit()
@@ -298,7 +312,7 @@ class AdminLicenseWindow(QMainWindow):
 
         generate_btn = QPushButton("Generate License Key")
         generate_btn.setObjectName("PrimaryButton")
-        generate_btn.setMinimumHeight(40)
+        generate_btn.setMinimumHeight(44)
         generate_btn.clicked.connect(self._on_generate_license)
         form.addRow("", generate_btn)
         layout.addWidget(form_box)
@@ -307,12 +321,17 @@ class AdminLicenseWindow(QMainWindow):
         output_layout = QVBoxLayout(output_box)
         self._output = QPlainTextEdit()
         self._output.setReadOnly(True)
+        self._output.setMinimumHeight(72)
+        self._output.setMaximumHeight(120)
         output_layout.addWidget(self._output)
         copy_btn = QPushButton("Copy Key to Clipboard")
         copy_btn.clicked.connect(self._on_copy_key)
         output_layout.addWidget(copy_btn)
-        layout.addWidget(output_box, stretch=1)
-        return page
+        layout.addWidget(output_box)
+        layout.addStretch()
+
+        scroll.setWidget(page)
+        return scroll
 
     def _build_registry_tab(self) -> QWidget:
         page = QWidget()
@@ -440,6 +459,9 @@ class AdminLicenseWindow(QMainWindow):
         elif hasattr(widget, "setMinimumWidth"):
             widget.setMinimumWidth(280)
 
+    def _on_license_type_activated(self, _index: int) -> None:
+        self._on_license_type_changed(self._license_type.currentText())
+
     def _on_license_type_changed(self, license_type: str) -> None:
         expiry_str = compute_expiry_date(license_type)
         self._set_expiry_date(expiry_str)
@@ -447,13 +469,15 @@ class AdminLicenseWindow(QMainWindow):
         self._expiry.setEnabled(not is_lifetime)
         if is_lifetime:
             self._expiry.setToolTip("Lifetime licenses do not expire.")
+            self._expiry_hint.setText("Auto-set: Lifetime (no expiry)")
         else:
             self._expiry.setToolTip("Adjust the expiry date if needed.")
+            self._expiry_hint.setText(f"Auto-set from license type: {expiry_str}")
 
     def _set_expiry_date(self, expiry_str: str) -> None:
         date = QDate.fromString(expiry_str, "yyyy-MM-dd")
         if date.isValid():
-            self._expiry.setDate(date)
+            self._expiry.setDate(date, force=True)
 
     def _selected_expiry_date(self) -> str:
         if self._license_type.currentText() == "Lifetime":
