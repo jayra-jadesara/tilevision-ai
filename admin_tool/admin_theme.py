@@ -159,6 +159,52 @@ def get_admin_qss(theme: str) -> str:
         border: 1px solid {p['border_strong']};
         border-radius: 10px;
     }}
+    #WebDateNav {{
+        background: transparent;
+    }}
+    #WebDateNavButton {{
+        background-color: {p['button_bg']};
+        color: {p['text_primary']};
+        border: 1px solid {p['border_strong']};
+        border-radius: 6px;
+        padding: 0;
+        min-width: 28px;
+        max-width: 28px;
+        min-height: 28px;
+        max-height: 28px;
+        font-size: 16px;
+        font-weight: 600;
+    }}
+    #WebDateNavButton:hover {{
+        background-color: {p['button_hover']};
+    }}
+    #WebDateMonth, #WebDateYear {{
+        background-color: {p['bg_input']};
+        color: {p['text_primary']};
+        border: 1px solid {p['border_strong']};
+        border-radius: 6px;
+        padding: 2px 8px;
+        min-height: 28px;
+        max-height: 28px;
+    }}
+    #WebDateMonth {{
+        min-width: 96px;
+    }}
+    #WebDateYear {{
+        min-width: 72px;
+    }}
+    #WebDateMonth::drop-down, #WebDateYear::drop-down {{
+        border: none;
+        width: 18px;
+    }}
+    #WebDateMonth QAbstractItemView, #WebDateYear QAbstractItemView {{
+        background-color: {p['bg_panel']};
+        color: {p['text_primary']};
+        border: 1px solid {p['border_strong']};
+        selection-background-color: {p['highlight_bg']};
+        selection-color: {p['text_primary']};
+        outline: none;
+    }}
     #WebDateCalendar {{
         background-color: {p['bg_panel']};
         color: {p['text_primary']};
@@ -174,24 +220,6 @@ def get_admin_qss(theme: str) -> str:
         selection-color: {p['button_text']};
         font-size: 12px;
         outline: none;
-    }}
-    #WebDateCalendar QToolButton {{
-        background-color: {p['button_bg']};
-        color: {p['text_primary']};
-        border: 1px solid {p['border']};
-        border-radius: 4px;
-        padding: 2px 6px;
-        min-height: 22px;
-        max-height: 22px;
-        font-size: 11px;
-    }}
-    #WebDateCalendar QSpinBox {{
-        background-color: {p['bg_input']};
-        color: {p['text_primary']};
-        border: 1px solid {p['border_strong']};
-        min-height: 22px;
-        max-height: 22px;
-        font-size: 11px;
     }}
     QCalendarWidget {{
         background-color: {p['bg_panel']};

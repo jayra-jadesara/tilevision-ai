@@ -8,6 +8,7 @@ from PySide6.QtCore import QDate, QPoint, QSize, Qt, Signal
 from PySide6.QtGui import QGuiApplication, QMouseEvent
 from PySide6.QtWidgets import (
     QCalendarWidget,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLineEdit,
@@ -20,8 +21,9 @@ from PySide6.QtWidgets import (
 _FIELD_HEIGHT = 36
 _FIELD_WIDTH = 210
 _CALENDAR_BTN_WIDTH = 40
-_POPUP_WIDTH = 286
-_POPUP_HEIGHT = 268
+_POPUP_WIDTH = 260
+_POPUP_HEIGHT = 248
+_YEAR_SPAN = 16
 
 
 class _ClickableLineEdit(QLineEdit):
@@ -37,31 +39,111 @@ class _CalendarPopup(QFrame):
     def __init__(self, picker: "WebDatePicker") -> None:
         super().__init__(None, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
         self._picker = picker
+        self._updating_nav = False
         self.setObjectName("WebDatePopup")
         self.setFixedSize(_POPUP_WIDTH, _POPUP_HEIGHT)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(0)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        nav = QWidget()
+        nav.setObjectName("WebDateNav")
+        nav_layout = QHBoxLayout(nav)
+        nav_layout.setContentsMargins(0, 0, 0, 0)
+        nav_layout.setSpacing(6)
+
+        self._prev_btn = QPushButton("\u2039")
+        self._prev_btn.setObjectName("WebDateNavButton")
+        self._prev_btn.setFixedSize(28, 28)
+        self._prev_btn.setToolTip("Previous month")
+
+        self._month_combo = QComboBox()
+        self._month_combo.setObjectName("WebDateMonth")
+        for month in range(1, 13):
+            self._month_combo.addItem(QDate(2000, month, 1).toString("MMMM"), month)
+
+        self._year_combo = QComboBox()
+        self._year_combo.setObjectName("WebDateYear")
+
+        self._next_btn = QPushButton("\u203a")
+        self._next_btn.setObjectName("WebDateNavButton")
+        self._next_btn.setFixedSize(28, 28)
+        self._next_btn.setToolTip("Next month")
+
+        nav_layout.addWidget(self._prev_btn)
+        nav_layout.addWidget(self._month_combo, stretch=1)
+        nav_layout.addWidget(self._year_combo)
+        nav_layout.addWidget(self._next_btn)
+        layout.addWidget(nav)
 
         self._calendar = QCalendarWidget()
         self._calendar.setObjectName("WebDateCalendar")
+        self._calendar.setNavigationBarVisible(False)
         self._calendar.setGridVisible(True)
         self._calendar.setVerticalHeaderFormat(
             QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader
         )
         self._calendar.setHorizontalHeaderFormat(
-            QCalendarWidget.HorizontalHeaderFormat.ShortDayNames
+            QCalendarWidget.HorizontalHeaderFormat.SingleLetterDayNames
         )
-        self._calendar.setFixedSize(_POPUP_WIDTH - 16, _POPUP_HEIGHT - 16)
-        layout.addWidget(self._calendar, alignment=Qt.AlignmentFlag.AlignCenter)
+        self._calendar.setFixedHeight(188)
+        layout.addWidget(self._calendar)
 
+        self._prev_btn.clicked.connect(self._calendar.showPreviousMonth)
+        self._next_btn.clicked.connect(self._calendar.showNextMonth)
+        self._month_combo.currentIndexChanged.connect(self._on_nav_changed)
+        self._year_combo.currentIndexChanged.connect(self._on_nav_changed)
+        self._calendar.currentPageChanged.connect(self._sync_nav_from_calendar)
         self._calendar.clicked.connect(self._on_date_chosen)
         self._calendar.activated.connect(self._on_date_chosen)
 
+    def _populate_years(self, focus_year: int) -> None:
+        min_year = self._picker.minimumDate().year()
+        max_year = min_year + _YEAR_SPAN
+        self._year_combo.blockSignals(True)
+        self._year_combo.clear()
+        for year in range(min_year, max_year + 1):
+            self._year_combo.addItem(str(year), year)
+        index = self._year_combo.findData(focus_year)
+        if index >= 0:
+            self._year_combo.setCurrentIndex(index)
+        self._year_combo.blockSignals(False)
+
+    def _sync_nav_controls(self, year: int, month: int) -> None:
+        self._month_combo.blockSignals(True)
+        self._year_combo.blockSignals(True)
+        self._month_combo.setCurrentIndex(max(0, month - 1))
+        year_index = self._year_combo.findData(year)
+        if year_index >= 0:
+            self._year_combo.setCurrentIndex(year_index)
+        self._month_combo.blockSignals(False)
+        self._year_combo.blockSignals(False)
+
+    def _sync_nav_from_calendar(self, year: int, month: int) -> None:
+        if self._updating_nav:
+            return
+        self._sync_nav_controls(year, month)
+
+    def _on_nav_changed(self) -> None:
+        month = self._month_combo.currentData()
+        year = self._year_combo.currentData()
+        if month is None or year is None:
+            return
+        self._updating_nav = True
+        self._calendar.setCurrentPage(int(year), int(month))
+        self._updating_nav = False
+
     def sync_from_picker(self) -> None:
-        self._calendar.setMinimumDate(self._picker.minimumDate())
-        self._calendar.setSelectedDate(self._picker.date())
+        selected = self._picker.date()
+        minimum = self._picker.minimumDate()
+        self._calendar.setMinimumDate(minimum)
+        self._calendar.setSelectedDate(selected)
+        self._populate_years(selected.year())
+        self._updating_nav = True
+        self._calendar.setCurrentPage(selected.year(), selected.month())
+        self._updating_nav = False
+        self._sync_nav_controls(selected.year(), selected.month())
 
     def _on_date_chosen(self, date: QDate) -> None:
         self._picker.setDate(date)
