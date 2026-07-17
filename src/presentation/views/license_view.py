@@ -8,7 +8,10 @@ Design Decision:
     On startup, the MainWindow shows this dialog if no valid license is found.
     The dialog is modal — it blocks the main window until a valid license is entered
     or the user explicitly closes the application.
-    
+
+    Trial and full licenses use the same screen and the same key field; the vendor
+    chooses the license type when generating the key.
+
     Dependency on the ValidateLicenseUseCase is injected via the constructor,
     keeping this dialog testable and decoupled from implementation details.
 """
@@ -29,10 +32,10 @@ from PySide6.QtWidgets import (
     QFrame,
     QWidget,
     QMessageBox,
-    QSizePolicy,
 )
 
 from src.core.use_cases.validate_license import ValidateLicenseUseCase
+from src.theme.theme_manager import get_palette, get_shared_view_qss
 from src.utils.brand_assets import logo_pixmap
 
 logger = logging.getLogger("tilevision.presentation.views.license_view")
@@ -44,14 +47,15 @@ class LicenseView(QDialog):
 
     Allows the user to:
       - View their hardware fingerprint (to send to the vendor for key generation).
-      - Enter and validate an offline license key.
+      - Enter and validate an offline license key (trial or full).
       - Copy the fingerprint to the clipboard.
     """
 
     def __init__(
         self,
         validate_use_case: ValidateLicenseUseCase,
-        activation_mode: Optional[str] = None,
+        theme: str = "light",
+        show_back: bool = True,
         parent: Optional[QWidget] = None,
     ) -> None:
         """
@@ -59,12 +63,15 @@ class LicenseView(QDialog):
 
         Args:
             validate_use_case: Fully configured license validation use case.
-            activation_mode: Optional "trial" or "license" for first-run hints.
+            theme: UI theme ("light" or "dark") matching app settings.
+            show_back: When True, show a Back button that closes without activating.
             parent: Optional parent widget.
         """
         super().__init__(parent)
         self._use_case = validate_use_case
-        self._activation_mode = activation_mode
+        self._theme = theme if theme in ("light", "dark") else "light"
+        self._palette = get_palette(self._theme)
+        self._show_back = show_back
         self._is_activated = False
 
         self.setWindowTitle("TileVision AI — License Activation")
@@ -82,14 +89,10 @@ class LicenseView(QDialog):
 
         logger.debug("LicenseView initialized.")
 
-    # ── Properties ────────────────────────────────────────────────────────────
-
     @property
     def is_activated(self) -> bool:
         """True if a valid license key was successfully entered and saved."""
         return self._is_activated
-
-    # ── UI Construction ───────────────────────────────────────────────────────
 
     def _setup_ui(self) -> None:
         """Build and arrange all widgets within the dialog."""
@@ -97,16 +100,10 @@ class LicenseView(QDialog):
         layout.setContentsMargins(32, 28, 32, 28)
         layout.setSpacing(20)
 
-        # ── Logo / Brand Header
         layout.addWidget(self._build_header())
-
-        # ── Hardware ID Section
         layout.addWidget(self._build_hardware_id_section())
-
-        # ── License Key Input
         layout.addWidget(self._build_license_input_section())
 
-        # ── Status Label
         self._status_label = QLabel("")
         self._status_label.setObjectName("StatusLabel")
         self._status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -115,12 +112,27 @@ class LicenseView(QDialog):
 
         layout.addStretch()
 
-        # ── Activate Button
+        button_row = QHBoxLayout()
+        button_row.setSpacing(12)
+
+        if self._show_back:
+            self._back_button = QPushButton("Back")
+            self._back_button.setObjectName("SecondaryButton")
+            self._back_button.setFixedHeight(48)
+            self._back_button.setMinimumWidth(100)
+            self._back_button.clicked.connect(self.reject)
+            button_row.addWidget(self._back_button)
+
+        button_row.addStretch()
+
         self._activate_button = QPushButton("Activate License")
         self._activate_button.setObjectName("ActivateButton")
         self._activate_button.setFixedHeight(48)
+        self._activate_button.setMinimumWidth(200)
         self._activate_button.clicked.connect(self._on_activate_clicked)
-        layout.addWidget(self._activate_button)
+        button_row.addWidget(self._activate_button)
+
+        layout.addLayout(button_row)
 
     def _build_header(self) -> QWidget:
         """Build the product logo and title header."""
@@ -146,10 +158,6 @@ class LicenseView(QDialog):
         title_label = QLabel("TileVision AI")
         title_label.setObjectName("DialogTitle")
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_font = QFont()
-        title_font.setPointSize(18)
-        title_font.setBold(True)
-        title_label.setFont(title_font)
 
         subtitle_label = QLabel("Offline Visual Tile Search Platform")
         subtitle_label.setObjectName("DialogSubtitle")
@@ -175,11 +183,10 @@ class LicenseView(QDialog):
 
         section_title = QLabel("Step 1 — Your Machine ID")
         section_title.setObjectName("SectionTitle")
-        section_title.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
 
         info_text = QLabel(
             "Copy your Machine ID and send it to your TileVision vendor. "
-            "They will generate a license key for this PC."
+            "They will generate a trial or full license key for this PC."
         )
         info_text.setObjectName("InfoText")
         info_text.setWordWrap(True)
@@ -193,8 +200,8 @@ class LicenseView(QDialog):
         self._hw_id_edit.setPlaceholderText("Computing hardware fingerprint...")
 
         copy_button = QPushButton("Copy Machine ID")
-        copy_button.setObjectName("CopyButton")
-        copy_button.setFixedWidth(90)
+        copy_button.setObjectName("SecondaryButton")
+        copy_button.setFixedWidth(120)
         copy_button.setFixedHeight(32)
         copy_button.setToolTip("Copy fingerprint to clipboard")
         copy_button.clicked.connect(self._copy_hw_id)
@@ -217,22 +224,18 @@ class LicenseView(QDialog):
 
         section_title = QLabel("Step 2 — Enter License Key")
         section_title.setObjectName("SectionTitle")
-        section_title.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
 
-        if self._activation_mode == "trial":
-            hint = QLabel(
-                "Paste the trial license key from your vendor. "
-                "If you do not have one yet, copy your Machine ID above and request a trial key."
-            )
-        else:
-            hint = QLabel("Paste the license key your TileVision vendor sent you.")
+        hint = QLabel(
+            "Paste the trial or full license key your vendor sent you. "
+            "Both key types use this same field."
+        )
         hint.setObjectName("InfoText")
         hint.setWordWrap(True)
 
         self._license_key_edit = QPlainTextEdit()
         self._license_key_edit.setObjectName("LicenseKeyEdit")
         self._license_key_edit.setPlaceholderText(
-            "Paste your license key here — trial keys and full license keys use the same field."
+            "Paste your license key here..."
         )
         self._license_key_edit.setFixedHeight(96)
         self._license_key_edit.setTabChangesFocus(True)
@@ -241,8 +244,6 @@ class LicenseView(QDialog):
         layout.addWidget(hint)
         layout.addWidget(self._license_key_edit)
         return container
-
-    # ── Logic ─────────────────────────────────────────────────────────────────
 
     def _load_hardware_id(self) -> None:
         """Load and display the hardware fingerprint from the validation use case."""
@@ -254,7 +255,7 @@ class LicenseView(QDialog):
             logger.error(f"Failed to load hardware fingerprint: {e}")
             self._hw_id_edit.setText("ERROR: Unable to read hardware ID")
             self._show_status(
-                "Warning: Warning: Could not read hardware fingerprint. Contact support.", error=True
+                "Warning: Could not read hardware fingerprint. Contact support.", error=True
             )
 
     @Slot()
@@ -271,10 +272,7 @@ class LicenseView(QDialog):
 
     @Slot()
     def _on_activate_clicked(self) -> None:
-        """
-        Validate the entered license key against the hardware fingerprint.
-        Accept the dialog if the key is valid.
-        """
+        """Validate the entered license key and accept the dialog if valid."""
         license_key = self._normalize_license_key(self._license_key_edit.toPlainText())
 
         if not license_key:
@@ -298,11 +296,10 @@ class LicenseView(QDialog):
             logger.info("License successfully activated.")
             self._is_activated = True
             self._show_status("License activated successfully! Welcome to TileVision AI.", error=False)
-            # Small delay feedback before closing
             QMessageBox.information(
                 self,
                 "License Activated",
-                "🎉 Your license has been successfully activated.\n\nTileVision AI is now unlocked.",
+                "Your license has been successfully activated.\n\nTileVision AI is now unlocked.",
             )
             self.accept()
         else:
@@ -320,415 +317,56 @@ class LicenseView(QDialog):
         return "".join(raw.split())
 
     def _show_status(self, message: str, error: bool = False) -> None:
-        """
-        Display a status message below the license input field.
-
-        Args:
-            message: The status message to display.
-            error: If True, styles the label as an error (red), else success (green).
-        """
-        color = "#FF6B6B" if error else "#69F0AE"
+        """Display a status message below the license input field."""
+        color = self._palette["danger_text"] if error else self._palette["success_text"]
         self._status_label.setText(f'<span style="color:{color};">{message}</span>')
 
-    # ── Styling ───────────────────────────────────────────────────────────────
-
     def _apply_styles(self) -> None:
-        """Apply QSS dark theme to the dialog."""
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #1A1D26;
-                color: #E8EAF6;
-            }
-
-            #DialogTitle {
-                color: #E8EAF6;
-                font-size: 18px;
-                font-weight: bold;
-            }
-            #DialogSubtitle {
-                color: #7DD3FC;
-                font-size: 12px;
-            }
-            #Separator {
+        """Apply theme-aware styles matching the rest of the application."""
+        p = self._palette
+        self.setStyleSheet(
+            get_shared_view_qss(self._theme)
+            + f"""
+            QDialog {{
+                background-color: {p['bg_app']};
+                color: {p['text_primary']};
+            }}
+            #Separator {{
                 border: none;
-                border-top: 1px solid #2D3250;
-            }
-
-            #InfoFrame {
-                background-color: #1E2130;
-                border: 1px solid #2D3250;
+                border-top: 1px solid {p['border']};
+            }}
+            #InfoFrame {{
+                background-color: {p['bg_panel']};
+                border: 1px solid {p['border']};
                 border-radius: 8px;
-            }
-            #SectionTitle {
-                color: #38BDF8;
+            }}
+            #SectionTitle {{
+                color: {p['accent_text']};
                 font-size: 12px;
                 font-weight: bold;
-            }
-            #InfoText {
-                color: #9E9E9E;
+            }}
+            #InfoText {{
+                color: {p['text_muted']};
                 font-size: 11px;
-            }
-
-            #HwIdEdit {
-                background-color: #252837;
-                border: 1px solid #3D4166;
+            }}
+            #HwIdEdit, #LicenseKeyEdit {{
+                background-color: {p['bg_input']};
+                border: 1px solid {p['border_strong']};
                 border-radius: 6px;
-                color: #B0BEC5;
-                font-family: "Consolas", "Courier New", monospace;
-                font-size: 12px;
-                padding: 6px 10px;
-            }
-
-            #LicenseKeyEdit {
-                background-color: #252837;
-                border: 1px solid #3D4166;
-                border-radius: 6px;
-                color: #E8EAF6;
+                color: {p['text_primary']};
                 font-family: "Consolas", "Courier New", monospace;
                 font-size: 12px;
                 padding: 8px 10px;
-            }
-            #LicenseKeyEdit:focus {
-                border-color: #0EA5E9;
-            }
-
-            #CopyButton {
-                background-color: #2D3250;
-                border: 1px solid #3D4166;
-                border-radius: 6px;
-                color: #B0BEC5;
-                font-size: 12px;
-            }
-            #CopyButton:hover {
-                background-color: #3D4166;
-                color: #E8EAF6;
-            }
-
-            #ActivateButton {
-                background: qlineargradient(
-                    x1: 0, y1: 0, x2: 1, y2: 0,
-                    stop: 0 #0369A1,
-                    stop: 1 #0EA5E9
-                );
-                border: none;
-                border-radius: 10px;
-                color: #FFFFFF;
-                font-size: 15px;
-                font-weight: bold;
-            }
-            #ActivateButton:hover {
-                background: qlineargradient(
-                    x1: 0, y1: 0, x2: 1, y2: 0,
-                    stop: 0 #0EA5E9,
-                    stop: 1 #38BDF8
-                );
-            }
-            #ActivateButton:pressed {
-                background-color: #283593;
-            }
-            #ActivateButton:disabled {
-                background-color: #2D3250;
-                color: #546E7A;
-            }
-
-            #StatusLabel {
+            }}
+            #LicenseKeyEdit:focus, #HwIdEdit:focus {{
+                border-color: {p['accent']};
+            }}
+            #StatusLabel {{
                 font-size: 12px;
                 min-height: 20px;
-            }
-
-            QLabel {
-                color: #E8EAF6;
-            }
-        """)
-
-
-class LicenseStartupChoiceDialog(QDialog):
-    """
-    First-run dialog: user chooses trial key request or full license activation.
-
-    Both paths require a vendor-generated license key entered on the next screen.
-    """
-
-    def __init__(
-        self,
-        validate_use_case: ValidateLicenseUseCase,
-        parent: Optional[QWidget] = None,
-    ) -> None:
-        super().__init__(parent)
-        self._use_case = validate_use_case
-        self._choice: Optional[str] = None
-
-        self.setWindowTitle("TileVision AI — Get Started")
-        self.setFixedSize(540, 500)
-        self.setModal(True)
-        self.setWindowFlags(
-            Qt.WindowType.Dialog |
-            Qt.WindowType.WindowCloseButtonHint |
-            Qt.WindowType.MSWindowsFixedSizeDialogHint
-        )
-
-        self._setup_ui()
-        self._apply_styles()
-        self._load_hardware_id()
-
-    @property
-    def choice(self) -> Optional[str]:
-        """'trial', 'license', or None if the dialog was dismissed."""
-        return self._choice
-
-    def _setup_ui(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 28, 32, 28)
-        layout.setSpacing(16)
-
-        title = QLabel("Welcome to TileVision AI")
-        title.setObjectName("DialogTitle")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setFont(QFont("Segoe UI", 18, QFont.Weight.Bold))
-
-        logo_label = QLabel()
-        logo_scaled = logo_pixmap(56)
-        if not logo_scaled.isNull():
-            logo_label.setPixmap(logo_scaled)
-        logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        subtitle = QLabel(
-            "How would you like to get started?\n"
-            "Both trial and full access require a license key from your vendor."
-        )
-        subtitle.setObjectName("DialogSubtitle")
-        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        subtitle.setWordWrap(True)
-
-        layout.addWidget(logo_label)
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
-
-        layout.addSpacing(8)
-
-        trial_btn = QPushButton("Request Trial Key")
-        trial_btn.setObjectName("TrialButton")
-        trial_btn.setFixedHeight(52)
-        trial_btn.clicked.connect(self._on_trial_clicked)
-        layout.addWidget(trial_btn)
-
-        trial_hint = QLabel(
-            "Copy your Machine ID below and send it to your vendor. "
-            "They will generate a trial license key for you to paste in."
-        )
-        trial_hint.setObjectName("ChoiceHint")
-        trial_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        trial_hint.setWordWrap(True)
-        layout.addWidget(trial_hint)
-
-        layout.addSpacing(12)
-
-        license_btn = QPushButton("I Have a License Key")
-        license_btn.setObjectName("LicenseButton")
-        license_btn.setFixedHeight(52)
-        license_btn.clicked.connect(self._on_license_clicked)
-        layout.addWidget(license_btn)
-
-        license_hint = QLabel("Already received a full license key from your vendor.")
-        license_hint.setObjectName("ChoiceHint")
-        license_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        license_hint.setWordWrap(True)
-        layout.addWidget(license_hint)
-
-        layout.addStretch()
-
-        machine_frame = QFrame()
-        machine_frame.setObjectName("InfoFrame")
-        machine_layout = QVBoxLayout(machine_frame)
-        machine_layout.setContentsMargins(12, 10, 12, 10)
-        machine_layout.setSpacing(6)
-
-        machine_title = QLabel("Your Machine ID (for license requests)")
-        machine_title.setObjectName("SectionTitle")
-        machine_title.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
-
-        machine_row = QHBoxLayout()
-        machine_row.setSpacing(8)
-        self._hw_id_edit = QLineEdit()
-        self._hw_id_edit.setObjectName("HwIdEdit")
-        self._hw_id_edit.setReadOnly(True)
-        copy_btn = QPushButton("Copy")
-        copy_btn.setObjectName("CopyButton")
-        copy_btn.setFixedWidth(72)
-        copy_btn.clicked.connect(self._copy_hw_id)
-        machine_row.addWidget(self._hw_id_edit)
-        machine_row.addWidget(copy_btn)
-
-        machine_layout.addWidget(machine_title)
-        machine_layout.addLayout(machine_row)
-        layout.addWidget(machine_frame)
-
-    def _load_hardware_id(self) -> None:
-        try:
-            self._hw_id_edit.setText(self._use_case.get_hardware_fingerprint())
-        except Exception:
-            self._hw_id_edit.setText("")
-
-    def _copy_hw_id(self) -> None:
-        machine_id = self._hw_id_edit.text().strip()
-        if not machine_id:
-            QMessageBox.warning(self, "Unavailable", "Machine ID could not be read on this PC.")
-            return
-        QGuiApplication.clipboard().setText(machine_id)
-        QMessageBox.information(
-            self,
-            "Copied",
-            "Machine ID copied. Send it to your vendor to receive a license key.",
-        )
-
-    @Slot()
-    def _on_trial_clicked(self) -> None:
-        self._choice = "trial"
-        self.accept()
-
-    @Slot()
-    def _on_license_clicked(self) -> None:
-        self._choice = "license"
-        self.accept()
-
-    def _apply_styles(self) -> None:
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #1A1D26;
-                color: #E8EAF6;
-            }
-            #DialogTitle {
-                color: #E8EAF6;
-            }
-            #DialogSubtitle {
-                color: #9E9E9E;
-                font-size: 12px;
-            }
-            #ChoiceHint {
-                color: #7DD3FC;
-                font-size: 11px;
-            }
-            #InfoFrame {
-                background-color: #1E2130;
-                border: 1px solid #2D3250;
-                border-radius: 8px;
-            }
-            #SectionTitle {
-                color: #38BDF8;
-                font-size: 11px;
-            }
-            #HwIdEdit {
-                background-color: #252837;
-                border: 1px solid #3D4166;
-                border-radius: 6px;
-                color: #B0BEC5;
-                font-family: "Consolas", "Courier New", monospace;
-                font-size: 11px;
-                padding: 6px 10px;
-            }
-            #CopyButton {
-                background-color: #2D3250;
-                border: 1px solid #3D4166;
-                border-radius: 6px;
-                color: #B0BEC5;
-            }
-            #CopyButton:hover {
-                background-color: #3D4166;
-                color: #E8EAF6;
-            }
-            #TrialButton {
-                background: qlineargradient(
-                    x1: 0, y1: 0, x2: 1, y2: 0,
-                    stop: 0 #0369A1,
-                    stop: 1 #0EA5E9
-                );
-                border: none;
-                border-radius: 10px;
-                color: #FFFFFF;
-                font-size: 15px;
-                font-weight: bold;
-            }
-            #TrialButton:hover {
-                background: qlineargradient(
-                    x1: 0, y1: 0, x2: 1, y2: 0,
-                    stop: 0 #0EA5E9,
-                    stop: 1 #38BDF8
-                );
-            }
-            #LicenseButton {
-                background-color: #252837;
-                border: 2px solid #3D4166;
-                border-radius: 10px;
-                color: #E8EAF6;
-                font-size: 15px;
-                font-weight: bold;
-            }
-            #LicenseButton:hover {
-                border-color: #0EA5E9;
-                color: #FFFFFF;
-            }
-        """)
-
-
-class MachineIdWelcomeDialog(QDialog):
-    """Optional helper shown after trial key activation."""
-
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("TileVision AI — Trial Activated")
-        self.setFixedSize(520, 320)
-        self.setModal(True)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 20, 24, 20)
-        layout.setSpacing(12)
-
-        title = QLabel("Trial License Activated")
-        title.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
-        layout.addWidget(title)
-
-        steps = QLabel(
-            "Your trial license key is active.\n"
-            "To upgrade to a full license later:\n"
-            "1. Copy your Machine ID below\n"
-            "2. Send it to your TileVision vendor\n"
-            "3. Paste the new license key in Settings or restart the app"
-        )
-        steps.setWordWrap(True)
-        layout.addWidget(steps)
-
-        self._machine_id_edit = QLineEdit()
-        self._machine_id_edit.setReadOnly(True)
-        self._machine_id_edit.setPlaceholderText("Loading Machine ID...")
-        layout.addWidget(self._machine_id_edit)
-
-        copy_btn = QPushButton("Copy Machine ID")
-        copy_btn.clicked.connect(self._copy_machine_id)
-        layout.addWidget(copy_btn)
-
-        layout.addStretch()
-        ok_btn = QPushButton("Continue")
-        ok_btn.setMinimumHeight(40)
-        ok_btn.clicked.connect(self.accept)
-        layout.addWidget(ok_btn)
-
-        self._load_machine_id()
-
-    def _load_machine_id(self) -> None:
-        try:
-            from src.licensing.hardware import get_machine_fingerprint
-            self._machine_id_edit.setText(get_machine_fingerprint())
-        except Exception:
-            self._machine_id_edit.setText("")
-
-    def _copy_machine_id(self) -> None:
-        machine_id = self._machine_id_edit.text().strip()
-        if not machine_id:
-            QMessageBox.warning(self, "Unavailable", "Machine ID could not be read on this PC.")
-            return
-        QGuiApplication.clipboard().setText(machine_id)
-        QMessageBox.information(
-            self,
-            "Copied",
-            "Machine ID copied. Send it to your vendor to receive a license key.",
+            }}
+            QLabel {{
+                color: {p['text_primary']};
+            }}
+            """
         )

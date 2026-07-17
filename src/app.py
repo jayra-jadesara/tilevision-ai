@@ -41,14 +41,12 @@ from src.core.use_cases.search_tiles import SearchTilesUseCase
 from src.core.use_cases.monitor_folder import FolderMonitorController, is_watchdog_available
 from src.core.use_cases.find_duplicates import FindDuplicatesUseCase
 from src.core.use_cases.validate_license import ValidateLicenseUseCase
+from src.theme.theme_manager import get_app_stylesheet
 from src.licensing.validator import LicenseValidator
 from src.presentation.viewmodels.indexing_viewmodel import IndexingViewModel
 from src.presentation.viewmodels.search_viewmodel import SearchViewModel
 from src.presentation.views.main_window import MainWindow, DashboardDataProviders
-from src.presentation.views.license_view import (
-    LicenseView,
-    LicenseStartupChoiceDialog,
-)
+from src.presentation.views.license_view import LicenseView
 from src.presentation.auto_index_notifier import AutoIndexNotifier
 from src.core.use_cases.monitor_folder import AutoIndexAction
 
@@ -124,6 +122,7 @@ def build_application() -> int:
     # Set modern default font
     default_font = QFont("Segoe UI", 10)
     app.setFont(default_font)
+    app.setStyleSheet(get_app_stylesheet(settings.theme))
 
     # ── 3b. First-run dependency setup wizard ─────────────────────────────────
     from src.presentation.views.setup_wizard import SetupWizardDialog, should_show_setup_wizard
@@ -158,34 +157,11 @@ def build_application() -> int:
     license_details = validate_license_use_case.verify_existing_license()
 
     if license_details is None:
-        activation_mode: Optional[str] = None
-
-        if not validate_license_use_case.has_stored_license():
-            logger.info("First run — asking user to choose trial key or full license.")
-            choice_dialog = LicenseStartupChoiceDialog(
-                validate_use_case=validate_license_use_case,
-            )
-            choice_dialog.exec()
-
-            if choice_dialog.choice == "trial":
-                activation_mode = "trial"
-            elif choice_dialog.choice == "license":
-                activation_mode = "license"
-            else:
-                logger.warning("Startup choice dismissed — exiting.")
-                QMessageBox.information(
-                    None,
-                    "Setup Required",
-                    "TileVision AI requires a license key to run.\n\n"
-                    "Contact your vendor for a trial or full license key, "
-                    "then restart the app.",
-                )
-                return 1
-
         logger.info("Showing license activation dialog.")
         license_dialog = LicenseView(
             validate_use_case=validate_license_use_case,
-            activation_mode=activation_mode,
+            theme=settings.theme,
+            show_back=True,
         )
         license_dialog.exec()
 
