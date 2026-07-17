@@ -215,6 +215,9 @@ class CatalogueProfilesPanel(QWidget):
         editor_layout.addStretch()
 
         save_row = QHBoxLayout()
+        self._save_status = QLabel("")
+        self._save_status.setObjectName("ProfileSaveStatus")
+        save_row.addWidget(self._save_status, stretch=1)
         save_row.addStretch()
         self._save_btn = QPushButton("Save Profile")
         self._save_btn.setObjectName("PrimaryButton")
@@ -262,6 +265,12 @@ class CatalogueProfilesPanel(QWidget):
         field.editingFinished.connect(
             lambda f=field, v=validator, k=key: self._validate_field(f, v, k)
         )
+        if key == "display_name":
+            field.textChanged.connect(lambda _text: self._validate_display_name_unique())
+        else:
+            field.textChanged.connect(
+                lambda _text, f=field, v=validator, k=key: self._validate_field(f, v, k)
+            )
         return container
 
     def _set_field_error(
@@ -318,12 +327,38 @@ class CatalogueProfilesPanel(QWidget):
             self._validate_field(field, validator, key)
             for field, validator, key in checks
         ]
+        results.append(self._validate_display_name_unique())
         if not all(results):
-            for field, _, _ in checks:
+            ordered_fields = (
+                self._display_name,
+                self._email,
+                self._phone,
+                self._website,
+                self._logo_path,
+            )
+            for field in ordered_fields:
                 if field.property("invalid"):
                     field.setFocus()
                     break
+            self._save_status.setText("Please fix the errors shown below each field.")
+        else:
+            self._save_status.clear()
         return all(results)
+
+    def _validate_display_name_unique(self) -> bool:
+        name = self._display_name.text().strip()
+        if not name:
+            return True
+        existing = self._service.find_by_display_name(
+            name, exclude_id=self._editing_id
+        )
+        if existing is None:
+            return self._set_field_error(self._display_name, "display_name", None)
+        message = (
+            f'A profile named "{name}" already exists. '
+            "Pick a different profile name or edit the existing one."
+        )
+        return self._set_field_error(self._display_name, "display_name", message)
 
     def _refresh_list(self, select_id: Optional[str] = None) -> None:
         self._list.blockSignals(True)
@@ -340,6 +375,19 @@ class CatalogueProfilesPanel(QWidget):
             self._on_new()
         elif select_id is None and self._list.currentItem() is None:
             self._list.setCurrentRow(0)
+
+        if select_id:
+            master = self._service.get(select_id)
+            if master is not None:
+                self._editing_id = master.id
+                self._load_form(master)
+        elif self._list.currentItem() is not None:
+            current = self._list.currentItem()
+            master_id = current.data(Qt.ItemDataRole.UserRole)
+            master = self._service.get(str(master_id))
+            if master is not None:
+                self._editing_id = master.id
+                self._load_form(master)
 
     def _on_list_selection_changed(
         self,
@@ -415,35 +463,45 @@ class CatalogueProfilesPanel(QWidget):
         return CatalogueMaster(**common)
 
     def _on_new(self) -> None:
+        self._list.blockSignals(True)
         self._clear_form()
-        if self._license_customer_name:
+        self._list.blockSignals(False)
+        if self._license_customer_name and not self._service.find_by_display_name(
+            self._license_customer_name
+        ):
             self._display_name.setText(self._license_customer_name)
             self._company_name.setText(self._license_customer_name)
+        self._save_status.clear()
         self._display_name.setFocus()
 
     def _on_save(self) -> None:
+        self._save_status.clear()
         if not self._validate_all_fields():
             return
 
         try:
             master = self._form_master()
-            if self._editing_id and self._service.get(self._editing_id):
+            if self._editing_id:
                 saved = self._service.update(master)
             else:
                 saved = self._service.add(master)
                 self._editing_id = saved.id
         except ValueError as exc:
-            QMessageBox.warning(self, "Cannot Save Profile", str(exc))
+            message = str(exc)
+            if "already exists" in message.lower() or "profile name" in message.lower():
+                self._set_field_error(self._display_name, "display_name", message)
+                self._display_name.setFocus()
+            else:
+                self._save_status.setText(message)
             return
-        except KeyError:
-            try:
-                saved = self._service.add(self._form_master())
-                self._editing_id = saved.id
-            except ValueError as exc:
-                QMessageBox.warning(self, "Cannot Save Profile", str(exc))
-                return
+        except RuntimeError as exc:
+            self._save_status.setText(f"Could not save profile: {exc}")
+            return
 
-        self._refresh_list(select_id=self._editing_id)
+        self._refresh_list(select_id=saved.id)
+        self._editing_id = saved.id
+        self._load_form(saved)
+        self._save_status.setText("Saved.")
         self.profiles_changed.emit()
 
     def _on_delete(self) -> None:

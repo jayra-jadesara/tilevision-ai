@@ -124,6 +124,26 @@ def test_export_options_round_trip(tmp_path: Path) -> None:
     assert saved.max_results == 24
 
 
+def test_update_profile_persists_changes(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    master = CatalogueMaster(
+        display_name="ABC",
+        company_name="ABC",
+        email="old@example.com",
+    )
+    service.add(master)
+
+    master.email = "new@example.com"
+    master.phone = "9876543210"
+    service.update(master)
+
+    reloaded = _service(tmp_path)
+    saved = reloaded.get(master.id)
+    assert saved is not None
+    assert saved.email == "new@example.com"
+    assert saved.phone == "9876543210"
+
+
 def test_migrate_legacy_json_into_database(tmp_path: Path) -> None:
     legacy_json = tmp_path / "catalogue_masters.json"
     legacy_json.write_text(
