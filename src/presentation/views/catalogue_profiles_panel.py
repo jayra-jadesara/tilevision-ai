@@ -341,9 +341,16 @@ class CatalogueProfilesPanel(QWidget):
                     field.setFocus()
                     break
             self._save_status.setText("Please fix the errors shown below each field.")
+            self._set_save_status_error(True)
         else:
             self._save_status.clear()
+            self._set_save_status_error(False)
         return all(results)
+
+    def _set_save_status_error(self, is_error: bool) -> None:
+        self._save_status.setProperty("error", is_error)
+        self._save_status.style().unpolish(self._save_status)
+        self._save_status.style().polish(self._save_status)
 
     def _validate_display_name_unique(self) -> bool:
         name = self._display_name.text().strip()
@@ -476,6 +483,7 @@ class CatalogueProfilesPanel(QWidget):
 
     def _on_save(self) -> None:
         self._save_status.clear()
+        self._set_save_status_error(False)
         if not self._validate_all_fields():
             return
 
@@ -493,15 +501,18 @@ class CatalogueProfilesPanel(QWidget):
                 self._display_name.setFocus()
             else:
                 self._save_status.setText(message)
+                self._set_save_status_error(True)
             return
         except RuntimeError as exc:
             self._save_status.setText(f"Could not save profile: {exc}")
+            self._set_save_status_error(True)
             return
 
         self._refresh_list(select_id=saved.id)
         self._editing_id = saved.id
         self._load_form(saved)
         self._save_status.setText("Saved.")
+        self._set_save_status_error(False)
         self.profiles_changed.emit()
 
     def _on_delete(self) -> None:

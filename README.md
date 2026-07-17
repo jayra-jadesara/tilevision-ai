@@ -53,6 +53,14 @@ python main.py
 
 Data is stored under `%USERPROFILE%\.tilevision_ai\` (database, FAISS index, thumbnails, config).
 
+### Vendor license manager (you only — never ship to customers)
+
+```powershell
+python admin_tool/main.py
+```
+
+See [docs/VENDOR_LICENSING.md](docs/VENDOR_LICENSING.md) for the full workflow: issue trial/full keys, customer registry, renewals, cancellation, and production checklist.
+
 ---
 
 ## Project Structure
@@ -91,6 +99,9 @@ tilevision-ai/
 │   │   └── validator.py             # ECDSA license validator
 │   └── presentation/                # Views, ViewModels, workers
 ├── tests/                           # Unit and integration tests
+├── admin_tool/                      # Vendor-only license manager (do not ship)
+├── docs/
+│   └── VENDOR_LICENSING.md          # Vendor workflow + production checklist
 └── dev_tools/
     ├── create_dev_license.py        # Dev: seed a wildcard dev license
     ├── generate_license.py          # Vendor: generate real license keys
@@ -193,4 +204,4 @@ TileVision AI uses **offline hardware-locked ECDSA licensing**:
 - Licenses are locked to a specific machine fingerprint (BIOS + CPU + Registry).
 - No internet connection required for validation.
 
-For production key generation, see `dev_tools/generate_license.py`.
+For production key generation, use `python admin_tool/main.py` and follow [docs/VENDOR_LICENSING.md](docs/VENDOR_LICENSING.md).

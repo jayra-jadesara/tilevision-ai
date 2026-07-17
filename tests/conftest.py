@@ -12,6 +12,8 @@ here via fakes (see FakeEmbedder in individual test files).
 import sys
 import types
 
+import pytest
+
 
 def _install_fake_module(name: str, attrs: dict) -> None:
     if name in sys.modules:
@@ -54,3 +56,18 @@ _install_fake_module(
 def pytest_configure():
     import os
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+
+@pytest.fixture
+def catalogue_master_service(tmp_path):
+    """In-memory SQLite export profile service for UI tests."""
+    from src.data.db_context import DatabaseContext
+    from src.data.sqlite_repository import SQLiteCatalogueProfileRepository
+    from src.services.catalogue_master_service import CatalogueMasterService
+
+    db = DatabaseContext(str(tmp_path / "catalogue_test.db"))
+    repo = SQLiteCatalogueProfileRepository(db)
+    return CatalogueMasterService(
+        repository=repo,
+        license_customer_name="Test Customer",
+    )

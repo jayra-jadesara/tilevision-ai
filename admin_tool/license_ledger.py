@@ -296,6 +296,27 @@ class LicenseLedger:
 
         return [self._row_to_record(row) for row in rows]
 
+    def list_current_per_machine(
+        self,
+        category_filter: Optional[str] = None,
+        search_text: str = "",
+    ) -> List[LicenseRecord]:
+        """One row per Machine ID — the latest active license on that PC."""
+        active = self.list_licenses(
+            status_filter="active",
+            category_filter=category_filter,
+            search_text=search_text,
+        )
+        best: dict[str, LicenseRecord] = {}
+        for rec in active:
+            machine_id = rec.machine_id.strip()
+            if not machine_id:
+                continue
+            existing = best.get(machine_id)
+            if existing is None or rec.issued_at > existing.issued_at:
+                best[machine_id] = rec
+        return sorted(best.values(), key=lambda r: r.issued_at, reverse=True)
+
     def get_stats(self) -> LicenseStats:
         records = self.list_licenses()
         today = datetime.now().date()

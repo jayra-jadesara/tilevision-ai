@@ -138,3 +138,38 @@ def test_renew_supersedes_old_license(tmp_path):
     old = ledger.get_license("old-1")
     assert old is not None
     assert old.status == "superseded"
+
+
+def test_list_current_per_machine_shows_latest_active_only(tmp_path):
+    ledger = LicenseLedger(db_path=tmp_path / "ledger.db")
+    ledger.record_issue(
+        license_id="trial-1",
+        customer_name="Acme",
+        machine_id="m1",
+        license_type="1-Month Trial",
+        expires_at="2026-08-01",
+        license_key="trial-key",
+    )
+    ledger.record_issue(
+        license_id="full-1",
+        customer_name="Acme",
+        machine_id="m1",
+        license_type="1-Year",
+        expires_at="2027-01-01",
+        license_key="full-key",
+        supersede_license_id="trial-1",
+    )
+    ledger.record_issue(
+        license_id="other-pc",
+        customer_name="Acme",
+        machine_id="m2",
+        license_type="1-Year",
+        expires_at="2027-01-01",
+        license_key="other-key",
+    )
+
+    current = ledger.list_current_per_machine()
+    assert len(current) == 2
+    by_machine = {rec.machine_id: rec for rec in current}
+    assert by_machine["m1"].license_id == "full-1"
+    assert by_machine["m2"].license_id == "other-pc"

@@ -362,13 +362,15 @@ class AdminLicenseWindow(QMainWindow):
         filter_row.addWidget(QLabel("Status:"))
         self._status_filter = QComboBox()
         for label, value in (
-            ("All", "all"),
+            ("Current (1 per PC)", "current"),
+            ("All history", "all"),
             ("Active", "active"),
             ("Trial (active)", "trial"),
             ("Suspended", "cancelled"),
             ("Old key", "superseded"),
         ):
             self._status_filter.addItem(label, value)
+        self._status_filter.setCurrentIndex(0)
         self._prepare_form_field(self._status_filter)
         self._status_filter.currentIndexChanged.connect(self._refresh_registry_table)
         filter_row.addWidget(self._status_filter)
@@ -480,7 +482,12 @@ class AdminLicenseWindow(QMainWindow):
     def _refresh_registry_table(self) -> None:
         status_filter = self._status_filter_value()
         category_filter = self._category_filter_value()
-        if status_filter == "trial":
+        if status_filter == "current":
+            records = self._ledger.list_current_per_machine(
+                category_filter=category_filter,
+                search_text=self._search_edit.text(),
+            )
+        elif status_filter == "trial":
             records = self._ledger.list_licenses(
                 status_filter="active",
                 category_filter="trials",

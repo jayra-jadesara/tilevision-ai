@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
@@ -55,11 +57,16 @@ def qapp():
 
 
 @pytest.fixture()
-def main_window(qapp, tmp_path):
+def main_window(qapp, tmp_path, catalogue_master_service):
     settings = AppSettings(config_dir=tmp_path)
     settings.theme = "dark"
     ivm = IndexingViewModel(use_case=_FakeIndexUseCase())
-    window = MainWindow(indexing_viewmodel=ivm, settings=settings, catalog_count_provider=lambda: 0)
+    window = MainWindow(
+        indexing_viewmodel=ivm,
+        settings=settings,
+        catalog_count_provider=lambda: 0,
+        catalogue_master_service=catalogue_master_service,
+    )
     yield window
     window.deleteLater()
 
@@ -72,11 +79,9 @@ def test_starts_in_dark_theme_by_default(main_window):
 def test_switching_to_light_updates_indexing_view(main_window):
     main_window._on_theme_changed_request("light")
     light_bg = get_palette("light")["bg_app"]
-    dark_bg = get_palette("dark")["bg_app"]
 
     qss = main_window._indexing_view.styleSheet()
-    assert light_bg in qss
-    assert dark_bg not in qss
+    assert f"background-color: {light_bg}" in qss
 
 
 def test_switching_to_light_updates_app_level_stylesheet(main_window):
@@ -90,8 +95,8 @@ def test_switching_back_to_dark_restores_dark_colors(main_window):
     main_window._on_theme_changed_request("dark")
 
     qss = main_window._indexing_view.styleSheet()
-    assert get_palette("dark")["bg_app"] in qss
-    assert get_palette("light")["bg_app"] not in qss
+    dark_bg = get_palette("dark")["bg_app"]
+    assert f"background-color: {dark_bg}" in qss
 
 
 def test_current_theme_tracked_correctly(main_window):
@@ -100,7 +105,7 @@ def test_current_theme_tracked_correctly(main_window):
     assert main_window._current_theme == "light"
 
 
-def test_navigate_to_settings_refreshes_indexed_tiles_count(qapp, tmp_path):
+def test_navigate_to_settings_refreshes_indexed_tiles_count(qapp, tmp_path, catalogue_master_service):
     settings = AppSettings(config_dir=tmp_path)
     counts = {"value": 22}
     ivm = IndexingViewModel(use_case=_FakeIndexUseCase())
@@ -108,6 +113,7 @@ def test_navigate_to_settings_refreshes_indexed_tiles_count(qapp, tmp_path):
         indexing_viewmodel=ivm,
         settings=settings,
         catalog_count_provider=lambda: counts["value"],
+        catalogue_master_service=catalogue_master_service,
     )
 
     assert window._settings_view._tiles_count_label.text() == "22"

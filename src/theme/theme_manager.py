@@ -551,6 +551,15 @@ def get_settings_view_qss(theme: str) -> str:
         font-weight: 600;
         background: transparent;
     }}
+    #ProfileSaveStatus {{
+        color: {p['success_text']};
+        font-size: 11px;
+        font-weight: 600;
+        background: transparent;
+    }}
+    #ProfileSaveStatus[error="true"] {{
+        color: {p['danger_text']};
+    }}
     QComboBox::drop-down {{
         subcontrol-origin: padding;
         subcontrol-position: top right;

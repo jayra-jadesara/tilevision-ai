@@ -5,6 +5,8 @@ customers. This is separate from the customer-facing application and must
 **never** be bundled into the customer installer — it can load your private
 signing key.
 
+Full workflow and production checklist: [docs/VENDOR_LICENSING.md](../docs/VENDOR_LICENSING.md)
+
 ## Setup (one-time)
 
 1. Run the tool:
@@ -17,7 +19,7 @@ signing key.
    avoid it.
 3. Copy the public key PEM shown in the output panel into
    `src/licensing/validator.py`, replacing the placeholder
-   `EMBEDDED_PUBLIC_KEY_PEM` value.
+   `EMBEDDED_PUBLIC_KEY_PEM` value (or use **Show Public Key for Customer App** later).
 4. Rebuild/re-package the customer application with the real public key
    embedded.
 
@@ -25,13 +27,33 @@ From then on, each time you open the Admin tool the signing key loads automatica
 `%USERPROFILE%\.tilevision_ai_vendor\vendor_private_key.pem`. Use **Import Key File**
 only if you need to copy a key from elsewhere into that folder.
 
+The tool also writes `vendor_public_key.pem` beside the private key so the customer app
+can verify keys on the same PC during development.
+
 ## Issuing a license
 
-1. Get the customer's **Machine ID** (Hardware Fingerprint) — they can copy
-   it from the Activation screen in their copy of the app.
-2. Fill in Customer Name, paste their Machine ID, pick a License Type.
+1. Get the customer's **Machine ID** (Hardware Fingerprint) — they copy it from the
+   Activation screen in their copy of the app.
+2. Fill in Customer Name, paste their Machine ID, pick a License Type (trial or full).
 3. Click **Generate License Key**, then **Copy to Clipboard**.
 4. Send the key to the customer; they paste it into their Activation screen.
+
+## Customers & Licenses tab
+
+| Filter | Use |
+|--------|-----|
+| **Current (1 per PC)** | Default — one active row per Machine ID |
+| **All history** | Every key ever issued |
+| **Trial (active)** | Active trials only |
+| **Suspended** | Cancelled keys |
+| **Old key** | Replaced by renewal |
+
+**Actions:**
+
+- **Renew / Extend Selected** — generates a new key; old row becomes **Old key**
+- **Cancel Selected** — marks **Suspended**; blocks new keys for that Machine ID
+- **Allow Re-issue** — clears the block after cancellation so you can issue a new key
+- **Export CSV** / **Export Revocation JSON** — accounting and app updates
 
 ## What this tool can and can't do (offline licensing limitations)
 
@@ -41,10 +63,10 @@ cloud" requirement), there's no remote kill-switch. Concretely:
 | Spec item | How it actually works here |
 |---|---|
 | Generate License Keys | ✅ As above. |
-| Extend License / Change Expiry | Generate a **new** key for the same customer + Machine ID with a later expiry. They re-activate with it, which overwrites the old one in their local database. |
+| Extend License / Change Expiry | **Renew / Extend** — new key; old becomes **Old key**. |
 | Generate Lifetime License | ✅ Select "Lifetime" — uses a far-future sentinel expiry date. |
-| Deactivate License | ⚠️ Not truly possible for an already-offline-activated install without a check-in mechanism (which would contradict "no internet dependency"). The practical mitigation is to stop issuing new keys for a known Machine ID and keep your own log of issued keys. |
-| Reset Hardware Binding | Generate a new key using the customer's **new** Machine ID. Their old key naturally won't validate on the new machine — nothing needs to be revoked on the old one for this to work. |
+| Deactivate License | ⚠️ **Cancel Selected** + revocation list in next app update. Already-activated offline installs keep working until expiry or update. |
+| Reset Hardware Binding | Generate a new key using the customer's **new** Machine ID. |
 
 ## Security notes
 
@@ -54,3 +76,4 @@ cloud" requirement), there's no remote kill-switch. Concretely:
   keys outright. It exists purely for your own internal testing.
 - Keep your private key file offline. Anyone who has it can mint valid
   licenses for any customer.
+- Automatic backup zip is saved to OneDrive or Documents — see main docs.

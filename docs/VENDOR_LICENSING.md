@@ -58,11 +58,25 @@ a zip backup is saved under `%USERPROFILE%\OneDrive\TileVision-Vendor-Backup\`
 (or `Documents\TileVision-Vendor-Backup\` if OneDrive is not available). If you
 use OneDrive/Google Drive sync on that folder, your key survives PC loss.
 
-Use the **License Registry** tab to:
+Use the **Customers & Licenses** tab to:
 
-- See all customers (active / cancelled)
+- Filter by **Current (1 per PC)** — default view; one active row per Machine ID
+- Filter **All history** to see every key ever issued (active, trial, suspended, old key)
+- **Renew / Extend** a license (old key becomes **Old key**, new row is active)
+- **Cancel Selected** (status **Suspended**, red) — blocks new keys until **Allow Re-issue**
+- **Allow Re-issue** — clear the block on a Machine ID after cancellation so you can issue a new key
 - Export CSV for accounting
-- **Cancel** a license (marks it cancelled in your records)
+
+**Status colors:**
+
+| Status | Meaning |
+|--------|---------|
+| **Active** (green) | Current full license — send this key |
+| **Trial** (yellow) | Active trial |
+| **Suspended** (red) | Cancelled — do not send |
+| **Old key** (gray) | Replaced when you renewed — history only |
+
+**Signing key sync:** the tool auto-writes `vendor_public_key.pem` next to your private key. For same-PC testing, the customer app uses that file automatically. For production installers, click **Show Public Key for Customer App** and embed it in `src/licensing/validator.py`.
 
 ---
 
@@ -101,6 +115,8 @@ The tile catalogue database (`tiles.db`) is **encrypted when the app is closed**
 
 While the app is running, a decrypted working copy exists (required for SQLite). After exit, only `tiles.db.enc` remains.
 
+Export catalogue **company profiles** (Settings → Export Profiles) are also stored in this database, scoped to the licensed customer name on that PC.
+
 ---
 
 ## First-time customer installation (simplified wizard)
@@ -120,8 +136,36 @@ pip install -r requirements.txt
 
 ## Production checklist (before selling)
 
-1. Generate a **new** keypair in the admin tool (do not use `dev_tools/dev_private_key.pem`).
-2. Embed the **public** key in `src/licensing/validator.py`.
-3. Store the **private** key securely offline.
-4. Ensure `TILEVISION_DEV_MODE` is **not** set in production builds.
-5. Build the customer installer without `admin_tool/` or any `.pem` private keys.
+Complete every step and test on a clean PC before shipping to customers.
+
+### Vendor setup (one time)
+
+1. Run `python admin_tool/main.py` → **Create New Keypair** (do **not** ship `dev_tools/dev_private_key.pem`).
+2. Copy the **public** key into `src/licensing/validator.py` → `EMBEDDED_PUBLIC_KEY_PEM` (or use **Show Public Key for Customer App**).
+3. Store `vendor_private_key.pem` offline (encrypted USB / password manager). Enable OneDrive backup folder if desired.
+4. Confirm `vendor_public_key.pem` is written beside the private key (auto-sync for local testing).
+
+### Build the customer app
+
+5. Ensure `TILEVISION_DEV_MODE` is **not** set in production builds (wildcard `*` Machine ID keys are rejected).
+6. Build the installer **without** `admin_tool/`, `dev_tools/`, or any `.pem` private key files.
+7. Embed the matching **public** key in the shipped app (step 2).
+
+### Test on a clean customer PC
+
+8. Install the customer build → activation screen appears.
+9. Copy Machine ID → generate a **trial** key in the admin tool → paste in customer app → app opens.
+10. Generate a **full license** key for the same Machine ID → customer re-activates → status bar shows license type with badge icon.
+11. Settings → Export Profiles → save company details → Search → Export Catalogue PDF.
+12. Cancel a test license in the admin tool → confirm new keys are blocked → **Allow Re-issue** → issue replacement key.
+
+### Revocation (when refunding)
+
+13. Cancel the license in **Customers & Licenses**.
+14. Export revocation JSON / copy Python snippet → add IDs to `EMBEDDED_REVOKED_LICENSE_IDS` before the next release.
+15. Ship an update so revoked keys fail on startup.
+
+### Ongoing
+
+16. Use **Current (1 per PC)** filter for day-to-day customer list; **All history** for audit.
+17. Keep private key backup in `%USERPROFILE%\OneDrive\TileVision-Vendor-Backup\` (or Documents fallback).
