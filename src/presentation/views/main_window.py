@@ -23,6 +23,7 @@ from typing import Callable, List, Optional
 
 from src.ai.feature_versions import FeatureVersionStatus
 from src.ai.gpu_info import GpuRuntimeInfo
+from src.utils.platform_info import default_ui_font_family
 
 from PySide6.QtCore import Qt, Slot, QSize
 from PySide6.QtGui import QFont, QIcon, QAction, QCloseEvent, QPixmap
@@ -855,7 +856,7 @@ class MainWindow(QMainWindow):
             /* ── General QLabel ──────────────────────────────────────────── */
             QLabel {{
                 color: {p['text_primary']};
-                font-family: "Segoe UI", "Inter", sans-serif;
+                font-family: "{default_ui_font_family()}", "Inter", sans-serif;
                 font-size: 12px;
             }}
 

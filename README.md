@@ -71,13 +71,11 @@ See [docs/VENDOR_LICENSING.md](docs/VENDOR_LICENSING.md) for the full workflow: 
 
 | Platform | Status |
 |---|---|
-| **Windows 10/11** | Production target — installer, GPU (CUDA), full QA |
-| **macOS** | Run from source; Apple Silicon uses MPS GPU; licensing works |
-| **Linux** | Run from source; NVIDIA CUDA supported; licensing works |
+| **Windows 10/11** | Production — `TileVisionAI-Setup-*.exe` installer |
+| **macOS** | Production — `TileVisionAI.app` / `.dmg` (build on Mac or GitHub Actions) |
+| **Linux** | Source + CI build (optional) |
 
-See [docs/CROSS_PLATFORM.md](docs/CROSS_PLATFORM.md) for per-OS setup, Qt dependencies, and GPU install scripts.
-
-**Release builds:** tag `v*` pushes trigger [GitHub Actions builds](.github/workflows/build.yml) for Windows, macOS, and Linux artifacts.
+See [docs/CROSS_PLATFORM.md](docs/CROSS_PLATFORM.md) for setup and [docs/CUSTOMER_RELEASE.md](docs/CUSTOMER_RELEASE.md) for your Mac + Windows release workflow.
 
 ---
 

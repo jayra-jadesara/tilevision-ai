@@ -191,15 +191,21 @@ class DINOv2Embedder:
                 return self._forward_batch(images)
             except RuntimeError as exc:
                 message = str(exc).lower()
-                is_oom = "out of memory" in message or "cuda error" in message
-                if not is_oom or self._device.type != "cuda" or len(images) <= 1:
+                is_oom = (
+                    "out of memory" in message
+                    or "cuda error" in message
+                    or "mps" in message
+                )
+                if not is_oom or self._device.type not in ("cuda", "mps") or len(images) <= 1:
                     raise
 
                 logger.warning(
-                    "CUDA OOM on batch of %d views — splitting and retrying.",
+                    "%s OOM on batch of %d views — splitting and retrying.",
+                    self._device.type.upper(),
                     len(images),
                 )
-                torch.cuda.empty_cache()
+                if self._device.type == "cuda":
+                    torch.cuda.empty_cache()
                 mid = len(images) // 2
                 left = self._extract_batch(images[:mid])
                 right = self._extract_batch(images[mid:])

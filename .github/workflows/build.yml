@@ -43,6 +43,8 @@ jobs:
         run: python scripts/download_dinov2_model.py
 
       - name: Build with PyInstaller
+        env:
+          TILEVISION_OFFLINE_MODEL: "1"
         run: pyinstaller packaging/tilevision.spec --clean --noconfirm
 
       - name: Install Inno Setup
@@ -93,18 +95,22 @@ jobs:
         run: python scripts/download_dinov2_model.py
 
       - name: Build with PyInstaller
+        env:
+          TILEVISION_OFFLINE_MODEL: "1"
         run: pyinstaller packaging/tilevision_mac.spec --clean --noconfirm
 
-      - name: Create macOS zip
+      - name: Create macOS DMG
         run: |
-          cd dist
-          ditto -c -k --sequesterRsrc --keepParent TileVisionAI.app ../TileVisionAI-macOS.zip
+          hdiutil create -volname "TileVision AI" -srcfolder dist/TileVisionAI.app \
+            -ov -format UDZO dist/TileVisionAI-macOS.dmg
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
           name: tilevision-macos
-          path: TileVisionAI-macOS.zip
+          path: |
+            dist/TileVisionAI-macOS.dmg
+            dist/TileVisionAI.app
           retention-days: 14
 
   build-linux:
@@ -145,6 +151,8 @@ jobs:
         run: python scripts/download_dinov2_model.py
 
       - name: Build with PyInstaller
+        env:
+          TILEVISION_OFFLINE_MODEL: "1"
         run: pyinstaller packaging/tilevision_linux.spec --clean --noconfirm
 
       - name: Create Linux tarball

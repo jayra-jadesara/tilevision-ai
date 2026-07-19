@@ -164,7 +164,7 @@ python main.py
 
 | Feature | Windows | macOS | Linux |
 |---------|---------|-------|-------|
-| Packaged installer | Yes | No (source) | No (source) |
+| Packaged installer | Yes (.exe) | Yes (.app / .dmg) | Optional |
 | Machine ID / licensing | Yes | Yes | Yes |
 | NVIDIA CUDA | Yes | No | Yes |
 | Apple MPS (Metal) | No | Yes (Apple Silicon) | No |

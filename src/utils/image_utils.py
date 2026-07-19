@@ -18,7 +18,10 @@ logger = logging.getLogger("tilevision.image_utils")
 # Shared by both the folder-scan indexer and the real-time folder watcher
 # (monitor_folder.py) so the two can never drift out of sync on which
 # formats are supported.
-SUPPORTED_IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp"})
+from src.utils.image_formats import register_optional_image_formats, supported_image_extensions
+
+register_optional_image_formats()
+SUPPORTED_IMAGE_EXTENSIONS = supported_image_extensions()
 
 
 def validate_image(image_path: Path) -> bool:

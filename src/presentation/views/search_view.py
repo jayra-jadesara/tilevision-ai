@@ -52,14 +52,10 @@ from src.utils.query_image_hints import confidence_message, should_suggest_crop
 
 logger = logging.getLogger("tilevision.presentation.views.search_view")
 
-# Query image formats accepted for drag-and-drop / browse. Broader than the
-# indexing pipeline's supported set on purpose — a customer's WhatsApp photo
-# or phone screenshot might arrive as HEIC/BMP/GIF, and PIL can still read
-# most of these to extract a query embedding even though we never index
-# non jpg/jpeg/png/webp files into the catalog itself.
-_QUERY_IMAGE_EXTENSIONS = {
-    ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tiff", ".tif"
-}
+from src.utils.image_formats import query_image_extensions
+
+# Query formats include HEIC on Mac when pillow-heif is installed.
+_QUERY_IMAGE_EXTENSIONS = query_image_extensions()
 
 _TABLE_COLUMNS = [
     "Thumbnail",

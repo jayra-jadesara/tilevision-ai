@@ -27,7 +27,8 @@ from PySide6.QtWidgets import (
 
 from src.config.settings import AppSettings
 from src.theme.theme_manager import get_palette
-from src.utils.brand_assets import APP_ICON_PATH, logo_pixmap
+from src.utils.brand_assets import logo_pixmap
+from src.utils.platform_info import app_icon_path
 from src.utils.dependency_check import (
     CURRENT_SETUP_VERSION,
     INSTALL_STEPS,
@@ -60,8 +61,8 @@ class SetupWizardDialog(QDialog):
         self.setWindowTitle("TileVision AI — First-Time Setup")
         self.setModal(True)
         self.setMinimumSize(640, 480)
-        if APP_ICON_PATH.exists():
-            self.setWindowIcon(QIcon(str(APP_ICON_PATH)))
+        if (icon := app_icon_path()) is not None:
+            self.setWindowIcon(QIcon(str(icon)))
         self._build_ui()
         self._apply_theme()
         self._refresh_step()
@@ -304,6 +305,12 @@ class SetupWizardDialog(QDialog):
 
 def should_show_setup_wizard(settings: AppSettings) -> bool:
     """Return True when the wizard must run before the main application."""
+    import sys
+
+    # Packaged builds bundle all dependencies — never run pip from the installer.
+    if getattr(sys, "frozen", False):
+        return False
+
     if not settings.setup_wizard_completed:
         return True
     if settings.setup_wizard_version < CURRENT_SETUP_VERSION:
