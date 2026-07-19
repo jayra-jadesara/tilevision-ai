@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QLineEdit,
+    QCheckBox,
 )
 
 from src.ai.feature_versions import CURRENT_FEATURE_VERSION, FeatureVersionStatus
@@ -69,6 +70,7 @@ class SettingsView(QWidget):
         indexed_folders_provider: Optional[Callable[[], List[str]]] = None,
         on_catalog_changed: Optional[Callable[[], None]] = None,
         on_watch_folders_changed: Optional[Callable[[], None]] = None,
+        on_check_updates: Optional[Callable[[], None]] = None,
         feature_version_provider: Optional[Callable[[], FeatureVersionStatus]] = None,
         gpu_info_provider: Optional[Callable[[], GpuRuntimeInfo]] = None,
         theme: str = "dark",
@@ -106,6 +108,7 @@ class SettingsView(QWidget):
         self._indexed_folders_provider = indexed_folders_provider
         self._on_catalog_changed = on_catalog_changed
         self._on_watch_folders_changed = on_watch_folders_changed
+        self._on_check_updates = on_check_updates
         self._feature_version_provider = feature_version_provider
         self._gpu_info_provider = gpu_info_provider
         self._rebuild_worker: Optional[RebuildIndexWorker] = None
@@ -449,9 +452,29 @@ class SettingsView(QWidget):
         grid.addWidget(self._export_logs_button, 0, 1)
         grid.addWidget(self._rebuild_button, 1, 0)
         grid.addWidget(self._clear_cache_button, 1, 1)
+
+        self._check_updates_button = QPushButton("Check for Updates")
+        self._check_updates_button.setObjectName("SecondaryButton")
+        self._check_updates_button.setMinimumHeight(36)
+        self._check_updates_button.clicked.connect(self._on_check_updates_clicked)
+        self._check_updates_button.setEnabled(self._on_check_updates is not None)
+        grid.addWidget(self._check_updates_button, 2, 0, 1, 2)
+
+        self._auto_update_checkbox = QCheckBox("Notify me when a new version is available")
+        self._auto_update_checkbox.setChecked(self._settings.check_for_updates)
+        self._auto_update_checkbox.toggled.connect(self._on_auto_update_toggled)
+        layout.addWidget(self._auto_update_checkbox)
+
         layout.addLayout(grid)
 
         return box
+
+    def _on_check_updates_clicked(self) -> None:
+        if self._on_check_updates is not None:
+            self._on_check_updates()
+
+    def _on_auto_update_toggled(self, enabled: bool) -> None:
+        self._settings.check_for_updates = enabled
 
     # ── Handlers: Watched Folders ────────────────────────────────────────
 

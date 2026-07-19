@@ -59,6 +59,11 @@ class AppSettings:
             "setup_wizard_completed": False,
             "setup_wizard_version": 0,
             "machine_id_welcome_shown": False,
+            "check_for_updates": True,
+            "update_manifest_url": "",
+            "skipped_update_version": "",
+            "last_update_check_at": "",
+            "last_seen_update_version": "",
         }
         
         self._settings: Dict[str, Any] = self._defaults.copy()
@@ -304,4 +309,49 @@ class AppSettings:
     @machine_id_welcome_shown.setter
     def machine_id_welcome_shown(self, value: bool) -> None:
         self._settings["machine_id_welcome_shown"] = bool(value)
+        self.save()
+
+    @property
+    def check_for_updates(self) -> bool:
+        return bool(self._settings.get("check_for_updates", True))
+
+    @check_for_updates.setter
+    def check_for_updates(self, value: bool) -> None:
+        self._settings["check_for_updates"] = bool(value)
+        self.save()
+
+    @property
+    def update_manifest_url(self) -> str:
+        return str(self._settings.get("update_manifest_url", ""))
+
+    @update_manifest_url.setter
+    def update_manifest_url(self, value: str) -> None:
+        self._settings["update_manifest_url"] = str(value).strip()
+        self.save()
+
+    @property
+    def skipped_update_version(self) -> str:
+        return str(self._settings.get("skipped_update_version", ""))
+
+    @skipped_update_version.setter
+    def skipped_update_version(self, value: str) -> None:
+        self._settings["skipped_update_version"] = str(value).strip()
+        self.save()
+
+    @property
+    def last_update_check_at(self) -> str:
+        return str(self._settings.get("last_update_check_at", ""))
+
+    @last_update_check_at.setter
+    def last_update_check_at(self, value: str) -> None:
+        self._settings["last_update_check_at"] = str(value)
+        self.save()
+
+    @property
+    def last_seen_update_version(self) -> str:
+        return str(self._settings.get("last_seen_update_version", ""))
+
+    @last_seen_update_version.setter
+    def last_seen_update_version(self, value: str) -> None:
+        self._settings["last_seen_update_version"] = str(value)
         self.save()

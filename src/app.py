@@ -25,7 +25,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtCore import QTimer
 
-from src.utils.platform_info import app_icon_path, default_ui_font_family
+from src.version import APP_VERSION
 from src.utils.logger import setup_logger
 from src.config.settings import AppSettings
 from src.data.db_context import DatabaseContext
@@ -48,7 +48,7 @@ from src.presentation.viewmodels.indexing_viewmodel import IndexingViewModel
 from src.presentation.viewmodels.search_viewmodel import SearchViewModel
 from src.presentation.views.main_window import MainWindow, DashboardDataProviders
 from src.presentation.views.license_view import LicenseView
-from src.presentation.auto_index_notifier import AutoIndexNotifier
+from src.presentation.update_controller import UpdateController
 from src.core.use_cases.monitor_folder import AutoIndexAction
 
 _app_logger = logging.getLogger("tilevision.app")
@@ -115,7 +115,7 @@ def build_application() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("TileVision AI")
     app.setOrganizationName("JD Software")
-    app.setApplicationVersion("1.0.0")
+    app.setApplicationVersion(APP_VERSION)
 
     icon_path = app_icon_path()
     if icon_path is not None:
@@ -380,6 +380,8 @@ def build_application() -> int:
         recent_searches=lambda: search_history_repository.get_recent_searches(limit=8),
     )
 
+    update_controller = UpdateController(settings, theme=settings.theme)
+
     main_window = MainWindow(
         indexing_viewmodel=indexing_viewmodel,
         search_viewmodel=search_viewmodel,
@@ -395,9 +397,11 @@ def build_application() -> int:
         feature_version_provider=image_repository.get_feature_version_status,
         gpu_info_provider=lambda: embedder.runtime_info,
         on_watch_folders_changed=_restart_folder_monitor,
+        on_check_updates=lambda: update_controller.check_now(main_window),
     )
     auto_index_notifier.catalog_updated.connect(main_window.handle_auto_index_event)
     main_window.show()
+    update_controller.schedule_startup_check(main_window)
 
     logger.info("TileVision AI is running.")
 

@@ -118,7 +118,43 @@ Before each release:
 
 ---
 
-## When to add code signing (recommended for production)
+## Automatic update notifications
+
+Packaged apps (Windows `.exe` installer, Mac `.app`) check for updates on startup
+when the PC has internet — **once per day**. Customers see a dialog with a
+**Download Update** button that opens the correct installer for their platform.
+
+### How it works
+
+1. You push a version tag → GitHub Actions builds Windows + Mac installers
+2. CI publishes a **GitHub Release** with `update_manifest.json`
+3. Customer app reads the manifest and compares versions
+4. Customer clicks **Download Update** → browser opens the Windows `.exe` or Mac `.dmg`
+5. They run the installer — license and tile catalogue stay on the PC
+
+### Release a version with update links
+
+```bash
+# 1. Bump APP_VERSION in src/version.py and packaging/tilevision_setup.iss
+# 2. Commit and tag:
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+After the **Build** workflow finishes, the release includes:
+
+| File | Used by |
+|------|---------|
+| `TileVisionAI-Setup-1.0.1.exe` | Windows update link |
+| `TileVisionAI-macOS-1.0.1.dmg` | Mac update link |
+| `update_manifest.json` | In-app update checker |
+
+Customers can also use **Settings → Check for Updates** anytime.
+
+**Note:** This notifies and downloads — it does not silently auto-install (safer for
+showroom PCs). Full silent auto-update would require code signing on both platforms.
+
+---
 
 | Platform | Cost | Benefit |
 |----------|------|---------|

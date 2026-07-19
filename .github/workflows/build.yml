@@ -113,6 +113,62 @@ jobs:
             dist/TileVisionAI.app
           retention-days: 14
 
+  release:
+    name: Publish GitHub Release + update manifest
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tilevision-windows
+          path: release/windows
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tilevision-macos
+          path: release/macos
+
+      - name: Prepare release files
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          WIN_EXE=$(find release/windows -name "*.exe" | head -n 1)
+          MAC_DMG=$(find release/macos -name "*.dmg" | head -n 1)
+          cp "$WIN_EXE" "TileVisionAI-Setup-${VERSION}.exe"
+          cp "$MAC_DMG" "TileVisionAI-macOS-${VERSION}.dmg"
+          ls -lh TileVisionAI-*
+
+      - name: Generate update manifest
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          python scripts/generate_update_manifest.py \
+            "$VERSION" \
+            "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/TileVisionAI-Setup-${VERSION}.exe" \
+            "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/TileVisionAI-macOS-${VERSION}.dmg" \
+            "TileVision AI ${GITHUB_REF_NAME} — see release notes on GitHub." \
+            > update_manifest.json
+          cat update_manifest.json
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: TileVision AI ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            TileVisionAI-Setup-*.exe
+            TileVisionAI-macOS-*.dmg
+            update_manifest.json
+
   build-linux:
     name: Linux (binary)
     runs-on: ubuntu-latest

@@ -24,6 +24,7 @@ from typing import Callable, List, Optional
 from src.ai.feature_versions import FeatureVersionStatus
 from src.ai.gpu_info import GpuRuntimeInfo
 from src.utils.platform_info import default_ui_font_family
+from src.version import APP_VERSION
 
 from PySide6.QtCore import Qt, Slot, QSize
 from PySide6.QtGui import QFont, QIcon, QAction, QCloseEvent, QPixmap
@@ -136,6 +137,7 @@ class MainWindow(QMainWindow):
         feature_version_provider: Optional[Callable[[], FeatureVersionStatus]] = None,
         gpu_info_provider: Optional[Callable[[], GpuRuntimeInfo]] = None,
         on_watch_folders_changed: Optional[Callable[[], None]] = None,
+        on_check_updates: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         """
@@ -186,6 +188,7 @@ class MainWindow(QMainWindow):
         self._feature_version_provider = feature_version_provider
         self._gpu_info_provider = gpu_info_provider
         self._on_watch_folders_changed = on_watch_folders_changed
+        self._on_check_updates = on_check_updates
         self._current_theme = getattr(self._settings, "theme", "dark") if self._settings is not None else "dark"
 
         self.setWindowTitle("TileVision AI — Visual Tile Search")
@@ -315,6 +318,7 @@ class MainWindow(QMainWindow):
                 on_watch_folders_changed=self._on_watch_folders_changed,
                 feature_version_provider=self._feature_version_provider,
                 gpu_info_provider=self._gpu_info_provider,
+                on_check_updates=self._on_check_updates,
                 theme=self._current_theme,
             )
             self._content_stack.addWidget(self._settings_view)  # index 3
@@ -409,10 +413,10 @@ class MainWindow(QMainWindow):
         # sidebar is too narrow to show the full credit line as text; the
         # complete "Made by JD Software" + contact number also appears in
         # the Help dialog's footer for anyone who wants it front-and-center)
-        version_label = QLabel("v1.0.0")
+        version_label = QLabel(f"v{APP_VERSION}")
         version_label.setObjectName("VersionLabel")
         version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        version_label.setToolTip("TileVision AI v1.0.0\nMade by JD Software\nContact: 88662 77767")
+        version_label.setToolTip(f"TileVision AI v{APP_VERSION}\nMade by JD Software\nContact: 88662 77767")
         version_label.setCursor(Qt.CursorShape.PointingHandCursor)
         version_label.mousePressEvent = lambda event: self._on_help_clicked()
         layout.addWidget(version_label)
