@@ -77,6 +77,8 @@ See [docs/VENDOR_LICENSING.md](docs/VENDOR_LICENSING.md) for the full workflow: 
 
 See [docs/CROSS_PLATFORM.md](docs/CROSS_PLATFORM.md) for per-OS setup, Qt dependencies, and GPU install scripts.
 
+**Release builds:** tag `v*` pushes trigger [GitHub Actions builds](.github/workflows/build.yml) for Windows, macOS, and Linux artifacts.
+
 ---
 
 ## Project Structure

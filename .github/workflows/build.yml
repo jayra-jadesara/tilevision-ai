@@ -1,0 +1,159 @@
+name: Build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows:
+    name: Windows (PyInstaller + Inno Setup)
+    runs-on: windows-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Cache DINOv2 model weights
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: model_weights/dinov2-large
+          key: dinov2-large-${{ hashFiles('scripts/download_dinov2_model.py') }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Download DINOv2 weights
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: python scripts/download_dinov2_model.py
+
+      - name: Build with PyInstaller
+        run: pyinstaller packaging/tilevision.spec --clean --noconfirm
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build Windows installer
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging/tilevision_setup.iss
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tilevision-windows
+          path: |
+            dist/TileVisionAI/
+            dist/installer/*.exe
+          retention-days: 14
+
+  build-macos:
+    name: macOS (.app)
+    runs-on: macos-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Cache DINOv2 model weights
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: model_weights/dinov2-large
+          key: dinov2-large-${{ hashFiles('scripts/download_dinov2_model.py') }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Download DINOv2 weights
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: python scripts/download_dinov2_model.py
+
+      - name: Build with PyInstaller
+        run: pyinstaller packaging/tilevision_mac.spec --clean --noconfirm
+
+      - name: Create macOS zip
+        run: |
+          cd dist
+          ditto -c -k --sequesterRsrc --keepParent TileVisionAI.app ../TileVisionAI-macOS.zip
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tilevision-macos
+          path: TileVisionAI-macOS.zip
+          retention-days: 14
+
+  build-linux:
+    name: Linux (binary)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install Linux Qt dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxcb-cursor0 libxcb-xinerama0 libxkbcommon-x11-0 libegl1 libglib2.0-0
+
+      - name: Cache DINOv2 model weights
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: model_weights/dinov2-large
+          key: dinov2-large-${{ hashFiles('scripts/download_dinov2_model.py') }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Download DINOv2 weights
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: python scripts/download_dinov2_model.py
+
+      - name: Build with PyInstaller
+        run: pyinstaller packaging/tilevision_linux.spec --clean --noconfirm
+
+      - name: Create Linux tarball
+        run: |
+          tar -czf TileVisionAI-Linux.tar.gz -C dist TileVisionAI
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tilevision-linux
+          path: TileVisionAI-Linux.tar.gz
+          retention-days: 14

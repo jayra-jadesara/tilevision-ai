@@ -94,15 +94,55 @@ On a clean VM **with no internet**, confirm:
 
 ---
 
-## 5. Installers (optional)
+## 5. Installers
+
+### Windows — Inno Setup (automated)
+
+Install [Inno Setup 6](https://jrsoftware.org/isinfo.php), then run the full release script:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build_windows.ps1
+```
+
+Output:
+- App folder: `dist/TileVisionAI/`
+- Installer: `dist/installer/TileVisionAI-Setup-1.0.0.exe`
+
+Or build the installer manually after PyInstaller:
+
+```powershell
+iscc packaging\tilevision_setup.iss
+```
+
+The installer:
+- Installs to `Program Files\TileVision AI`
+- Creates Start Menu shortcut (optional desktop shortcut)
+- Creates `%PROGRAMDATA%\TileVisionAI\.lic\` for encrypted license storage
+
+### macOS / Linux
 
 | Platform | Tool |
 |----------|------|
-| Windows | [Inno Setup](https://jrsoftware.org/isinfo.php) or NSIS |
 | macOS | `hdiutil` DMG + notarization (Apple Developer account) |
 | Linux | `.deb` / AppImage via `fpm` or `appimagetool` |
 
-Not automated in this repo yet — validate the raw PyInstaller output first.
+Not automated beyond PyInstaller — validate the raw build first.
+
+### GitHub Actions (all platforms)
+
+Push a version tag to build release artifacts on GitHub:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Or trigger manually: **Actions → Build → Run workflow**.
+
+Artifacts (14-day retention):
+- `tilevision-windows` — app folder + `TileVisionAI-Setup-*.exe`
+- `tilevision-macos` — `TileVisionAI-macOS.zip` (`.app` bundle)
+- `tilevision-linux` — `TileVisionAI-Linux.tar.gz`
 
 ---
 

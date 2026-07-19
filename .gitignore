@@ -77,6 +77,8 @@ dev_tools/test_license.txt
 
 # Bundled AI model weights (download with scripts/download_dinov2_model.py)
 model_weights/dinov2-large/
+
+# VS Code / IDEs
 .vscode/
 .idea/
 *.suo
