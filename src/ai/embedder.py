@@ -57,7 +57,7 @@ class DINOv2Embedder:
 
     @property
     def using_gpu(self) -> bool:
-        return self._device.type == "cuda"
+        return self._device.type in ("cuda", "mps")
 
     @property
     def runtime_info(self):
@@ -81,6 +81,8 @@ class DINOv2Embedder:
                 self._runtime.device_name,
                 self._runtime.vram_gb or 0.0,
             )
+        elif self._device.type == "mps":
+            logger.info("Apple GPU (MPS): %s", self._runtime.device_name)
         else:
             thread_count = min(8, os.cpu_count() or 4)
             torch.set_num_threads(thread_count)
@@ -99,6 +101,9 @@ class DINOv2Embedder:
         with torch.inference_mode():
             if self._device.type == "cuda":
                 with torch.autocast(device_type="cuda"):
+                    outputs = self._model(**inputs)
+            elif self._device.type == "mps":
+                with torch.autocast(device_type="mps"):
                     outputs = self._model(**inputs)
             else:
                 outputs = self._model(**inputs)

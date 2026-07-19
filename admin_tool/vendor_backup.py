@@ -1,8 +1,9 @@
-"""Automatic vendor data backup to cloud-synced folders (OneDrive / Documents)."""
+"""Automatic vendor data backup to cloud-synced folders."""
 
 from __future__ import annotations
 
 import json
+import sys
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,13 +16,25 @@ _MAX_BACKUPS = 10
 
 
 def cloud_backup_roots() -> list[Path]:
-    """Folders that are often synced to the cloud on Windows."""
+    """Folders that are often synced to the cloud across operating systems."""
     home = Path.home()
     candidates = [
         home / "OneDrive",
         home / "OneDrive - Personal",
         home / "Documents",
+        home / "Dropbox",
+        home
+        / "Library"
+        / "Mobile Documents"
+        / "com~apple~CloudDocs",
     ]
+    if sys.platform.startswith("linux"):
+        candidates.extend(
+            [
+                home / "Nextcloud",
+                home / "ownCloud",
+            ]
+        )
     return [path for path in candidates if path.is_dir()]
 
 
@@ -93,7 +106,7 @@ def run_vendor_backup() -> tuple[bool, str]:
     if backup_dir is None:
         return (
             False,
-            "Could not find OneDrive or Documents folder for automatic backup.",
+            "Could not find a cloud-synced folder (OneDrive, iCloud, Dropbox, or Documents).",
         )
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")

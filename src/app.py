@@ -25,7 +25,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtCore import QTimer
 
-from src.utils.brand_assets import APP_ICON_PATH
+from src.utils.platform_info import app_icon_path, default_ui_font_family
 from src.utils.logger import setup_logger
 from src.config.settings import AppSettings
 from src.data.db_context import DatabaseContext
@@ -117,11 +117,11 @@ def build_application() -> int:
     app.setOrganizationName("JD Software")
     app.setApplicationVersion("1.0.0")
 
-    if APP_ICON_PATH.exists():
-        app.setWindowIcon(QIcon(str(APP_ICON_PATH)))
+    icon_path = app_icon_path()
+    if icon_path is not None:
+        app.setWindowIcon(QIcon(str(icon_path)))
 
-    # Set modern default font
-    default_font = QFont("Segoe UI", 10)
+    default_font = QFont(default_ui_font_family(), 10)
     app.setFont(default_font)
     app.setStyleSheet(get_app_stylesheet(settings.theme))
 

@@ -20,6 +20,7 @@ IMPORTANT: Only use in development. Never ship or deploy this script.
 import sys
 import json
 import base64
+import os
 from pathlib import Path
 from datetime import datetime
 
@@ -78,8 +79,15 @@ def main() -> None:
         print(f"   HW Hash  : * (wildcard — any machine)")
         print(f"\n   License Key:\n   {WILDCARD_LICENSE_KEY}")
         print("\n" + "=" * 60)
-        print("You can now launch: python main.py")
-        print("The activation dialog will be skipped.")
+        print("Before launching, enable developer mode on all platforms:")
+        print()
+        if os.name == "nt":
+            print("  set TILEVISION_DEV_MODE=1")
+        else:
+            print("  export TILEVISION_DEV_MODE=1")
+        print()
+        print("Then launch: python main.py")
+        print("The activation dialog will be skipped in developer mode.")
     else:
         print("\n❌ Failed to save development license to database.")
         sys.exit(1)

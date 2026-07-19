@@ -39,9 +39,14 @@ Search combines **DINOv2-large** semantic embeddings with handcrafted descriptor
 pip install -r requirements.txt
 ```
 
-### 2. Create a development license (bypasses activation dialog)
+**Linux:** install Qt/X11 libraries first — see [docs/CROSS_PLATFORM.md](docs/CROSS_PLATFORM.md).
+
+### 2. Enable developer mode and create a dev license
 
 ```bash
+export TILEVISION_DEV_MODE=1          # macOS / Linux
+# set TILEVISION_DEV_MODE=1           # Windows CMD
+
 python dev_tools/create_dev_license.py
 ```
 
@@ -51,11 +56,11 @@ python dev_tools/create_dev_license.py
 python main.py
 ```
 
-Data is stored under `%USERPROFILE%\.tilevision_ai\` (database, FAISS index, thumbnails, config).
+Data is stored under `~/.tilevision_ai/` (Windows: `%USERPROFILE%\.tilevision_ai\`).
 
 ### Vendor license manager (you only — never ship to customers)
 
-```powershell
+```bash
 python admin_tool/main.py
 ```
 
@@ -66,10 +71,10 @@ See [docs/VENDOR_LICENSING.md](docs/VENDOR_LICENSING.md) for the full workflow: 
 | Platform | Status |
 |---|---|
 | **Windows 10/11** | Production target — installer, GPU (CUDA), full QA |
-| **macOS** | Licensing and encrypted storage work; run from source for dev/evaluation |
-| **Linux** | Licensing and encrypted storage work; run from source for dev/evaluation |
+| **macOS** | Run from source; Apple Silicon uses MPS GPU; licensing works |
+| **Linux** | Run from source; NVIDIA CUDA supported; licensing works |
 
-Machine ID (hardware fingerprint) is generated per OS using stable local identifiers. Existing Windows license keys are unchanged — the Windows fingerprint format was preserved.
+See [docs/CROSS_PLATFORM.md](docs/CROSS_PLATFORM.md) for per-OS setup, Qt dependencies, and GPU install scripts.
 
 ---
 

@@ -8,11 +8,17 @@ installs one step at a time so users without IT support can self-serve.
 from __future__ import annotations
 
 import importlib
-import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
 from typing import List, Sequence
+
+from src.utils.platform_info import (
+    cuda_pytorch_install_command,
+    detect_display_adapters,
+    has_nvidia_gpu,
+    is_macos,
+)
 
 REQUIRED_STEP_COUNT = 3
 
@@ -92,10 +98,10 @@ INSTALL_STEPS: List[InstallStep] = [
     ),
     InstallStep(
         step_id="gpu_optional",
-        title="Optional — NVIDIA GPU Acceleration",
+        title="Optional — GPU Acceleration",
         description=(
             "Install CUDA PyTorch when an NVIDIA GPU is present. "
-            "AMD/Intel systems stay on CPU automatically."
+            "Apple Silicon uses MPS automatically; AMD/Intel systems stay on CPU."
         ),
         packages=(
             PackageSpec("__cuda_torch__", "", "CUDA PyTorch (NVIDIA only)", builtin=True),
@@ -132,36 +138,16 @@ def _package_version(import_name: str) -> str:
 
 
 def _detect_windows_graphics() -> list[str]:
-    if sys.platform != "win32":
-        return []
+    return detect_display_adapters() if sys.platform == "win32" else []
 
+
+def is_mps_torch_active() -> bool:
     try:
-        completed = subprocess.run(
-            [
-                "powershell",
-                "-NoProfile",
-                "-Command",
-                "Get-CimInstance Win32_VideoController | "
-                "Select-Object -ExpandProperty Name",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-        if completed.returncode != 0:
-            return []
-        return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+        import torch
     except Exception:
-        return []
-
-
-def has_nvidia_gpu() -> bool:
-    """Return True when an NVIDIA GPU driver appears to be available."""
-    if shutil.which("nvidia-smi"):
-        return True
-    adapters = _detect_windows_graphics()
-    return any("nvidia" in name.lower() for name in adapters)
+        return False
+    mps = getattr(torch.backends, "mps", None)
+    return bool(mps and mps.is_available())
 
 
 def is_cuda_torch_active() -> bool:
@@ -208,8 +194,24 @@ def _check_sqlite_runtime() -> PackageStatus:
 
 def _check_cuda_torch_runtime() -> PackageStatus:
     spec = PackageSpec("__cuda_torch__", "", "CUDA PyTorch (NVIDIA only)", builtin=True)
+
+    if is_macos():
+        if is_mps_torch_active():
+            return PackageStatus(
+                spec=spec,
+                installed=True,
+                version="MPS",
+                note="Apple GPU (MPS) is available with the standard PyTorch wheel.",
+            )
+        return PackageStatus(
+            spec=spec,
+            installed=True,
+            version="CPU",
+            note="Intel Mac uses CPU inference — Apple Silicon enables MPS automatically.",
+        )
+
     if not has_nvidia_gpu():
-        adapters = _detect_windows_graphics()
+        adapters = detect_display_adapters()
         names = ", ".join(adapters[:2]) if adapters else "integrated graphics"
         return PackageStatus(
             spec=spec,
@@ -241,7 +243,9 @@ def _check_cuda_torch_runtime() -> PackageStatus:
 
     version = torch.__version__
     if "+cpu" in version.lower():
-        note = "CPU-only PyTorch installed — click Install to enable NVIDIA CUDA."
+        note = (
+            f"CPU-only PyTorch installed — run: {cuda_pytorch_install_command()}"
+        )
     else:
         note = "CUDA PyTorch installed but GPU not active — check NVIDIA driver."
     return PackageStatus(spec=spec, installed=False, version=version, note=note)
@@ -339,6 +343,11 @@ def pip_install_packages(packages: Sequence[PackageSpec]) -> tuple[bool, str]:
 
 def pip_install_cuda_torch() -> tuple[bool, str]:
     """Replace CPU-only PyTorch with the CUDA wheel on NVIDIA PCs."""
+    if is_macos():
+        if is_mps_torch_active():
+            return True, "Apple GPU (MPS) is already active with the standard PyTorch wheel."
+        return True, "Intel Mac uses CPU inference. Apple Silicon enables MPS automatically."
+
     if not has_nvidia_gpu():
         return True, "No NVIDIA GPU detected — CPU mode remains active."
 

@@ -1,5 +1,7 @@
 # Vendor Licensing Guide — TileVision AI
 
+See [docs/CROSS_PLATFORM.md](CROSS_PLATFORM.md) for macOS/Linux setup from source.
+
 ## How offline licensing works (simple)
 
 1. **Customer** installs TileVision AI and opens the Activation screen.

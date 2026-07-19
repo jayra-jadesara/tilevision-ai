@@ -16,9 +16,11 @@ def test_cpu_wheel_reports_install_hint(monkeypatch):
         __version__="2.13.0+cpu",
         cuda=SimpleNamespace(is_available=lambda: False, device_count=lambda: 0),
         version=SimpleNamespace(cuda=None),
+        backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False)),
     )
     monkeypatch.setattr(gpu_info, "torch", fake_torch)
-    monkeypatch.setattr(gpu_info, "_detect_windows_graphics", lambda: [])
+    monkeypatch.setattr(gpu_info, "detect_display_adapters", lambda: [])
+    monkeypatch.setattr(gpu_info, "has_nvidia_gpu", lambda: False)
 
     info = gpu_info.detect_gpu_runtime(preference="auto")
 
@@ -36,9 +38,11 @@ def test_cuda_auto_selects_gpu(monkeypatch):
             get_device_properties=lambda _i: SimpleNamespace(total_memory=8 * 1024 ** 3),
         ),
         version=SimpleNamespace(cuda="12.4"),
+        backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False)),
     )
     monkeypatch.setattr(gpu_info, "torch", fake_torch)
-    monkeypatch.setattr(gpu_info, "_detect_windows_graphics", lambda: [])
+    monkeypatch.setattr(gpu_info, "detect_display_adapters", lambda: [])
+    monkeypatch.setattr(gpu_info, "has_nvidia_gpu", lambda: False)
 
     info = gpu_info.detect_gpu_runtime(preference="auto")
 
@@ -52,13 +56,15 @@ def test_non_nvidia_adapter_message(monkeypatch):
         __version__="2.13.0+cpu",
         cuda=SimpleNamespace(is_available=lambda: False, device_count=lambda: 0),
         version=SimpleNamespace(cuda=None),
+        backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False)),
     )
     monkeypatch.setattr(gpu_info, "torch", fake_torch)
     monkeypatch.setattr(
         gpu_info,
-        "_detect_windows_graphics",
+        "detect_display_adapters",
         lambda: ["AMD Radeon R5 M330", "Intel(R) HD Graphics 520"],
     )
+    monkeypatch.setattr(gpu_info, "has_nvidia_gpu", lambda: False)
 
     info = gpu_info.detect_gpu_runtime(preference="auto")
 
@@ -75,11 +81,32 @@ def test_forced_cpu_even_when_cuda_available(monkeypatch):
             get_device_properties=lambda _i: SimpleNamespace(total_memory=8 * 1024 ** 3),
         ),
         version=SimpleNamespace(cuda="12.4"),
+        backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False)),
     )
     monkeypatch.setattr(gpu_info, "torch", fake_torch)
-    monkeypatch.setattr(gpu_info, "_detect_windows_graphics", lambda: [])
+    monkeypatch.setattr(gpu_info, "detect_display_adapters", lambda: [])
+    monkeypatch.setattr(gpu_info, "has_nvidia_gpu", lambda: False)
 
     info = gpu_info.detect_gpu_runtime(preference="cpu")
 
     assert info.active_device == "cpu"
     assert "forced" in info.cpu_fallback_reason.lower()
+
+
+def test_mps_auto_selects_on_macos(monkeypatch):
+    fake_torch = SimpleNamespace(
+        __version__="2.5.1",
+        cuda=SimpleNamespace(is_available=lambda: False, device_count=lambda: 0),
+        version=SimpleNamespace(cuda=None),
+        backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True)),
+    )
+    monkeypatch.setattr(gpu_info, "torch", fake_torch)
+    monkeypatch.setattr(gpu_info, "_mps_available", lambda: True)
+    monkeypatch.setattr(gpu_info, "_mps_device_name", lambda: "Apple M2")
+    monkeypatch.setattr(gpu_info, "detect_display_adapters", lambda: [])
+
+    info = gpu_info.detect_gpu_runtime(preference="auto")
+
+    assert info.active_device == "mps"
+    assert info.using_gpu
+    assert "Apple GPU" in info.summary_for_ui()
