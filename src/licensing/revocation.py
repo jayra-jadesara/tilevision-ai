@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import AbstractSet, FrozenSet, Set
 
@@ -29,9 +30,22 @@ EMBEDDED_REVOKED_LICENSE_IDS: FrozenSet[str] = frozenset()
 
 def _revocation_file_paths() -> list[Path]:
     paths: list[Path] = []
-    program_data = os.environ.get("PROGRAMDATA")
-    if program_data:
-        paths.append(Path(program_data) / "TileVisionAI" / "revoked_licenses.json")
+    if sys.platform == "win32":
+        program_data = os.environ.get("PROGRAMDATA")
+        if program_data:
+            paths.append(Path(program_data) / "TileVisionAI" / "revoked_licenses.json")
+    elif sys.platform == "darwin":
+        paths.append(
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "TileVisionAI"
+            / "revoked_licenses.json"
+        )
+    else:
+        xdg_data = os.environ.get("XDG_DATA_HOME")
+        root = Path(xdg_data) if xdg_data else Path.home() / ".local" / "share"
+        paths.append(root / "TileVisionAI" / "revoked_licenses.json")
     paths.append(Path.home() / ".tilevision_ai" / "revoked_licenses.json")
     return paths
 

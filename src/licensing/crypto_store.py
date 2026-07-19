@@ -21,13 +21,15 @@ plain text.
 
 Storage location:
     Windows: %PROGRAMDATA%\\TileVisionAI\\.lic\\state.enc (hidden folder)
-    Fallback (non-Windows dev/test): ~/.tilevision_ai/.lic/state.enc
+    macOS:   ~/Library/Application Support/TileVisionAI/.lic/state.enc
+    Linux:   ~/.local/share/TileVisionAI/.lic/state.enc (XDG data home)
 """
 
 import base64
 import json
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -58,12 +60,19 @@ def _get_storage_dir() -> Path:
     Returns:
         Path to the storage directory (created if it doesn't exist).
     """
-    program_data = os.environ.get("PROGRAMDATA")
-    if program_data:
-        base = Path(program_data) / "TileVisionAI" / ".lic"
+    if sys.platform == "win32":
+        program_data = os.environ.get("PROGRAMDATA")
+        base = (
+            Path(program_data) / "TileVisionAI" / ".lic"
+            if program_data
+            else Path.home() / ".tilevision_ai" / ".lic"
+        )
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support" / "TileVisionAI" / ".lic"
     else:
-        # Non-Windows dev/test fallback
-        base = Path.home() / ".tilevision_ai" / ".lic"
+        xdg_data = os.environ.get("XDG_DATA_HOME")
+        root = Path(xdg_data) if xdg_data else Path.home() / ".local" / "share"
+        base = root / "TileVisionAI" / ".lic"
 
     base.mkdir(parents=True, exist_ok=True)
     _try_hide_folder(base)

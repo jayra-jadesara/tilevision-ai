@@ -61,6 +61,16 @@ python admin_tool/main.py
 
 See [docs/VENDOR_LICENSING.md](docs/VENDOR_LICENSING.md) for the full workflow: issue trial/full keys, customer registry, renewals, cancellation, and production checklist.
 
+### Supported platforms
+
+| Platform | Status |
+|---|---|
+| **Windows 10/11** | Production target — installer, GPU (CUDA), full QA |
+| **macOS** | Licensing and encrypted storage work; run from source for dev/evaluation |
+| **Linux** | Licensing and encrypted storage work; run from source for dev/evaluation |
+
+Machine ID (hardware fingerprint) is generated per OS using stable local identifiers. Existing Windows license keys are unchanged — the Windows fingerprint format was preserved.
+
 ---
 
 ## Project Structure
@@ -95,7 +105,7 @@ tilevision-ai/
 │   │   ├── repository_interface.py  # Abstract repository interfaces
 │   │   └── sqlite_repository.py     # SQLite implementations
 │   ├── licensing/
-│   │   ├── hardware.py              # Windows hardware fingerprinting
+│   │   ├── hardware.py              # Cross-platform hardware fingerprinting
 │   │   └── validator.py             # ECDSA license validator
 │   └── presentation/                # Views, ViewModels, workers
 ├── tests/                           # Unit and integration tests

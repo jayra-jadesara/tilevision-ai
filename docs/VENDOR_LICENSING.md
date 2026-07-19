@@ -19,6 +19,24 @@ No internet is required on the customer PC after activation.
 
 ---
 
+## Machine ID (hardware fingerprint) by platform
+
+The customer app shows a 64-character SHA-256 **Machine ID** on the Activation screen. Generate license keys against the exact ID from the customer's PC.
+
+| OS | Sources (hashed together) | Notes |
+|---|---|---|
+| **Windows** | Registry `MachineGuid`, BIOS UUID, CPU ID | Format unchanged — existing keys still work |
+| **macOS** | `IOPlatformUUID`, hardware serial, hostname | Requires `ioreg` / `system_profiler` |
+| **Linux** | `/etc/machine-id`, DMI product UUID, hostname | Falls back to network ID if DMI is unavailable |
+
+Encrypted license/trial state is stored at:
+
+- Windows: `%PROGRAMDATA%\TileVisionAI\.lic\`
+- macOS: `~/Library/Application Support/TileVisionAI/.lic/`
+- Linux: `~/.local/share/TileVisionAI/.lic/` (or `$XDG_DATA_HOME`)
+
+---
+
 ## License types you can issue
 
 | Type | Duration |
@@ -101,8 +119,13 @@ What cancellation **does not** do instantly:
 3. Before your next release, add cancelled IDs to `src/licensing/revocation.py` → `EMBEDDED_REVOKED_LICENSE_IDS`.
 4. Ship the updated installer — revoked keys fail validation on startup/activation.
 
-Optional: place `revoked_licenses.json` on a customer PC at  
-`%PROGRAMDATA%\TileVisionAI\revoked_licenses.json` (manual support step).
+Optional: place `revoked_licenses.json` on a customer PC at:
+
+- Windows: `%PROGRAMDATA%\TileVisionAI\revoked_licenses.json`
+- macOS: `~/Library/Application Support/TileVisionAI/revoked_licenses.json`
+- Linux: `~/.local/share/TileVisionAI/revoked_licenses.json`
+
+(Fallback for all platforms: `~/.tilevision_ai/revoked_licenses.json`.)
 
 ---
 
