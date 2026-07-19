@@ -135,11 +135,27 @@ powershell -ExecutionPolicy Bypass -File scripts/install_pytorch_cuda.ps1
 
 ## First-run AI model download
 
-DINOv2 weights download from Hugging Face on first indexing/search (~1 GB). Ensure internet access for the first run, or pre-cache:
+DINOv2 weights (~1 GB) are required for indexing and search.
+
+**Option A — download on first run (needs internet once):**
+
+The app downloads automatically from Hugging Face when you first index or search.
+
+**Option B — pre-download for offline / packaging (recommended for vendors):**
 
 ```bash
-export HF_HOME=~/.cache/huggingface
-python -c "from transformers import AutoModel; AutoModel.from_pretrained('facebook/dinov2-large')"
+python scripts/download_dinov2_model.py
+python scripts/preflight_check.py
+```
+
+Weights are saved to `model_weights/dinov2-large/` and bundled by PyInstaller.
+
+**Option C — use an existing Hugging Face cache:**
+
+```bash
+export TILEVISION_MODEL_DIR=~/.cache/huggingface/hub/models--facebook--dinov2-large/snapshots/<hash>
+export TILEVISION_OFFLINE_MODEL=1
+python main.py
 ```
 
 ---

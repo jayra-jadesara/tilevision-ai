@@ -53,6 +53,7 @@ python dev_tools/create_dev_license.py
 ### 3. Launch the application
 
 ```bash
+python scripts/preflight_check.py   # optional but recommended
 python main.py
 ```
 

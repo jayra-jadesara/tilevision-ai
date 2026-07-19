@@ -69,8 +69,23 @@ class DINOv2Embedder:
 
         logger.info("Loading DINOv2 model...")
 
-        self._processor = AutoImageProcessor.from_pretrained(self.MODEL_NAME)
-        self._model = AutoModel.from_pretrained(self.MODEL_NAME)
+        from src.ai.model_paths import resolve_dinov2_model_source
+
+        model_source, local_only = resolve_dinov2_model_source()
+        logger.info(
+            "DINOv2 source: %s (%s)",
+            model_source,
+            "offline/local" if local_only else "Hugging Face hub",
+        )
+
+        self._processor = AutoImageProcessor.from_pretrained(
+            model_source,
+            local_files_only=local_only,
+        )
+        self._model = AutoModel.from_pretrained(
+            model_source,
+            local_files_only=local_only,
+        )
         self._model.to(self._device)
         self._model.eval()
 

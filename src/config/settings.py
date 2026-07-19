@@ -38,8 +38,7 @@ class AppSettings:
         
         # Default settings dictionary
         self._defaults: Dict[str, Any] = {
-            "model_name": "ViT-B-32-quickgelu",
-            "pretrained": "laion400m_e32",
+            "dinov2_model_id": "facebook/dinov2-large",
             "database_path": str(self._config_dir / "database" / "tiles.db"),
             "index_path": str(self._config_dir / "index" / "tiles.index"),
             "thumbnail_dir": str(self._config_dir / "thumbnails"),
@@ -97,24 +96,32 @@ class AppSettings:
             print(f"Error saving configuration file '{self._config_file}': {e}")
 
     @property
-    def model_name(self) -> str:
-        """Get the CLIP model name."""
-        return str(self._settings["model_name"])
+    def dinov2_model_id(self) -> str:
+        """Get the DINOv2 Hugging Face model id."""
+        return str(self._settings.get("dinov2_model_id", "facebook/dinov2-large"))
 
-    @model_name.setter
-    def model_name(self, value: str) -> None:
-        self._settings["model_name"] = value
+    @dinov2_model_id.setter
+    def dinov2_model_id(self, value: str) -> None:
+        self._settings["dinov2_model_id"] = value
         self.save()
 
     @property
+    def model_name(self) -> str:
+        """Legacy alias — kept for settings UI compatibility."""
+        return self.dinov2_model_id
+
+    @model_name.setter
+    def model_name(self, value: str) -> None:
+        self.dinov2_model_id = value
+
+    @property
     def pretrained(self) -> str:
-        """Get the pre-trained weights name."""
-        return str(self._settings["pretrained"])
+        """Legacy alias — DINOv2 uses a single model id."""
+        return self.dinov2_model_id
 
     @pretrained.setter
     def pretrained(self, value: str) -> None:
-        self._settings["pretrained"] = value
-        self.save()
+        self.dinov2_model_id = value
 
     @property
     def database_path(self) -> str:

@@ -32,6 +32,8 @@ MANIFEST
 *.manifest
 *.spec
 !packaging/tilevision.spec
+!packaging/tilevision_mac.spec
+!packaging/tilevision_linux.spec
 
 # Installer logs
 pip-log.txt
@@ -73,7 +75,8 @@ dev_tools/private_key.pem
 dev_tools/dev_private_key.pem
 dev_tools/test_license.txt
 
-# VS Code / IDEs
+# Bundled AI model weights (download with scripts/download_dinov2_model.py)
+model_weights/dinov2-large/
 .vscode/
 .idea/
 *.suo

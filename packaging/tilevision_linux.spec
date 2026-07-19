@@ -1,14 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller build spec for TileVision AI (Windows).
+PyInstaller build spec for TileVision AI (Linux).
 
-Build on Windows (PyInstaller does not cross-compile):
+Build on Linux:
 
     pip install -r requirements.txt pyinstaller
     python scripts/download_dinov2_model.py
-    pyinstaller packaging/tilevision.spec --clean
+    pyinstaller packaging/tilevision_linux.spec --clean
 
-Output: dist/TileVisionAI/TileVisionAI.exe
+Output: dist/TileVisionAI/TileVisionAI
 """
 
 import sys
@@ -20,10 +20,6 @@ PROJECT_ROOT = Path(SPECPATH).parent
 MODEL_DIR = PROJECT_ROOT / "model_weights" / "dinov2-large"
 
 datas = []
-if (PROJECT_ROOT / "src" / "config" / "default_config.json").exists():
-    datas.append(
-        (str(PROJECT_ROOT / "src" / "config" / "default_config.json"), "src/config")
-    )
 if MODEL_DIR.is_dir():
     datas.append((str(MODEL_DIR), str(Path("model_weights") / "dinov2-large")))
 
@@ -45,8 +41,6 @@ hidden_imports = [
     "PIL",
     "skimage",
     "cryptography",
-    "cryptography.hazmat.primitives.ciphers.aead",
-    "cryptography.hazmat.primitives.kdf.pbkdf2",
     "watchdog.observers",
     "watchdog.events",
 ]
@@ -61,8 +55,6 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=["matplotlib", "notebook", "jupyter"],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
     cipher=block_cipher,
     noarchive=False,
 )
@@ -80,9 +72,6 @@ exe = EXE(
     strip=False,
     upx=True,
     console=False,
-    icon=str(PROJECT_ROOT / "src" / "resources" / "app_icon.ico")
-    if (PROJECT_ROOT / "src" / "resources" / "app_icon.ico").exists()
-    else None,
 )
 
 coll = COLLECT(

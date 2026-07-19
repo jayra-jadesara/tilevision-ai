@@ -1,92 +1,113 @@
-# Packaging TileVision AI for Windows
+# Packaging TileVision AI
+
+PyInstaller builds must run **on the target OS** (no cross-compiling).
+
+| Platform | Spec file | Output |
+|----------|-----------|--------|
+| Windows | `packaging/tilevision.spec` | `dist/TileVisionAI/TileVisionAI.exe` |
+| macOS | `packaging/tilevision_mac.spec` | `dist/TileVisionAI.app` |
+| Linux | `packaging/tilevision_linux.spec` | `dist/TileVisionAI/TileVisionAI` |
+
+See also [docs/CROSS_PLATFORM.md](../docs/CROSS_PLATFORM.md) for run-from-source setup.
+
+---
 
 ## Prerequisites
 
-On a Windows build machine (PyInstaller doesn't cross-compile — build on Windows for Windows):
-
-```
+```bash
 pip install -r requirements.txt
 pip install pyinstaller
 ```
 
-## 1. Pre-download the CLIP model weights (one-time, needs internet)
+Run preflight on the build machine:
 
-The app is fully offline **at runtime**, but `open_clip`'s default
-`pretrained="laion400m_e32"` setting downloads weights from a remote hub the
-*first* time it's used. That download must happen on your build machine
-before packaging — never on a customer's machine — otherwise a customer
-with genuinely no internet access will hit a hard failure loading the AI
-model on first launch.
-
-```python
-# Run once, with internet access, to populate the local cache:
-import open_clip
-open_clip.create_model_and_transforms("ViT-B-32-quickgelu", pretrained="laion400m_e32")
+```bash
+python scripts/preflight_check.py
 ```
 
-Then either:
-- Point `src/config/settings.py`'s default `pretrained` value at the cached
-  weights file path directly, or
-- Add the cache directory (`open_clip.pretrained.get_pretrained_cfg`'s
-  cache location, typically `~/.cache/clip` or similar) to the `datas` list
-  in `packaging/tilevision.spec` so PyInstaller bundles it.
+---
+
+## 1. Pre-download DINOv2 weights (required for offline installs)
+
+The app uses **DINOv2** (`facebook/dinov2-large`), not CLIP. Weights must be
+downloaded on your build machine **before** packaging — never on a customer's
+offline PC.
+
+```bash
+python scripts/download_dinov2_model.py
+```
+
+This creates `model_weights/dinov2-large/` (~1 GB). PyInstaller specs bundle
+this folder automatically when present.
+
+For strict offline runtime, set on customer builds:
+
+```bash
+export TILEVISION_OFFLINE_MODEL=1   # macOS / Linux
+set TILEVISION_OFFLINE_MODEL=1      # Windows
+```
+
+---
 
 ## 2. Set up licensing
 
 Follow `admin_tool/README.md` to generate a real signing keypair and embed
-the public key into `src/licensing/validator.py`
-(`EMBEDDED_PUBLIC_KEY_PEM`). **Do not ship a build with the placeholder
-key** — it isn't a valid key and license activation will fail for every
-customer.
+the public key into `src/licensing/validator.py` (`EMBEDDED_PUBLIC_KEY_PEM`).
 
-Confirm `TILEVISION_DEV_MODE` is **not** set in your build environment:
+Confirm `TILEVISION_DEV_MODE` is **not** set in your build environment.
 
-```
-echo %TILEVISION_DEV_MODE%
-```
-Should print nothing/empty. If it prints `1`, unset it before building —
-otherwise you'll ship a build with signature verification disabled.
+---
 
 ## 3. Build
 
-From the project root:
+**Windows:**
 
-```
+```powershell
 pyinstaller packaging/tilevision.spec --clean
 ```
 
-Output: `dist/TileVisionAI/TileVisionAI.exe` plus its supporting files —
-distribute the whole `TileVisionAI/` folder, not just the `.exe`.
+**macOS:**
 
-(A one-folder build is used deliberately over `--onefile`: `--onefile`
-re-extracts the ~1-2GB of torch/CLIP weights to a temp directory on every
-launch, adding many seconds to startup every time.)
+```bash
+pyinstaller packaging/tilevision_mac.spec --clean
+```
 
-## 4. Test the built .exe
+**Linux:**
 
-Before shipping, run the actual built executable (not `python main.py`) on
-a clean Windows VM with **no internet access** and confirm:
-- The app launches and shows the trial/activation screen.
-- Folder indexing completes and produces search results.
-- Search actually returns results (confirms the model weights bundled
-  correctly).
-- License activation works with a key from the Admin tool.
+```bash
+pyinstaller packaging/tilevision_linux.spec --clean
+```
 
-## 5. Installer (optional, recommended for a commercial release)
+Use a **one-folder** build (not `--onefile`) — single-file mode re-extracts
+~1–2 GB of PyTorch + model weights on every launch.
 
-PyInstaller produces a folder, not an installer. Wrap it with
-[Inno Setup](https://jrsoftware.org/isinfo.php) (free) or
-[NSIS](https://nsis.sourceforge.io/) to get a proper `TileVisionAI-Setup.exe`
-that installs to Program Files, creates a Start Menu shortcut, and can set
-up the `%PROGRAMDATA%\TileVisionAI` folder permissions needed for the
-encrypted license store. This step isn't automated here — an Inno Setup
-`.iss` script is a reasonable next addition once you've validated the raw
-PyInstaller build above.
+---
 
-## Known packaging gaps (being upfront)
+## 4. Test the built app
 
-- No CI/build automation — this is a manual, documented process, not a
-  one-command release pipeline.
-- No code signing — Windows SmartScreen will warn on first run of an
-  unsigned .exe. A code signing certificate is a separate (paid) step.
-- No installer script yet (see step 5).
+On a clean VM **with no internet**, confirm:
+
+- App launches and shows activation screen
+- Folder indexing completes
+- Search returns results (confirms bundled DINOv2 weights)
+- License activation works with a key from the Admin tool
+
+---
+
+## 5. Installers (optional)
+
+| Platform | Tool |
+|----------|------|
+| Windows | [Inno Setup](https://jrsoftware.org/isinfo.php) or NSIS |
+| macOS | `hdiutil` DMG + notarization (Apple Developer account) |
+| Linux | `.deb` / AppImage via `fpm` or `appimagetool` |
+
+Not automated in this repo yet — validate the raw PyInstaller output first.
+
+---
+
+## Known gaps
+
+- No automated release pipeline (manual build per OS)
+- No code signing (SmartScreen / Gatekeeper warnings on first run)
+- macOS notarization and Linux `.desktop` integration are manual steps
