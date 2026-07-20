@@ -5,7 +5,7 @@ Handles database transactions and data conversions between SQLite Rows
 and domain models.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime
 import logging
 import sqlite3
 from typing import Dict, List, Optional
@@ -32,6 +32,13 @@ from src.data.repository_interface import (
 logger = logging.getLogger("tilevision.data.sqlite_repository")
 
 
+def _utc_timestamp_now() -> str:
+    """UTC timestamp with microsecond resolution for stable folder ordering."""
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
+
+
 def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
     """
     Best-effort parser for SQLite CURRENT_TIMESTAMP / ISO-format strings.
@@ -46,15 +53,14 @@ def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
     except ValueError:
         pass
     try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S.%f")
+    except ValueError:
+        pass
+    try:
         return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
     except ValueError:
         logger.warning(f"Could not parse timestamp value: {value}")
         return None
-
-
-def _utc_timestamp_str() -> str:
-    """UTC timestamp with microsecond resolution for stable folder ordering."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
 
 
 class SQLiteImageRepository(IImageRepository):
@@ -877,9 +883,9 @@ class SQLiteIndexedFolderRepository(IIndexedFolderRepository):
         Args:
             folder_path: Absolute path of the folder that was scanned.
         """
-        # Python-side microsecond timestamps — SQLite strftime('now') can tie on
-        # macOS CI when two folders are recorded in the same microsecond.
-        now = _utc_timestamp_str()
+        # Python-side microsecond timestamps — SQLite strftime('%f') is not
+        # reliable on every platform/build (e.g. macOS CI ties within a second).
+        ts = _utc_timestamp_now()
         query = """
         INSERT INTO indexed_folders (folder_path, last_indexed_at)
         VALUES (?, ?)
@@ -889,7 +895,7 @@ class SQLiteIndexedFolderRepository(IIndexedFolderRepository):
         try:
             with self._db.session() as conn:
                 cursor = conn.cursor()
-                cursor.execute(query, (folder_path, now))
+                cursor.execute(query, (folder_path, ts))
                 conn.commit()
             logger.info(f"Recorded folder as indexed: {folder_path}")
         except sqlite3.Error as e:
