@@ -50,6 +50,7 @@ from src.presentation.views.main_window import MainWindow, DashboardDataProvider
 from src.presentation.views.license_view import LicenseView
 from src.presentation.auto_index_notifier import AutoIndexNotifier
 from src.presentation.update_controller import UpdateController
+from src.utils.platform_info import app_icon_path, default_ui_font_family
 from src.core.use_cases.monitor_folder import AutoIndexAction
 
 _app_logger = logging.getLogger("tilevision.app")
