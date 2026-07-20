@@ -5,7 +5,7 @@ Handles database transactions and data conversions between SQLite Rows
 and domain models.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 import sqlite3
 from typing import Dict, List, Optional
@@ -50,6 +50,11 @@ def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
     except ValueError:
         logger.warning(f"Could not parse timestamp value: {value}")
         return None
+
+
+def _utc_timestamp_str() -> str:
+    """UTC timestamp with microsecond resolution for stable folder ordering."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
 
 
 class SQLiteImageRepository(IImageRepository):
@@ -872,21 +877,19 @@ class SQLiteIndexedFolderRepository(IIndexedFolderRepository):
         Args:
             folder_path: Absolute path of the folder that was scanned.
         """
-        # NOTE: uses strftime(..., 'now') for millisecond-resolution
-        # timestamps rather than CURRENT_TIMESTAMP, which only has
-        # second-resolution — two folders indexed within the same second
-        # would otherwise tie and sort unpredictably in
-        # get_last_indexed_folder()'s ORDER BY.
+        # Python-side microsecond timestamps — SQLite strftime('now') can tie on
+        # macOS CI when two folders are recorded in the same microsecond.
+        now = _utc_timestamp_str()
         query = """
         INSERT INTO indexed_folders (folder_path, last_indexed_at)
-        VALUES (?, strftime('%Y-%m-%d %H:%M:%f', 'now'))
+        VALUES (?, ?)
         ON CONFLICT(folder_path) DO UPDATE SET
-            last_indexed_at = strftime('%Y-%m-%d %H:%M:%f', 'now');
+            last_indexed_at = excluded.last_indexed_at;
         """
         try:
             with self._db.session() as conn:
                 cursor = conn.cursor()
-                cursor.execute(query, (folder_path,))
+                cursor.execute(query, (folder_path, now))
                 conn.commit()
             logger.info(f"Recorded folder as indexed: {folder_path}")
         except sqlite3.Error as e:
@@ -900,7 +903,7 @@ class SQLiteIndexedFolderRepository(IIndexedFolderRepository):
         Returns:
             An IndexedFolderState if any folder has been indexed, else None.
         """
-        query = "SELECT * FROM indexed_folders ORDER BY last_indexed_at DESC LIMIT 1;"
+        query = "SELECT * FROM indexed_folders ORDER BY last_indexed_at DESC, id DESC LIMIT 1;"
         try:
             with self._db.session() as conn:
                 cursor = conn.cursor()
@@ -941,7 +944,7 @@ class SQLiteIndexedFolderRepository(IIndexedFolderRepository):
         Returns:
             A list of IndexedFolderState, most recently indexed first.
         """
-        query = "SELECT * FROM indexed_folders ORDER BY last_indexed_at DESC;"
+        query = "SELECT * FROM indexed_folders ORDER BY last_indexed_at DESC, id DESC;"
         try:
             with self._db.session() as conn:
                 cursor = conn.cursor()
