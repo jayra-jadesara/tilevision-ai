@@ -48,6 +48,7 @@ from src.presentation.viewmodels.indexing_viewmodel import IndexingViewModel
 from src.presentation.viewmodels.search_viewmodel import SearchViewModel
 from src.presentation.views.main_window import MainWindow, DashboardDataProviders
 from src.presentation.views.license_view import LicenseView
+from src.presentation.auto_index_notifier import AutoIndexNotifier
 from src.presentation.update_controller import UpdateController
 from src.core.use_cases.monitor_folder import AutoIndexAction
 
