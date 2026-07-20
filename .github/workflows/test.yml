@@ -43,4 +43,5 @@ jobs:
           OMP_NUM_THREADS: "1"
           OPENBLAS_NUM_THREADS: "1"
           VECLIB_MAXIMUM_THREADS: "1"
+          KMP_DUPLICATE_LIB_OK: "TRUE"
         run: python -m pytest tests/ -q --tb=short -m "not slow"

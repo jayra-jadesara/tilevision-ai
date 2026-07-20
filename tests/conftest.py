@@ -15,6 +15,25 @@ import types
 import pytest
 
 
+def _configure_faiss_runtime() -> None:
+    """Reduce OpenMP/thread conflicts that crash faiss-cpu on some macOS CI runners."""
+    import os
+
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+    os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1")
+    os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+    try:
+        import faiss
+
+        faiss.omp_set_num_threads(1)
+    except ImportError:
+        pass
+
+
+_configure_faiss_runtime()
+
+
 def _install_fake_module(name: str, attrs: dict) -> None:
     if name in sys.modules:
         return
@@ -56,22 +75,7 @@ _install_fake_module(
 def pytest_configure():
     import os
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-
-def pytest_collection_modifyitems(config, items):
-    """Skip FAISS search tests on macOS GitHub Actions (faiss-cpu abort trap)."""
-    import os
-    import sys
-
-    if sys.platform != "darwin" or os.environ.get("CI") != "true":
-        return
-
-    skip = pytest.mark.skip(
-        reason="FAISS search aborts on macOS GitHub Actions runners"
-    )
-    for item in items:
-        if "faiss_search" in item.keywords:
-            item.add_marker(skip)
+    _configure_faiss_runtime()
 
 
 @pytest.fixture

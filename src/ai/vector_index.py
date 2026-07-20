@@ -222,11 +222,19 @@ class FaissIndexManager:
         try:
             with synchronized_inference():
                 # Format query vector as 2D numpy array
-                query_np = np.array([query_vector], dtype=np.float32)
+                query_np = np.ascontiguousarray(
+                    np.array([query_vector], dtype=np.float32)
+                )
                 if query_np.shape[1] != self._index.d:
                     raise ValueError(
                         f"Query dimension {query_np.shape[1]} != index dimension {self._index.d}"
                     )
+
+                norm = np.linalg.norm(query_np, axis=1, keepdims=True)
+                norm = np.maximum(norm, 1e-12)
+                query_np = query_np / norm
+
+                safe_top_k = min(max(int(top_k), 1), int(self._index.ntotal))
 
                 logger.debug(
                     "FAISS search: dimension=%d query_shape=%s query_norm=%.4f",
@@ -234,7 +242,7 @@ class FaissIndexManager:
                     query_np.shape,
                     float(np.linalg.norm(query_np)),
                 )
-                scores, indices = self._index.search(query_np, top_k)
+                scores, indices = self._index.search(query_np, safe_top_k)
 
                 # Flatten output and filter out empty indices (-1 represents no match)
                 indices_flat = indices[0].tolist()
