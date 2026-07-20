@@ -442,7 +442,8 @@ class SearchTilesUseCase:
         if "tilevision_crops" not in normalized:
             return None
 
-        stem = query_path.stem
+        filename = normalized.rsplit("/", 1)[-1]
+        stem = Path(filename).stem
         if not stem.startswith("crop_"):
             return None
 
