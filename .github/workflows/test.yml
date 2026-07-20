@@ -40,4 +40,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
           TILEVISION_DEV_MODE: "1"
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          VECLIB_MAXIMUM_THREADS: "1"
         run: python -m pytest tests/ -q --tb=short -m "not slow"

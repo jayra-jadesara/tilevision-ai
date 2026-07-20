@@ -10,6 +10,7 @@ import src.utils.image_formats as image_formats
 
 def test_base_extensions_without_heif(monkeypatch):
     monkeypatch.setattr(image_formats, "_heif_registered", False)
+    monkeypatch.setattr(image_formats, "register_optional_image_formats", lambda: None)
     exts = image_formats.supported_image_extensions()
     assert ".jpg" in exts
     assert ".heic" not in exts

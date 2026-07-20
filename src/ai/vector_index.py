@@ -223,6 +223,10 @@ class FaissIndexManager:
             with synchronized_inference():
                 # Format query vector as 2D numpy array
                 query_np = np.array([query_vector], dtype=np.float32)
+                if query_np.shape[1] != self._index.d:
+                    raise ValueError(
+                        f"Query dimension {query_np.shape[1]} != index dimension {self._index.d}"
+                    )
 
                 logger.debug(
                     "FAISS search: dimension=%d query_shape=%s query_norm=%.4f",

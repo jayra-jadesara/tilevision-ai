@@ -438,7 +438,8 @@ class SearchTilesUseCase:
         Example: crop_5mm-white-dotted-ceramic-floor-tile-500x500_12345.jpg
         -> 5mm-white-dotted-ceramic-floor-tile-500x500
         """
-        if "tilevision_crops" not in query_path.as_posix().lower():
+        normalized = str(query_path).replace("\\", "/").lower()
+        if "tilevision_crops" not in normalized:
             return None
 
         stem = query_path.stem

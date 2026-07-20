@@ -58,6 +58,11 @@ class FakeSearchUseCase:
             raise self._error
         return self._results
 
+    def get_index_health(self):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(is_compatible=True, stale_count=0, indexed_count=1)
+
 
 def _make_result(score=90.0, path="/tmp/tile.jpg"):
     tile = TileImage(file_path=path, file_name="tile.jpg", file_size=1, dimensions="1x1")
