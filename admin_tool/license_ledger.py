@@ -206,6 +206,25 @@ class LicenseLedger:
             )
             return True
 
+    def delete_cancelled_license(self, license_id: str) -> bool:
+        """
+        Remove a stopped (cancelled) row from the vendor list.
+
+        Only rows with status 'cancelled' can be deleted. Active and old-key
+        rows stay for your records.
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT license_id, status FROM licenses WHERE license_id = ?",
+                (license_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            if row["status"] != "cancelled":
+                return False
+            conn.execute("DELETE FROM licenses WHERE license_id = ?", (license_id,))
+            return True
+
     def unblock_machine(self, machine_id: str, reason: str = "") -> bool:
         """
         Allow new license keys for a Machine ID that was blocked by cancellation.

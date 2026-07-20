@@ -73,10 +73,10 @@ Your **private signing key** is stored in one fixed place (same folder):
 
 The tool loads it automatically on startup — no need to browse each time.
 
-**Automatic cloud backup:** each time you open the vendor tool or issue a license,
-a zip backup is saved under `%USERPROFILE%\OneDrive\TileVision-Vendor-Backup\`
-(or `Documents\TileVision-Vendor-Backup\` if OneDrive is not available). If you
-use OneDrive/Google Drive sync on that folder, your key survives PC loss.
+**Manual backup:** click **Backup Now** when you want a zip copy saved under
+`OneDrive\TileVision-Vendor-Backup\` (or `Documents\TileVision-Vendor-Backup\`
+if OneDrive is not available). Works on Windows and Mac (OneDrive, iCloud,
+Dropbox, or Documents). Nothing is backed up until you click the button.
 
 Use the **Customers & Licenses** tab to:
 

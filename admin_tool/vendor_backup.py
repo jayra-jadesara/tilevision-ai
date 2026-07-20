@@ -1,4 +1,4 @@
-"""Automatic vendor data backup to cloud-synced folders."""
+"""Manual vendor data backup to cloud-synced folders."""
 
 from __future__ import annotations
 
@@ -66,17 +66,17 @@ def _save_backup_metadata(backup_dir: Path, archive_path: Path) -> None:
 
 def get_last_backup_summary() -> str:
     if not _SETTINGS_PATH.exists():
-        return "No automatic backup yet."
+        return "No backup yet. Click Backup Now when you want a copy."
     try:
         data = json.loads(_SETTINGS_PATH.read_text(encoding="utf-8"))
         when = data.get("last_backup_at", "")
         path = data.get("last_backup_path", "")
         if not when or not path:
-            return "No automatic backup yet."
+            return "No backup yet. Click Backup Now when you want a copy."
         stamp = when.replace("T", " ").split("+")[0][:16]
         return f"Last backup: {stamp} UTC → {path}"
     except Exception:
-        return "No automatic backup yet."
+        return "No backup yet. Click Backup Now when you want a copy."
 
 
 def _prune_old_backups(backup_dir: Path) -> None:

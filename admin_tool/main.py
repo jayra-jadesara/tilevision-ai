@@ -64,7 +64,8 @@ from src.licensing.validator import (
     EMBEDDED_PUBLIC_KEY_PEM,
     VENDOR_PUBLIC_KEY_PATH,
 )
-from src.utils.brand_assets import APP_ICON_PATH, logo_pixmap
+from src.utils.brand_assets import logo_pixmap
+from src.utils.platform_info import app_icon_path
 from src.theme.theme_manager import get_palette
 
 _VENDOR_DIR = Path.home() / ".tilevision_ai_vendor"
@@ -86,15 +87,15 @@ class AdminLicenseWindow(QMainWindow):
 
         self.setWindowTitle("TileVision AI — Vendor License Manager")
         self.resize(1020, 780)
-        if APP_ICON_PATH.exists():
-            self.setWindowIcon(QIcon(str(APP_ICON_PATH)))
+        icon_path = app_icon_path()
+        if icon_path is not None:
+            self.setWindowIcon(QIcon(str(icon_path)))
         self._load_settings()
         self._setup_ui()
         self._apply_styles()
         self._auto_load_signing_key()
         self._sync_signing_key_for_local_app()
         self._refresh_backup_status()
-        self._trigger_vendor_backup(silent=True)
         self._refresh_all()
 
     def _setup_ui(self) -> None:
@@ -139,11 +140,10 @@ class AdminLicenseWindow(QMainWindow):
         layout.addLayout(header)
 
         warning = QLabel(
-            "Vendor tool only. Tracks keys YOU issue here. "
-            "Trial and full licenses both require a key generated here — "
-            "choose a Trial type (e.g. 15-Day Trial) when issuing trial keys. "
-            "Cancellation blocks new activations; ship revocation updates "
-            "to enforce refunds on already-activated PCs."
+            "For you only — not for customers. "
+            "Works on Windows and Mac. "
+            "Make keys here and send them to each customer. "
+            "Trial and full license both need a key from this tool."
         )
         warning.setObjectName("Warning")
         warning.setWordWrap(True)
@@ -167,13 +167,10 @@ class AdminLicenseWindow(QMainWindow):
         layout.addWidget(self._keypair_status)
 
         hint = QLabel(
-            f"Signing key (fixed): {_VENDOR_KEY_PATH}\n"
-            f"Public key auto-sync: {VENDOR_PUBLIC_KEY_PATH}\n"
-            "On this PC the customer app loads that public key automatically. "
-            "For customer showrooms (no vendor folder), embed the public key in "
-            "src/licensing/validator.py before shipping.\n"
-            "Automatic backup copies your vendor folder to OneDrive/Documents "
-            "(cloud-synced) whenever you open the tool or issue a license."
+            f"Your signing key file: {_VENDOR_KEY_PATH}\n"
+            f"Public key file: {VENDOR_PUBLIC_KEY_PATH}\n"
+            "Works on Windows and Mac. Data saves in your home folder.\n"
+            "Backup copies your vendor folder to OneDrive, iCloud, Dropbox, or Documents when you click Backup Now."
         )
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
@@ -230,8 +227,8 @@ class AdminLicenseWindow(QMainWindow):
                 ("Active", self._stat_active),
                 ("Active Trials", self._stat_trials),
                 ("Active Official", self._stat_official),
-                ("Cancelled", self._stat_cancelled),
-                ("Expiring in 30 Days", self._stat_expiring),
+                ("Stopped", self._stat_cancelled),
+                ("Expiring Soon (30 days)", self._stat_expiring),
             ]
         ):
             card = QGroupBox(title)
@@ -243,11 +240,11 @@ class AdminLicenseWindow(QMainWindow):
         layout.addLayout(grid)
 
         steps = QLabel(
-            "Quick workflow:\n"
-            "1. Customer sends Machine ID from TileVision Activation screen\n"
-            "2. Generate Key tab → create license → copy to customer\n"
-            "3. Customers & Licenses tab → track, renew, or cancel\n"
-            "4. Export Revocation List before each app release"
+            "Simple steps:\n"
+            "1. Customer sends Machine ID from their TileVision app\n"
+            "2. Generate Key tab → pick type → make key → copy and send\n"
+            "3. Customers & Licenses tab → see all keys, extend, stop, or delete stopped rows\n"
+            "4. Before each app update → Export Block List for the customer app"
         )
         steps.setWordWrap(True)
         steps.setObjectName("Hint")
@@ -366,10 +363,14 @@ class AdminLicenseWindow(QMainWindow):
             ("All history", "all"),
             ("Active", "active"),
             ("Trial (active)", "trial"),
-            ("Suspended", "cancelled"),
+            ("Stopped", "cancelled"),
             ("Old key", "superseded"),
         ):
             self._status_filter.addItem(label, value)
+        self._status_filter.setToolTip(
+            "Current = one active key per PC. Stopped = keys you blocked. "
+            "Old key = replaced when you made a newer key."
+        )
         self._status_filter.setCurrentIndex(0)
         self._prepare_form_field(self._status_filter)
         self._status_filter.currentIndexChanged.connect(self._refresh_registry_table)
@@ -417,24 +418,34 @@ class AdminLicenseWindow(QMainWindow):
         layout.addWidget(legend)
 
         action_row = QHBoxLayout()
-        renew_btn = QPushButton("Renew / Extend Selected")
+        renew_btn = QPushButton("Extend License")
+        renew_btn.setToolTip("Make a new key for the same customer and PC.")
         renew_btn.clicked.connect(self._on_renew_selected)
         action_row.addWidget(renew_btn)
 
-        copy_again_btn = QPushButton("Copy Stored Key")
+        copy_again_btn = QPushButton("Copy Key Again")
+        copy_again_btn.setToolTip("Copy the saved key for the selected row.")
         copy_again_btn.clicked.connect(self._on_copy_stored_key)
         self._copy_stored_key_btn = copy_again_btn
         action_row.addWidget(copy_again_btn)
 
-        cancel_btn = QPushButton("Cancel Selected")
+        cancel_btn = QPushButton("Stop License")
         cancel_btn.setObjectName("DangerButton")
+        cancel_btn.setToolTip(
+            "Block this key. Customer cannot get a new key for this PC until you click Allow New Key."
+        )
         cancel_btn.clicked.connect(self._on_cancel_selected)
         action_row.addWidget(cancel_btn)
 
-        reissue_btn = QPushButton("Allow Re-issue")
+        delete_btn = QPushButton("Delete Row")
+        delete_btn.setObjectName("DangerButton")
+        delete_btn.setToolTip("Remove a stopped row from your list. Only works on Stopped rows.")
+        delete_btn.clicked.connect(self._on_delete_selected)
+        action_row.addWidget(delete_btn)
+
+        reissue_btn = QPushButton("Allow New Key")
         reissue_btn.setToolTip(
-            "Clear the block on a Machine ID after a cancelled license, "
-            "so you can generate a new key for that PC."
+            "After you stopped a key, click this to allow a new key for the same PC."
         )
         reissue_btn.clicked.connect(self._on_allow_reissue)
         action_row.addWidget(reissue_btn)
@@ -445,11 +456,13 @@ class AdminLicenseWindow(QMainWindow):
         export_csv_btn.clicked.connect(self._on_export_csv)
         action_row.addWidget(export_csv_btn)
 
-        export_rev_btn = QPushButton("Export Revocation JSON")
+        export_rev_btn = QPushButton("Export Block List")
+        export_rev_btn.setToolTip("Save stopped keys for the next customer app update.")
         export_rev_btn.clicked.connect(self._on_export_revocation)
         action_row.addWidget(export_rev_btn)
 
-        export_py_btn = QPushButton("Copy Revocation Python")
+        export_py_btn = QPushButton("Copy Block List Code")
+        export_py_btn.setToolTip("Copy Python code to paste into the customer app before release.")
         export_py_btn.clicked.connect(self._on_copy_revocation_python)
         action_row.addWidget(export_py_btn)
 
@@ -517,9 +530,9 @@ class AdminLicenseWindow(QMainWindow):
         status = rec.status.lower()
 
         if status == "cancelled":
-            label = "Suspended"
+            label = "Stopped"
             bg, fg = p["danger_bg"], p["danger_text"]
-            tip = "Cancelled by vendor — new keys blocked until Allow Re-issue."
+            tip = "You stopped this key. Click Allow New Key to issue another key for this PC."
         elif status == "superseded":
             label = "Old key"
             bg, fg = p["bg_panel_alt"], p["text_muted"]
@@ -555,7 +568,7 @@ class AdminLicenseWindow(QMainWindow):
             f"<span style='background:{p['warning_bg']};color:{p['warning_text']};"
             "padding:2px 8px;border-radius:4px;'>Trial</span> "
             f"<span style='background:{p['danger_bg']};color:{p['danger_text']};"
-            "padding:2px 8px;border-radius:4px;'>Suspended</span> "
+            "padding:2px 8px;border-radius:4px;'>Stopped</span> "
             f"<span style='background:{p['bg_panel_alt']};color:{p['text_muted']};"
             "padding:2px 8px;border-radius:4px;'>Old key</span>"
         )
@@ -682,11 +695,11 @@ class AdminLicenseWindow(QMainWindow):
             base = get_last_backup_summary()
             if backup_dir is not None:
                 self._backup_status.setText(
-                    f"{base}\nAuto-backup folder: {backup_dir}"
+                    f"{base}\nBackup folder (when you click Backup Now): {backup_dir}"
                 )
             else:
                 self._backup_status.setText(
-                    f"{base}\nAuto-backup folder not found — install/sync OneDrive or use Documents."
+                    f"{base}\nNo backup folder found — use OneDrive, iCloud, Dropbox, or Documents."
                 )
 
     def _trigger_vendor_backup(self, *, silent: bool = False) -> None:
@@ -801,7 +814,6 @@ class AdminLicenseWindow(QMainWindow):
         self._private_key_pem = pem
         self._set_key_status(True, f"Ready — key saved to {_VENDOR_DIR.name}")
         self._sync_signing_key_for_local_app()
-        self._trigger_vendor_backup(silent=True)
         return True
 
     def _migrate_legacy_key_path(self) -> bool:
@@ -931,7 +943,6 @@ class AdminLicenseWindow(QMainWindow):
             "Public key is shown in the output box below. "
             "Embed it in validator.py before shipping the customer app.",
         )
-        self._trigger_vendor_backup(silent=True)
 
     def _on_generate_license(self) -> None:
         if not self._private_key_pem:
@@ -958,9 +969,9 @@ class AdminLicenseWindow(QMainWindow):
             unblock = QMessageBox.question(
                 self,
                 "Machine Blocked",
-                "This Machine ID has a cancelled license.\n\n"
-                "Do you want to allow re-issue for this PC now?\n"
-                "(Cancelled keys stay on the revocation list.)",
+                "This PC has a stopped key.\n\n"
+                "Allow a new key for this PC now?\n"
+                "(Stopped keys stay on the block list for the customer app.)",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if unblock == QMessageBox.StandardButton.Yes:
@@ -1001,7 +1012,6 @@ class AdminLicenseWindow(QMainWindow):
         self._renew_from_id = None
         self._renew_label.setText("")
         self._refresh_all()
-        self._trigger_vendor_backup(silent=True)
         self._tabs.setCurrentIndex(2)
         QMessageBox.information(
             self,
@@ -1031,7 +1041,7 @@ class AdminLicenseWindow(QMainWindow):
         if idx >= 0:
             self._license_type.setCurrentIndex(idx)
         self._on_license_type_changed(self._license_type.currentText())
-        self._renew_label.setText(f"Renewing / extending license {rec.license_id[:8]}...")
+        self._renew_label.setText(f"Extending license {rec.license_id[:8]}...")
         self._tabs.setCurrentIndex(1)
 
     def _on_copy_stored_key(self) -> None:
@@ -1064,20 +1074,54 @@ class AdminLicenseWindow(QMainWindow):
 
         if QMessageBox.question(
             self,
-            "Cancel License",
-            "Mark this license as cancelled?\n\n"
-            "Offline PCs already activated keep working until expiry or until "
-            "you ship an app update with the revocation list.",
+            "Stop License",
+            "Stop this license?\n\n"
+            "The customer cannot use a new key on this PC until you click Allow New Key.\n"
+            "PCs already using this key keep working until it expires or you update the app.",
         ) != QMessageBox.StandardButton.Yes:
             return
 
-        if self._ledger.cancel_license(license_id, reason="Cancelled by vendor"):
+        if self._ledger.cancel_license(license_id, reason="Stopped by vendor"):
             self._registry_log.append(
-                f"[{datetime.now():%H:%M:%S}] Cancelled license {license_id}"
+                f"[{datetime.now():%H:%M:%S}] Stopped license {license_id}"
             )
             self._refresh_all()
         else:
-            QMessageBox.warning(self, "Not Found", "License ID not found.")
+            QMessageBox.warning(self, "Not Found", "License not found.")
+
+    def _on_delete_selected(self) -> None:
+        rec = self._selected_record()
+        if rec is None:
+            QMessageBox.information(self, "Select Row", "Select a row first.")
+            return
+
+        if rec.status != "cancelled":
+            QMessageBox.information(
+                self,
+                "Stopped Rows Only",
+                "You can only delete rows with status Stopped.\n\n"
+                "Click Stop License first, then Delete Row.",
+            )
+            return
+
+        if QMessageBox.question(
+            self,
+            "Delete Row",
+            f"Remove this stopped row from your list?\n\n"
+            f"Customer: {rec.customer_name}\n"
+            f"License ID: {rec.license_id}\n\n"
+            "This removes it from your table and block list export.\n"
+            "If you already shipped a block list in the customer app, update the app to match.",
+        ) != QMessageBox.StandardButton.Yes:
+            return
+
+        if self._ledger.delete_cancelled_license(rec.license_id):
+            self._registry_log.append(
+                f"[{datetime.now():%H:%M:%S}] Deleted stopped row {rec.license_id}"
+            )
+            self._refresh_all()
+        else:
+            QMessageBox.warning(self, "Cannot Delete", "This row could not be deleted.")
 
     def _on_allow_reissue(self) -> None:
         rec = self._selected_record()
@@ -1103,39 +1147,39 @@ class AdminLicenseWindow(QMainWindow):
                 QMessageBox.information(
                     self,
                     "Already Allowed",
-                    "Re-issue is already allowed for this Machine ID.\n\n"
-                    "Go to Generate Key and create a new license.",
+                    "You already allowed a new key for this PC.\n\n"
+                    "Go to Generate Key and make a new license.",
                 )
             else:
                 QMessageBox.information(
                     self,
                     "Not Blocked",
-                    "This Machine ID has no cancelled license blocking new keys.",
+                    "This PC is not blocked. No stopped key is blocking new keys.",
                 )
             return
 
         confirm = QMessageBox.question(
             self,
-            "Allow Re-issue",
-            f"Allow new license keys for this PC?\n\n"
+            "Allow New Key",
+            f"Allow a new key for this PC?\n\n"
             f"Customer: {rec.customer_name}\n"
             f"Machine ID: {machine_id}\n\n"
-            "Cancelled license(s) remain on the revocation list.\n"
-            "Only new key generation is unblocked.",
+            "Stopped keys stay on the block list for the customer app.\n"
+            "You can make a new key on the Generate Key tab.",
         )
         if confirm != QMessageBox.StandardButton.Yes:
             return
 
-        if self._ledger.unblock_machine(machine_id, reason="Vendor approved re-issue"):
+        if self._ledger.unblock_machine(machine_id, reason="Vendor allowed new key"):
             self._registry_log.append(
-                f"[{datetime.now():%H:%M:%S}] Allowed re-issue for {rec.customer_name} "
+                f"[{datetime.now():%H:%M:%S}] Allowed new key for {rec.customer_name} "
                 f"({machine_id[:16]}...)"
             )
             self._refresh_all()
             QMessageBox.information(
                 self,
-                "Re-issue Allowed",
-                "You can now generate a new key for this Machine ID on the Generate Key tab.",
+                "New Key Allowed",
+                "You can now make a new key for this PC on the Generate Key tab.",
             )
         else:
             QMessageBox.warning(self, "Failed", "Could not unblock this Machine ID.")
@@ -1151,13 +1195,13 @@ class AdminLicenseWindow(QMainWindow):
     def _on_export_revocation(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
             self,
-            "Export Revocation List",
-            "revoked_licenses.json",
+            "Export Block List",
+            "blocked_licenses.json",
             "JSON Files (*.json)",
         )
         if path:
             self._ledger.export_revocation_manifest(Path(path))
-            QMessageBox.information(self, "Exported", f"Revocation list saved to {path}")
+            QMessageBox.information(self, "Exported", f"Block list saved to {path}")
 
     def _on_copy_revocation_python(self) -> None:
         snippet = self._ledger.export_revocation_python_snippet()
@@ -1165,8 +1209,8 @@ class AdminLicenseWindow(QMainWindow):
         QMessageBox.information(
             self,
             "Copied",
-            "Python snippet copied. Paste into src/licensing/revocation.py "
-            "as EMBEDDED_REVOKED_LICENSE_IDS before your next release.",
+            "Python code copied. Paste into src/licensing/revocation.py "
+            "as EMBEDDED_REVOKED_LICENSE_IDS before your next app update.",
         )
 
     def _apply_styles(self) -> None:
@@ -1186,8 +1230,9 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setApplicationName("TileVision AI — Vendor License Manager")
-    if APP_ICON_PATH.exists():
-        app.setWindowIcon(QIcon(str(APP_ICON_PATH)))
+    icon_path = app_icon_path()
+    if icon_path is not None:
+        app.setWindowIcon(QIcon(str(icon_path)))
     window = AdminLicenseWindow()
     window.showMaximized()
     return app.exec()

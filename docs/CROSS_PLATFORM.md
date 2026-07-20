@@ -183,4 +183,4 @@ The admin license manager runs on all platforms:
 python admin_tool/main.py
 ```
 
-Vendor keys and ledger are stored in `~/.tilevision_ai_vendor/`. Automatic backup looks for OneDrive, iCloud Drive, Dropbox, or Documents.
+Vendor keys and ledger are stored in `~/.tilevision_ai_vendor/`. Click **Backup Now** in the admin tool to save a zip to OneDrive, iCloud Drive, Dropbox, or Documents.

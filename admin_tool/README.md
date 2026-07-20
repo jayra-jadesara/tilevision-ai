@@ -1,79 +1,72 @@
 # TileVision AI — Admin License Manager
 
-A standalone tool for **you (the vendor)** to issue offline license keys to
-customers. This is separate from the customer-facing application and must
-**never** be bundled into the customer installer — it can load your private
-signing key.
+**For you (the vendor) only.** Do not give this tool to customers.
 
-Full workflow and production checklist: [docs/VENDOR_LICENSING.md](../docs/VENDOR_LICENSING.md)
+**Works on Windows and Mac.** Same features on both. Data saves in your home folder:
+- Windows: `C:\Users\You\.tilevision_ai_vendor\`
+- Mac: `/Users/You/.tilevision_ai_vendor/`
 
-## Setup (one-time)
+Full guide: [docs/VENDOR_LICENSING.md](../docs/VENDOR_LICENSING.md)
 
-1. Run the tool:
-   ```
-   python admin_tool/main.py
-   ```
-2. Click **"Generate New Keypair"**. Save the private key file somewhere
-   safe and offline (e.g. an encrypted USB drive) — never commit it to git,
-   never put it on the same machine you build installers on if you can
-   avoid it.
-3. Copy the public key PEM shown in the output panel into
-   `src/licensing/validator.py`, replacing the placeholder
-   `EMBEDDED_PUBLIC_KEY_PEM` value (or use **Show Public Key for Customer App** later).
-4. Rebuild/re-package the customer application with the real public key
-   embedded.
+## Start the tool
 
-From then on, each time you open the Admin tool the signing key loads automatically from
-`%USERPROFILE%\.tilevision_ai_vendor\vendor_private_key.pem`. Use **Import Key File**
-only if you need to copy a key from elsewhere into that folder.
+```
+python admin_tool/main.py
+```
 
-The tool also writes `vendor_public_key.pem` beside the private key so the customer app
-can verify keys on the same PC during development.
+On Mac you can also use:
+```
+python3 admin_tool/main.py
+```
 
-## Issuing a license
+## First-time setup
 
-1. Get the customer's **Machine ID** (Hardware Fingerprint) — they copy it from the
-   Activation screen in their copy of the app.
-2. Fill in Customer Name, paste their Machine ID, pick a License Type (trial or full).
-3. Click **Generate License Key**, then **Copy to Clipboard**.
-4. Send the key to the customer; they paste it into their Activation screen.
+1. Click **Create New Key (First Setup)** and save your private key somewhere safe.
+2. Click **Show Public Key for Customer App** and put that key in `src/licensing/validator.py`.
+3. Rebuild the customer app with that public key inside.
+
+After that, your signing key loads automatically each time you open the tool.
+
+Click **Backup Now** when you want a backup copy. Nothing is backed up until you click that button.
+
+## Make a license key
+
+1. Customer copies **Machine ID** from their TileVision app (Activation screen).
+2. **Generate Key** tab → customer name, Machine ID, license type → **Generate License Key**.
+3. **Copy to Clipboard** → send the key to the customer.
 
 ## Customers & Licenses tab
 
-| Filter | Use |
-|--------|-----|
-| **Current (1 per PC)** | Default — one active row per Machine ID |
-| **All history** | Every key ever issued |
+| Filter | What it shows |
+|--------|----------------|
+| **Current (1 per PC)** | One active row per PC |
+| **All history** | Every key you ever made |
 | **Trial (active)** | Active trials only |
-| **Suspended** | Cancelled keys |
-| **Old key** | Replaced by renewal |
+| **Stopped** | Keys you blocked |
+| **Old key** | Replaced when you made a newer key |
 
-**Actions:**
+### Buttons (simple guide)
 
-- **Renew / Extend Selected** — generates a new key; old row becomes **Old key**
-- **Cancel Selected** — marks **Suspended**; blocks new keys for that Machine ID
-- **Allow Re-issue** — clears the block after cancellation so you can issue a new key
-- **Export CSV** / **Export Revocation JSON** — accounting and app updates
+| Button | What it does |
+|--------|----------------|
+| **Extend License** | Make a new key for the same customer and PC. Old row becomes **Old key**. |
+| **Copy Key Again** | Copy the saved key from the selected row. |
+| **Stop License** | Block this key. Customer cannot get a new key for that PC until you click **Allow New Key**. |
+| **Delete Row** | Remove a **Stopped** row from your list. Only works on Stopped rows. |
+| **Allow New Key** | After stopping a key, use this so you can make a new key for the same PC. |
+| **Export CSV** | Spreadsheet of all licenses. |
+| **Export Block List** | JSON file of stopped keys for the next customer app update. |
+| **Copy Block List Code** | Python code to paste into the customer app before release. |
 
-## What this tool can and can't do (offline licensing limitations)
+## Important (offline apps)
 
-Because the end-user app never phones home (per the "fully offline, no
-cloud" requirement), there's no remote kill-switch. Concretely:
+The customer app does not phone home. So:
 
-| Spec item | How it actually works here |
-|---|---|
-| Generate License Keys | ✅ As above. |
-| Extend License / Change Expiry | **Renew / Extend** — new key; old becomes **Old key**. |
-| Generate Lifetime License | ✅ Select "Lifetime" — uses a far-future sentinel expiry date. |
-| Deactivate License | ⚠️ **Cancel Selected** + revocation list in next app update. Already-activated offline installs keep working until expiry or update. |
-| Reset Hardware Binding | Generate a new key using the customer's **new** Machine ID. |
+- **Stop License** blocks new keys and adds the key to the block list.
+- PCs already using the key keep working until it expires, or until you ship an app update with the block list.
+- **Delete Row** removes the row from your table. If you already shipped a block list, update the app to match.
 
-## Security notes
+## Security
 
-- The wildcard "any machine" checkbox produces a `hardware_hash: "*"` key.
-  The customer application only honors this when it's built with
-  `TILEVISION_DEV_MODE=1` set — a real production build **rejects** wildcard
-  keys outright. It exists purely for your own internal testing.
-- Keep your private key file offline. Anyone who has it can mint valid
-  licenses for any customer.
-- Automatic backup zip is saved to OneDrive or Documents — see main docs.
+- Never share your private key file.
+- The "any machine" (wildcard) checkbox is for your testing only — production builds reject it.

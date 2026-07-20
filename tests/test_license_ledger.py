@@ -140,6 +140,35 @@ def test_renew_supersedes_old_license(tmp_path):
     assert old.status == "superseded"
 
 
+def test_delete_cancelled_license(tmp_path):
+    ledger = LicenseLedger(db_path=tmp_path / "ledger.db")
+    ledger.record_issue(
+        license_id="id-1",
+        customer_name="Acme Tiles",
+        machine_id="machine-abc",
+        license_type="1-Year",
+        expires_at="2027-01-01",
+        license_key="fake-key-data",
+    )
+    ledger.cancel_license("id-1")
+    assert ledger.active_revoked_ids() == ["id-1"]
+
+    assert ledger.delete_cancelled_license("id-1")
+    assert ledger.get_license("id-1") is None
+    assert ledger.active_revoked_ids() == []
+    assert not ledger.is_machine_blocked("machine-abc")
+
+    ledger.record_issue(
+        license_id="id-2",
+        customer_name="Acme Tiles",
+        machine_id="machine-abc",
+        license_type="1-Year",
+        expires_at="2028-01-01",
+        license_key="key-2",
+    )
+    assert not ledger.delete_cancelled_license("id-2")
+
+
 def test_list_current_per_machine_shows_latest_active_only(tmp_path):
     ledger = LicenseLedger(db_path=tmp_path / "ledger.db")
     ledger.record_issue(
