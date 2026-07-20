@@ -58,6 +58,22 @@ def pytest_configure():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
+def pytest_collection_modifyitems(config, items):
+    """Skip FAISS search tests on macOS GitHub Actions (faiss-cpu abort trap)."""
+    import os
+    import sys
+
+    if sys.platform != "darwin" or os.environ.get("CI") != "true":
+        return
+
+    skip = pytest.mark.skip(
+        reason="FAISS search aborts on macOS GitHub Actions runners"
+    )
+    for item in items:
+        if "faiss_search" in item.keywords:
+            item.add_marker(skip)
+
+
 @pytest.fixture
 def catalogue_master_service(tmp_path):
     """In-memory SQLite export profile service for UI tests."""

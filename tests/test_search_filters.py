@@ -21,6 +21,8 @@ from src.data.sqlite_repository import SQLiteImageRepository
 from src.utils.image_utils import compute_sha256, compute_dhash
 from tests.fake_ai import FakeEmbedder, FakeFeatureExtractor, make_tile_features
 
+pytestmark = pytest.mark.faiss_search
+
 
 @pytest.fixture()
 def env(tmp_path):

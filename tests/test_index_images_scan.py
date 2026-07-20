@@ -90,6 +90,7 @@ def test_second_scan_of_unchanged_folder_skips_everything(env):
     assert env["embedder"].calls == calls_after_first
 
 
+@pytest.mark.faiss_search
 def test_changed_file_reindexes_without_duplicating_vector(env):
     d = env["images_dir"]
     target = d / "a.jpg"
@@ -108,11 +109,10 @@ def test_changed_file_reindexes_without_duplicating_vector(env):
     assert env["vector_index"]._index.ntotal == 1
 
     tile = env["repo"].get_all()[0]
-    if sys.platform != "darwin":
-        ids, scores = env["vector_index"].search_vectors(
-            env["embedder"].get_embedding(str(target)), top_k=5
-        )
-        assert ids.count(tile.id) == 1
+    ids, scores = env["vector_index"].search_vectors(
+        env["embedder"].get_embedding(str(target)), top_k=5
+    )
+    assert ids.count(tile.id) == 1
 
 
 def test_checkpoint_saves_periodically_not_per_file(env, monkeypatch):

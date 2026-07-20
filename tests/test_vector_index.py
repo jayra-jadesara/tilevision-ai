@@ -46,6 +46,7 @@ def test_add_vectors_with_persist_true_writes_to_disk(manager):
     assert manager._index_path.exists()
 
 
+@pytest.mark.faiss_search
 def test_update_vectors_replaces_rather_than_duplicates(manager):
     manager.update_vectors([1], [[1.0, 0.0, 0.0, 0.0]], persist=False)
     assert manager._index.ntotal == 1
@@ -66,6 +67,7 @@ def test_update_vectors_safe_for_brand_new_id(manager):
     assert manager._index.ntotal == 1
 
 
+@pytest.mark.faiss_search
 def test_search_after_update_returns_fresh_embedding(manager):
     manager.update_vectors([1], [[1.0, 0.0, 0.0, 0.0]], persist=False)
     manager.update_vectors([1], [[0.0, 0.0, 1.0, 0.0]], persist=False)
