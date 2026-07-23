@@ -16,20 +16,21 @@ if [[ -n "${TILEVISION_DEV_MODE:-}" ]]; then
   exit 1
 fi
 
-# Intel x64 runs on Intel Macs and on Apple Silicon via Rosetta.
+# Intel x64 runs on Intel Macs. On Apple Silicon build hosts use an isolated x86_64 venv.
 if [[ "$(uname -m)" == "arm64" ]]; then
-  echo "Apple Silicon detected — building x86_64 for Intel Mac showrooms (Rosetta on M-series)."
-  ARCH_PREFIX="arch -x86_64"
+  echo "Apple Silicon detected — building x86_64 in Rosetta venv for Intel Mac showrooms."
+  PY="$(command -v python3)"
+  VENV=".venv-macos-x64"
+  arch -x86_64 "$PY" -m venv "$VENV"
+  PYTHON="arch -x86_64 $VENV/bin/python"
 else
-  ARCH_PREFIX=""
+  PYTHON="python3"
 fi
-
-PYTHON="${ARCH_PREFIX} python3"
 
 echo
 echo "[1/4] Checking Python dependencies..."
 $PYTHON -m pip install --upgrade pip >/dev/null
-$PYTHON -m pip install -r requirements.txt pyinstaller
+$PYTHON -m pip install --no-cache-dir -r requirements.txt pyinstaller
 
 echo
 echo "[2/4] Ensuring DINOv2 model weights..."

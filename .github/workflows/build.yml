@@ -107,24 +107,23 @@ jobs:
             artifact: tilevision-macos-intel
             dmg: TileVisionAI-macOS-Intel.dmg
             verify: x86_64
-            arch_prefix: arch -x86_64
           - arch: arm64
             label: Apple Silicon
             artifact: tilevision-macos-arm64
             dmg: TileVisionAI-macOS-AppleSilicon.dmg
             verify: arm64
-            arch_prefix: ""
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Python 3.12 (${{ matrix.arch }})
+        id: setup-python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           architecture: ${{ matrix.arch }}
-          cache: pip
-          cache-dependency-path: requirements.txt
+          # Do not share pip cache between arm64 and x64 — wheels are arch-specific.
+          cache: false
 
       - name: Cache DINOv2 model weights
         id: model-cache
@@ -133,29 +132,49 @@ jobs:
           path: model_weights/dinov2-large
           key: dinov2-large-${{ hashFiles('scripts/download_dinov2_model.py') }}
 
-      - name: Verify Python architecture (${{ matrix.label }})
+      - name: Create isolated venv and install dependencies
         shell: bash
         run: |
-          PYTHON="${{ matrix.arch_prefix }} python"
-          $PYTHON -c "import platform, struct; print('python:', platform.machine(), struct.calcsize('P') * 8)"
+          set -euo pipefail
+          PY="${{ steps.setup-python.outputs.python-path }}"
+          VENV=".venv-macos-${{ matrix.arch }}"
+          echo "Using setup-python at: $PY"
+          file "$PY"
+
           if [ "${{ matrix.arch }}" = "x64" ]; then
-            $PYTHON -c "import platform; assert platform.machine() in ('x86_64', 'AMD64'), platform.machine()"
+            arch -x86_64 "$PY" -m venv "$VENV"
+            RUN="arch -x86_64 $VENV/bin/python"
           else
-            $PYTHON -c "import platform; assert platform.machine() == 'arm64', platform.machine()"
+            "$PY" -m venv "$VENV"
+            RUN="$VENV/bin/python"
           fi
 
-      - name: Install dependencies
+          $RUN -m pip install --upgrade pip
+          $RUN -m pip install --no-cache-dir -r requirements.txt pyinstaller
+          echo "MACOS_PYTHON=$RUN" >> "$GITHUB_ENV"
+          echo "MACOS_VENV=$VENV" >> "$GITHUB_ENV"
+
+      - name: Verify native libraries match target architecture
         shell: bash
         run: |
-          PYTHON="${{ matrix.arch_prefix }} python"
-          $PYTHON -m pip install --upgrade pip
-          $PYTHON -m pip install -r requirements.txt pyinstaller
+          set -euo pipefail
+          $MACOS_PYTHON -c "import platform; print('python:', platform.machine())"
+          if [ "${{ matrix.arch }}" = "x64" ]; then
+            $MACOS_PYTHON -c "import platform; assert platform.machine() in ('x86_64', 'AMD64'), platform.machine()"
+          else
+            $MACOS_PYTHON -c "import platform; assert platform.machine() == 'arm64', platform.machine()"
+          fi
+
+          RUST_SO="$(find "$MACOS_VENV" -name '_rust.abi3.so' | head -n 1)"
+          echo "cryptography native lib: $RUST_SO"
+          file "$RUST_SO"
+          file "$RUST_SO" | grep -q "${{ matrix.verify }}"
 
       - name: Build with PyInstaller
         shell: bash
         env:
           TILEVISION_OFFLINE_MODEL: "1"
-        run: ${{ matrix.arch_prefix }} python -m PyInstaller packaging/tilevision_mac.spec --clean --noconfirm
+        run: $MACOS_PYTHON -m PyInstaller packaging/tilevision_mac.spec --clean --noconfirm
 
       - name: Verify Mac app architecture (${{ matrix.label }})
         run: |
