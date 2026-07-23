@@ -317,23 +317,31 @@ jobs:
           cp "$WIN_EXE" "TileVisionAI-Setup-${VERSION}.exe"
           cp "$INTEL_DMG" "TileVisionAI-macOS-Intel-${VERSION}.dmg"
           cp "$ARM_DMG" "TileVisionAI-macOS-AppleSilicon-${VERSION}.dmg"
+          cp packaging/MAC_INSTALL.txt "TileVisionAI-macOS-READ-ME-FIRST.txt"
 
-          bash scripts/package_mac_universal.sh \
-            "TileVisionAI-macOS-Intel-${VERSION}.dmg" \
-            "TileVisionAI-macOS-AppleSilicon-${VERSION}.dmg" \
-            "TileVisionAI-macOS-${VERSION}.zip"
-
-          ls -lh TileVisionAI-*
+          # GitHub rejects release assets >= 2 GiB (2147483648 bytes).
+          MAX_BYTES=$((2 * 1024 * 1024 * 1024 - 64 * 1024 * 1024))
+          for f in TileVisionAI-*; do
+            size=$(stat -c%s "$f")
+            if [ "$size" -gt "$MAX_BYTES" ]; then
+              echo "ERROR: $f is $size bytes — GitHub limit is 2147483648 bytes per file." >&2
+              echo "Do not bundle both Mac DMGs into one zip; upload them separately." >&2
+              exit 1
+            fi
+            echo "$(numfmt --to=iec-i --suffix=B "$size")  $f"
+          done
 
       - name: Generate update manifest
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          BASE="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}"
           python scripts/generate_update_manifest.py \
             "$VERSION" \
-            "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/TileVisionAI-Setup-${VERSION}.exe" \
-            "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/TileVisionAI-macOS-${VERSION}.zip" \
-            "TileVision AI ${GITHUB_REF_NAME} — Intel and Apple Silicon Mac builds included." \
+            "${BASE}/TileVisionAI-Setup-${VERSION}.exe" \
+            "${BASE}/TileVisionAI-macOS-Intel-${VERSION}.dmg" \
+            "${BASE}/TileVisionAI-macOS-AppleSilicon-${VERSION}.dmg" \
+            "TileVision AI ${GITHUB_REF_NAME} — separate Intel and Apple Silicon Mac installers." \
             > update_manifest.json
           cat update_manifest.json
 
@@ -346,13 +354,18 @@ jobs:
           body: |
             ## Mac customers — all models supported
 
-            Download **TileVisionAI-macOS-*.zip** from this release. It contains:
-            - **Intel .dmg** — Intel iMac / Intel MacBook (Core i5, i7, i9)
-            - **Apple Silicon .dmg** — M1, M2, M3, M4 Macs
-            - **READ ME FIRST.txt** — tells customer which file to open
+            Download the **correct .dmg** for your Mac (each file is under GitHub's 2 GB limit):
+
+            | File | For |
+            |------|-----|
+            | **TileVisionAI-macOS-Intel-*.dmg** | Intel iMac / Intel MacBook (Core i5, i7, i9) |
+            | **TileVisionAI-macOS-AppleSilicon-*.dmg** | M1, M2, M3, M4 Macs |
+            | **TileVisionAI-macOS-READ-ME-FIRST.txt** | Quick guide — how to pick the right file |
+
+            First launch: Right-click app → **Open** → **Open**
           files: |
             TileVisionAI-Setup-*.exe
             TileVisionAI-macOS-Intel-*.dmg
             TileVisionAI-macOS-AppleSilicon-*.dmg
-            TileVisionAI-macOS-*.zip
+            TileVisionAI-macOS-READ-ME-FIRST.txt
             update_manifest.json

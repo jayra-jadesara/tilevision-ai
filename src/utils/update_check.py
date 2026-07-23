@@ -12,7 +12,8 @@ Manifest format (update_manifest.json):
       "release_notes": "Bug fixes and improvements.",
       "downloads": {
         "windows": "https://.../TileVisionAI-Setup-1.0.1.exe",
-        "macos": "https://.../TileVisionAI-macOS-1.0.1.dmg"
+        "macos_intel": "https://.../TileVisionAI-macOS-Intel-1.0.1.dmg",
+        "macos_arm64": "https://.../TileVisionAI-macOS-AppleSilicon-1.0.1.dmg"
       }
     }
 """
@@ -80,8 +81,27 @@ def platform_download_key() -> str:
     if is_windows():
         return "windows"
     if is_macos():
-        return "macos"
+        import platform
+
+        if platform.machine() == "arm64":
+            return "macos_arm64"
+        return "macos_intel"
     return "linux"
+
+
+def resolve_download_url(downloads: dict, platform_key: str) -> str:
+    """Pick the best download URL for this platform, with Mac arch fallbacks."""
+    candidates = [platform_key]
+    if platform_key.startswith("macos"):
+        candidates.extend(["macos", "macos_intel", "macos_arm64"])
+    elif platform_key == "linux":
+        candidates.append("url")
+
+    for key in candidates:
+        url = str(downloads.get(key) or "").strip()
+        if url:
+            return url
+    return ""
 
 
 def fetch_update_manifest(
@@ -125,7 +145,7 @@ def check_for_updates(
         downloads = {}
 
     platform_key = platform_download_key()
-    download_url = str(downloads.get(platform_key) or downloads.get("url") or "").strip()
+    download_url = resolve_download_url(downloads, platform_key)
     if not download_url:
         raise ValueError(f"Update manifest has no download URL for '{platform_key}'.")
 

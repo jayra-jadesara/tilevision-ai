@@ -148,7 +148,7 @@ def test_mac_font_icon_and_update_key(mac_platform):
     assert default_ui_font_family() == ".AppleSystemUIFont"
     icon = app_icon_path()
     assert icon is not None and icon.suffix.lower() in {".png", ".ico"}
-    assert platform_download_key() == "macos"
+    assert platform_download_key() in ("macos_intel", "macos_arm64")
 
 
 def test_mac_heic_supported_for_showroom_photos(mac_platform, monkeypatch):

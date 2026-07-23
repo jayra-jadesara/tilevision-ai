@@ -8,9 +8,10 @@ import sys
 
 
 def main() -> int:
-    if len(sys.argv) < 4:
+    if len(sys.argv) < 5:
         print(
-            "Usage: generate_update_manifest.py VERSION WINDOWS_URL MACOS_URL [NOTES]",
+            "Usage: generate_update_manifest.py VERSION WINDOWS_URL "
+            "MACOS_INTEL_URL MACOS_ARM64_URL [NOTES]",
             file=sys.stderr,
         )
         return 1
@@ -18,10 +19,11 @@ def main() -> int:
     version = sys.argv[1].lstrip("v")
     manifest = {
         "version": version,
-        "release_notes": sys.argv[4] if len(sys.argv) > 4 else "",
+        "release_notes": sys.argv[5] if len(sys.argv) > 5 else "",
         "downloads": {
             "windows": sys.argv[2],
-            "macos": sys.argv[3],
+            "macos_intel": sys.argv[3],
+            "macos_arm64": sys.argv[4],
         },
     }
     json.dump(manifest, sys.stdout, indent=2)

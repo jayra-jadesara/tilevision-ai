@@ -7,6 +7,7 @@ identically on both platforms.
 
 from __future__ import annotations
 
+import platform
 import sys
 import types
 from pathlib import Path
@@ -147,8 +148,13 @@ def test_platform_font_and_icon(platform_name, monkeypatch):
 
 def test_update_download_key_matches_platform(platform_name, monkeypatch):
     _simulate_platform(monkeypatch, platform_name)
+    if platform_name == "darwin":
+        monkeypatch.setattr(platform, "machine", lambda: "arm64")
     key = platform_download_key()
-    assert key == ("windows" if platform_name == "win32" else "macos")
+    if platform_name == "win32":
+        assert key == "windows"
+    else:
+        assert key == "macos_arm64"
 
 
 def test_index_page_loads(full_main_window):
