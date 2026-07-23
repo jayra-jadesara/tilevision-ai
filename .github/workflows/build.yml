@@ -11,8 +11,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  prepare-model:
+    name: Download DINOv2 model (shared cache)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Cache DINOv2 model weights
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: model_weights/dinov2-large
+          key: dinov2-large-${{ hashFiles('scripts/download_dinov2_model.py') }}
+
+      - name: Install dependencies
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: pip install -r requirements.txt
+
+      - name: Download DINOv2 weights
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: python scripts/download_dinov2_model.py
+
   build-windows:
     name: Windows (PyInstaller + Inno Setup)
+    needs: prepare-model
     runs-on: windows-latest
     timeout-minutes: 120
 
@@ -65,6 +95,7 @@ jobs:
 
   build-macos:
     name: macOS (${{ matrix.label }})
+    needs: prepare-model
     runs-on: macos-latest
     timeout-minutes: 120
     strategy:
@@ -100,7 +131,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: model_weights/dinov2-large
-          key: dinov2-large-${{ matrix.arch }}-${{ hashFiles('scripts/download_dinov2_model.py') }}
+          key: dinov2-large-${{ hashFiles('scripts/download_dinov2_model.py') }}
 
       - name: Verify Python architecture (${{ matrix.label }})
         shell: bash
@@ -119,11 +150,6 @@ jobs:
           PYTHON="${{ matrix.arch_prefix }} python"
           $PYTHON -m pip install --upgrade pip
           $PYTHON -m pip install -r requirements.txt pyinstaller
-
-      - name: Download DINOv2 weights
-        if: steps.model-cache.outputs.cache-hit != 'true'
-        shell: bash
-        run: ${{ matrix.arch_prefix }} python scripts/download_dinov2_model.py
 
       - name: Build with PyInstaller
         shell: bash
@@ -231,6 +257,7 @@ jobs:
 
   build-linux:
     name: Linux (binary)
+    needs: prepare-model
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
