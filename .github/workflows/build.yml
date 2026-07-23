@@ -110,6 +110,10 @@ jobs:
 
       - name: Verify native libraries (x86_64)
         shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+          OMP_NUM_THREADS: "1"
+          KMP_DUPLICATE_LIB_OK: "TRUE"
         run: bash scripts/verify_mac_native_libs.sh x86_64
 
       - name: Build with PyInstaller
@@ -175,6 +179,10 @@ jobs:
 
       - name: Verify native libraries (arm64)
         shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+          OMP_NUM_THREADS: "1"
+          KMP_DUPLICATE_LIB_OK: "TRUE"
         run: bash scripts/verify_mac_native_libs.sh arm64
 
       - name: Build with PyInstaller

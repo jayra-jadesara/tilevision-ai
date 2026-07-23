@@ -12,42 +12,43 @@ EXPECTED="${1:?expected arch: x86_64 or arm64}"
 MACOS_PYTHON="${MACOS_PYTHON:?set MACOS_PYTHON}"
 MACOS_VENV="${MACOS_VENV:?set MACOS_VENV}"
 
+export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-offscreen}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+export KMP_DUPLICATE_LIB_OK="${KMP_DUPLICATE_LIB_OK:-TRUE}"
+
 echo "=== Verifying Mac build environment ($EXPECTED) ==="
+echo "venv: $MACOS_VENV"
 
-$MACOS_PYTHON -c "import platform; print('python machine:', platform.machine())"
-if [[ "$EXPECTED" == "x86_64" ]]; then
-  $MACOS_PYTHON -c "import platform; assert platform.machine() in ('x86_64', 'AMD64'), platform.machine()"
-else
-  $MACOS_PYTHON -c "import platform; assert platform.machine() == 'arm64', platform.machine()"
-fi
-
-# Import smoke test — catches wrong-arch wheels before PyInstaller spends 10+ minutes.
 $MACOS_PYTHON -c "
+import platform
+import sys
+
+machine = platform.machine()
+print('python machine:', machine)
+expected = '${EXPECTED}'
+if expected == 'x86_64':
+    assert machine in ('x86_64', 'AMD64'), machine
+else:
+    assert machine == 'arm64', machine
+
+# If these imports work, native wheels match this Python architecture.
 import cryptography
 import faiss
 import torch
-import PySide6.QtCore
+import PySide6.QtCore  # noqa: F401
+
 print('imports ok: cryptography, faiss, torch, PySide6')
-print('torch:', torch.__version__, 'mps:', getattr(torch.backends.mps, 'is_available', lambda: False)())
+print('torch:', torch.__version__)
+if expected == 'arm64':
+    print('mps available:', torch.backends.mps.is_available())
 "
 
-check_lib() {
-  local pattern="$1"
-  local label="$2"
-  local found
-  found="$(find "$MACOS_VENV" -path "$pattern" 2>/dev/null | head -n 1 || true)"
-  if [[ -z "$found" ]]; then
-    echo "WARN: $label not found (pattern: $pattern)" >&2
-    return 0
-  fi
-  echo "$label: $found"
-  file "$found"
-  file "$found" | grep -q "$EXPECTED"
-}
+# Optional: spot-check cryptography .so (most common cross-arch mistake).
+RUST_SO="$(find "$MACOS_VENV" -path '*/cryptography/hazmat/bindings/_rust.abi3.so' 2>/dev/null | head -n 1 || true)"
+if [[ -n "$RUST_SO" ]]; then
+  echo "cryptography: $RUST_SO"
+  file "$RUST_SO"
+  file "$RUST_SO" | grep -qE "${EXPECTED}|universal"
+fi
 
-check_lib "*/cryptography/hazmat/bindings/_rust.abi3.so" "cryptography"
-check_lib "*/faiss/_swigfaiss*.so" "faiss"
-check_lib "*/torch/lib/libtorch_python.dylib" "torch"
-check_lib "*/PySide6/QtCore.abi3.so" "PySide6"
-
-echo "=== All native libs match $EXPECTED ==="
+echo "=== Mac build environment OK ($EXPECTED) ==="
