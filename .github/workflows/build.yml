@@ -97,22 +97,20 @@ jobs:
           path: model_weights/dinov2-large
           key: dinov2-large-${{ hashFiles('scripts/download_dinov2_model.py') }}
 
-      - name: Create isolated venv and install dependencies
+      - name: Install dependencies (Intel x86_64)
         shell: bash
         env:
           PYTHON_SETUP_PATH: ${{ steps.setup-python.outputs.python-path }}
         run: |
           set -euo pipefail
-          source scripts/setup_mac_build_env.sh x64
-          $MACOS_PYTHON -m pip install --upgrade pip
-          $MACOS_PYTHON -m pip install --no-cache-dir -r requirements.txt pyinstaller
-          echo "MACOS_PYTHON=$MACOS_PYTHON" >> "$GITHUB_ENV"
-          echo "MACOS_VENV=$MACOS_VENV" >> "$GITHUB_ENV"
+          source scripts/install_mac_deps.sh x64
+          echo "MACOS_BUILD_ARCH=$MACOS_BUILD_ARCH" >> "$GITHUB_ENV"
+          echo "MACOS_PYTHON_PATH=$MACOS_PYTHON_PATH" >> "$GITHUB_ENV"
 
       - name: Download DINOv2 weights
         if: steps.model-cache.outputs.cache-hit != 'true'
         shell: bash
-        run: $MACOS_PYTHON scripts/download_dinov2_model.py
+        run: bash scripts/macos_build_python.sh scripts/download_dinov2_model.py
 
       - name: Verify native libraries (x86_64)
         shell: bash
@@ -126,7 +124,7 @@ jobs:
         shell: bash
         env:
           TILEVISION_OFFLINE_MODEL: "1"
-        run: $MACOS_PYTHON -m PyInstaller packaging/tilevision_mac.spec --clean --noconfirm
+        run: bash scripts/macos_build_python.sh -m PyInstaller packaging/tilevision_mac.spec --clean --noconfirm
 
       - name: Verify frozen Mac app
         run: bash scripts/verify_frozen_mac_app.sh dist/TileVisionAI.app x86_64
@@ -169,22 +167,20 @@ jobs:
           path: model_weights/dinov2-large
           key: dinov2-large-${{ hashFiles('scripts/download_dinov2_model.py') }}
 
-      - name: Create isolated venv and install dependencies
+      - name: Install dependencies (Apple Silicon arm64)
         shell: bash
         env:
           PYTHON_SETUP_PATH: ${{ steps.setup-python.outputs.python-path }}
         run: |
           set -euo pipefail
-          source scripts/setup_mac_build_env.sh arm64
-          $MACOS_PYTHON -m pip install --upgrade pip
-          $MACOS_PYTHON -m pip install --no-cache-dir -r requirements.txt pyinstaller
-          echo "MACOS_PYTHON=$MACOS_PYTHON" >> "$GITHUB_ENV"
-          echo "MACOS_VENV=$MACOS_VENV" >> "$GITHUB_ENV"
+          source scripts/install_mac_deps.sh arm64
+          echo "MACOS_BUILD_ARCH=$MACOS_BUILD_ARCH" >> "$GITHUB_ENV"
+          echo "MACOS_PYTHON_PATH=$MACOS_PYTHON_PATH" >> "$GITHUB_ENV"
 
       - name: Download DINOv2 weights
         if: steps.model-cache.outputs.cache-hit != 'true'
         shell: bash
-        run: $MACOS_PYTHON scripts/download_dinov2_model.py
+        run: bash scripts/macos_build_python.sh scripts/download_dinov2_model.py
 
       - name: Verify native libraries (arm64)
         shell: bash
@@ -198,7 +194,7 @@ jobs:
         shell: bash
         env:
           TILEVISION_OFFLINE_MODEL: "1"
-        run: $MACOS_PYTHON -m PyInstaller packaging/tilevision_mac.spec --clean --noconfirm
+        run: bash scripts/macos_build_python.sh -m PyInstaller packaging/tilevision_mac.spec --clean --noconfirm
 
       - name: Verify frozen Mac app
         run: bash scripts/verify_frozen_mac_app.sh dist/TileVisionAI.app arm64

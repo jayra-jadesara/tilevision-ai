@@ -45,11 +45,10 @@ build_one() {
   # Local: use python3 from PATH. CI sets PYTHON_SETUP_PATH before calling this script.
   export PYTHON_SETUP_PATH="${PYTHON_SETUP_PATH:-$(command -v python3)}"
   # shellcheck disable=SC1091
-  source scripts/setup_mac_build_env.sh "$arch"
+  source scripts/install_mac_deps.sh "$arch"
+  export MACOS_BUILD_ARCH="$arch"
 
-  echo "[1/5] Installing dependencies into isolated venv..."
-  $MACOS_PYTHON -m pip install --upgrade pip >/dev/null
-  $MACOS_PYTHON -m pip install --no-cache-dir -r requirements.txt pyinstaller
+  echo "[1/5] Dependencies installed (install_mac_deps.sh)"
 
   echo "[2/5] Verifying native library architecture..."
   bash scripts/verify_mac_native_libs.sh "$verify"
@@ -58,7 +57,7 @@ build_one() {
   MODEL_DIR="model_weights/dinov2-large"
   if [[ ! -f "$MODEL_DIR/config.json" ]]; then
     echo "  Downloading DINOv2 (~1 GB)..."
-    $MACOS_PYTHON scripts/download_dinov2_model.py
+    bash scripts/macos_build_python.sh scripts/download_dinov2_model.py
   else
     echo "  Model weights already present at $MODEL_DIR"
   fi
@@ -67,7 +66,7 @@ build_one() {
 
   echo "[4/5] Running PyInstaller..."
   rm -rf build dist/TileVisionAI dist/TileVisionAI.app
-  $MACOS_PYTHON -m PyInstaller packaging/tilevision_mac.spec --clean --noconfirm
+  bash scripts/macos_build_python.sh -m PyInstaller packaging/tilevision_mac.spec --clean --noconfirm
 
   echo "[5/5] Verifying frozen app + creating DMG..."
   bash scripts/verify_frozen_mac_app.sh dist/TileVisionAI.app "$verify"
