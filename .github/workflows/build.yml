@@ -71,10 +71,10 @@ jobs:
             dist/installer/*.exe
           retention-days: 14
 
-  # ─── macOS Intel — fully self-contained (own runner, venv, cache) ───────────
+  # ─── macOS Intel — native x86_64 runner (no Rosetta) ───────────────────────
   build-macos-intel:
     name: macOS Intel (x86_64)
-    runs-on: macos-latest
+    runs-on: macos-15-intel
     timeout-minutes: 120
 
     steps:
@@ -83,12 +83,11 @@ jobs:
       - name: Validate build config
         run: python3 scripts/validate_ci_build.py
 
-      - name: Set up Python 3.12 (x64)
+      - name: Set up Python 3.12
         id: setup-python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          architecture: x64
 
       - name: Cache DINOv2 model weights
         id: model-cache

@@ -7,7 +7,7 @@
 #   MACOS_ARCH=arm64 bash scripts/build_mac.sh     # Apple Silicon customers
 #   MACOS_ARCH=both bash scripts/build_mac.sh      # both DMGs (full release)
 #
-# Matches GitHub Actions build-macos matrix (same venv + verify scripts).
+# Matches GitHub Actions: macos-15-intel (x64) + macos-latest (arm64).
 
 set -euo pipefail
 

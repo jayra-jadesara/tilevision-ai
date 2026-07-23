@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# Install Mac build dependencies with correct CPU architecture.
+# Install Mac build dependencies into an isolated venv with correct CPU architecture.
 #
-# Intel (x64): uses setup-python x64 directly under Rosetta — NO venv.
-#   (venv on Apple Silicon runners pulls arm64 wheels into x86_64 builds)
-#
-# Apple Silicon (arm64): uses setup-python arm64 with isolated venv.
+# CI:
+#   Intel  → macos-15-intel runner (native x86_64 — no Rosetta)
+#   arm64  → macos-latest runner (native Apple Silicon)
 #
 # Usage:
 #   PYTHON_SETUP_PATH=/path/to/python source scripts/install_mac_deps.sh x64
@@ -17,18 +16,53 @@ set -euo pipefail
 MACOS_BUILD_ARCH="${1:?Usage: install_mac_deps.sh x64|arm64}"
 PY="${PYTHON_SETUP_PATH:?set PYTHON_SETUP_PATH to setup-python output}"
 
-run_py() {
-  if [[ "$MACOS_BUILD_ARCH" == "x64" ]]; then
-    arch -x86_64 "$PY" "$@"
-  else
-    "$PY" "$@"
-  fi
-}
+if [[ "$MACOS_BUILD_ARCH" == "x64" ]]; then
+  EXPECT_ARCH="x86_64"
+  VENV="$(pwd)/.venv-macos-x64"
+elif [[ "$MACOS_BUILD_ARCH" == "arm64" ]]; then
+  EXPECT_ARCH="arm64"
+  VENV="$(pwd)/.venv-macos-arm64"
+else
+  echo "ERROR: MACOS_BUILD_ARCH must be x64 or arm64" >&2
+  exit 1
+fi
 
-verify_rust_arch() {
+echo "=== Installing Mac ${MACOS_BUILD_ARCH} deps (expect ${EXPECT_ARCH}) ==="
+file "$PY"
+
+rm -rf "$VENV"
+"$PY" -m venv "$VENV"
+MACOS_PYTHON_PATH="$VENV/bin/python"
+
+"$MACOS_PYTHON_PATH" -c "
+import platform
+machine = platform.machine()
+print('python machine:', machine)
+expected = '${EXPECT_ARCH}'
+if expected == 'x86_64':
+    assert machine in ('x86_64', 'AMD64'), machine
+else:
+    assert machine == 'arm64', machine
+"
+
+HOST_ARCH="$(uname -m)"
+if [[ "$MACOS_BUILD_ARCH" == "x64" && "$HOST_ARCH" == "arm64" ]]; then
+  echo "ERROR: Intel (x64) Mac builds require a native x86_64 runner (macos-15-intel in CI)." >&2
+  echo "Rosetta cross-builds compile native extensions as arm64 and will fail verification." >&2
+  exit 1
+fi
+
+"$MACOS_PYTHON_PATH" -m pip install --upgrade pip
+"$MACOS_PYTHON_PATH" -m pip install --no-cache-dir "numpy>=1.24.0,<2.0.0"
+# Never compile Rust/C extensions in CI — use published wheels only.
+"$MACOS_PYTHON_PATH" -m pip install --no-cache-dir \
+  --only-binary cryptography,faiss-cpu,torch,torchvision,tokenizers,safetensors,opencv-python-headless \
+  -r requirements.txt pyinstaller
+
+verify_native_arch() {
   local expected="$1"
   local rust_so
-  rust_so="$(run_py -c "
+  rust_so="$("$MACOS_PYTHON_PATH" -c "
 import pathlib
 import cryptography
 print(next(pathlib.Path(cryptography.__file__).parent.rglob('_rust.abi3.so')))
@@ -41,42 +75,7 @@ print(next(pathlib.Path(cryptography.__file__).parent.rglob('_rust.abi3.so')))
   fi
 }
 
-if [[ "$MACOS_BUILD_ARCH" == "x64" ]]; then
-  echo "=== Installing Mac Intel (x86_64) deps — direct x64 Python, no venv ==="
-  file "$PY"
-  run_py -c "import platform; assert platform.machine() in ('x86_64','AMD64'), platform.machine()"
-
-  MACOS_PYTHON_PATH="$(cd "$(dirname "$PY")" && pwd)/$(basename "$PY")"
-
-  run_py -m pip install --upgrade pip
-  run_py -m pip install --no-cache-dir "numpy>=1.24.0,<2.0.0"
-  run_py -m pip install --no-cache-dir -r requirements.txt pyinstaller
-
-  for pkg in cryptography faiss-cpu; do
-    run_py -m pip install --no-cache-dir --force-reinstall --no-deps "$pkg"
-  done
-
-  verify_rust_arch "x86_64"
-
-elif [[ "$MACOS_BUILD_ARCH" == "arm64" ]]; then
-  echo "=== Installing Mac Apple Silicon (arm64) deps ==="
-  file "$PY"
-  run_py -c "import platform; assert platform.machine() == 'arm64', platform.machine()"
-
-  VENV="$(pwd)/.venv-macos-arm64"
-  "$PY" -m venv "$VENV"
-  MACOS_PYTHON_PATH="$VENV/bin/python"
-
-  "$MACOS_PYTHON_PATH" -m pip install --upgrade pip
-  "$MACOS_PYTHON_PATH" -m pip install --no-cache-dir "numpy>=1.24.0,<2.0.0"
-  "$MACOS_PYTHON_PATH" -m pip install --no-cache-dir -r requirements.txt pyinstaller
-
-  verify_rust_arch "arm64"
-
-else
-  echo "ERROR: MACOS_BUILD_ARCH must be x64 or arm64" >&2
-  exit 1
-fi
+verify_native_arch "$EXPECT_ARCH"
 
 export MACOS_BUILD_ARCH MACOS_PYTHON_PATH
 echo "MACOS_BUILD_ARCH=$MACOS_BUILD_ARCH"
