@@ -21,4 +21,5 @@ tilevision = "main:main"
 markers = [
     "slow: marks larger-scale/perf tests (e.g. 50k-vector FAISS search)",
     "faiss_search: calls FAISS vector search (unstable on macOS CI runners)",
+    "mac_client: Mac showroom client flow (simulated darwin or real macOS CI)",
 ]

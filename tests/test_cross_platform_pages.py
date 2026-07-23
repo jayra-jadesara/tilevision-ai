@@ -69,15 +69,9 @@ PLATFORMS = ("win32", "darwin")
 
 
 def _simulate_platform(monkeypatch, platform: str) -> None:
-    monkeypatch.setattr(sys, "platform", platform)
-    import src.utils.platform_info as platform_info
-    import src.utils.update_check as update_check
+    from tests.conftest import simulate_platform
 
-    monkeypatch.setattr(platform_info, "is_windows", lambda: platform == "win32")
-    monkeypatch.setattr(platform_info, "is_macos", lambda: platform == "darwin")
-    monkeypatch.setattr(platform_info, "is_linux", lambda: platform.startswith("linux"))
-    monkeypatch.setattr(update_check, "is_windows", lambda: platform == "win32")
-    monkeypatch.setattr(update_check, "is_macos", lambda: platform == "darwin")
+    simulate_platform(monkeypatch, platform)
 
 
 @pytest.fixture(scope="module")

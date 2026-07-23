@@ -78,6 +78,26 @@ def pytest_configure():
     _configure_faiss_runtime()
 
 
+def simulate_platform(monkeypatch, platform: str) -> None:
+    """Pretend the app runs on win32 or darwin (for cross-platform UI tests)."""
+    monkeypatch.setattr(sys, "platform", platform)
+    import src.utils.platform_info as platform_info
+    import src.utils.update_check as update_check
+
+    monkeypatch.setattr(platform_info, "is_windows", lambda: platform == "win32")
+    monkeypatch.setattr(platform_info, "is_macos", lambda: platform == "darwin")
+    monkeypatch.setattr(platform_info, "is_linux", lambda: platform.startswith("linux"))
+    monkeypatch.setattr(update_check, "is_windows", lambda: platform == "win32")
+    monkeypatch.setattr(update_check, "is_macos", lambda: platform == "darwin")
+
+
+@pytest.fixture
+def mac_platform(monkeypatch):
+    """Simulate a Mac showroom PC for page-by-page tests."""
+    simulate_platform(monkeypatch, "darwin")
+    return "darwin"
+
+
 @pytest.fixture
 def catalogue_master_service(tmp_path):
     """In-memory SQLite export profile service for UI tests."""
