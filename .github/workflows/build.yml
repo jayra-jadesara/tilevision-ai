@@ -27,6 +27,9 @@ jobs:
           cache: pip
           cache-dependency-path: requirements.txt
 
+      - name: Validate build config
+        run: python scripts/validate_ci_build.py
+
       - name: Cache DINOv2 model weights
         id: model-cache
         uses: actions/cache@v4
@@ -76,6 +79,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Validate build config
+        run: python3 scripts/validate_ci_build.py
 
       - name: Set up Python 3.12 (x64)
         id: setup-python
@@ -146,6 +152,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate build config
+        run: python3 scripts/validate_ci_build.py
+
       - name: Set up Python 3.12 (arm64)
         id: setup-python
         uses: actions/setup-python@v5
@@ -214,6 +223,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Validate build config
+        run: python3 scripts/validate_ci_build.py
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
