@@ -3,8 +3,9 @@
 PyInstaller build spec for TileVision AI (macOS).
 
 IMPORTANT — Intel vs Apple Silicon:
-  GitHub Actions builds x64 (Intel) so the app opens on Intel Macs (iMac, older MacBook).
-  Apple Silicon Macs (M1/M2/M3) run this build via Rosetta automatically.
+  GitHub Actions builds BOTH architectures on Apple Silicon runners:
+  - Intel (x86_64): uses `arch -x86_64 python` under Rosetta
+  - Apple Silicon (arm64): native arm64 python
 
 Build on a Mac:
 
@@ -12,7 +13,7 @@ Build on a Mac:
     python scripts/download_dinov2_model.py
     pyinstaller packaging/tilevision_mac.spec --clean
 
-On Apple Silicon, prefer:  arch -x86_64 bash scripts/build_mac.sh
+On Apple Silicon, for Intel build:  arch -x86_64 bash scripts/build_mac.sh
 
 Output: dist/TileVisionAI.app
 """
