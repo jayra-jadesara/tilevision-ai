@@ -74,9 +74,9 @@ Issue a **separate key** for each Mac and each Windows PC.
 
 ### Mac showroom
 
-- `TileVisionAI-macOS.dmg` (or `.zip` of `TileVisionAI.app`)
+- `TileVisionAI-macOS.dmg` (Intel x64 — works on **Intel iMac/MacBook** and Apple Silicon via Rosetta)
 - License key (trial or full)
-- Short note: *First time: Right-click the app → Open → Open. Then drag to Applications.*
+- Short note: *First time: Right-click the app → Open → Open. On M1/M2/M3 Macs, allow Rosetta if macOS asks.*
 
 ---
 

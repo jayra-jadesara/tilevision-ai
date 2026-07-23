@@ -16,17 +16,27 @@ if [[ -n "${TILEVISION_DEV_MODE:-}" ]]; then
   exit 1
 fi
 
+# Intel x64 runs on Intel Macs and on Apple Silicon via Rosetta.
+if [[ "$(uname -m)" == "arm64" ]]; then
+  echo "Apple Silicon detected — building x86_64 for Intel Mac showrooms (Rosetta on M-series)."
+  ARCH_PREFIX="arch -x86_64"
+else
+  ARCH_PREFIX=""
+fi
+
+PYTHON="${ARCH_PREFIX} python3"
+
 echo
 echo "[1/4] Checking Python dependencies..."
-python3 -m pip install --upgrade pip >/dev/null
-python3 -m pip install -r requirements.txt pyinstaller
+$PYTHON -m pip install --upgrade pip >/dev/null
+$PYTHON -m pip install -r requirements.txt pyinstaller
 
 echo
 echo "[2/4] Ensuring DINOv2 model weights..."
 MODEL_DIR="model_weights/dinov2-large"
 if [[ ! -f "$MODEL_DIR/config.json" ]]; then
   echo "  Downloading DINOv2 (~1 GB)..."
-  python3 scripts/download_dinov2_model.py
+  $PYTHON scripts/download_dinov2_model.py
 else
   echo "  Model weights already present at $MODEL_DIR"
 fi
@@ -36,7 +46,7 @@ export TILEVISION_OFFLINE_MODEL=1
 echo
 echo "[3/4] Running PyInstaller..."
 rm -rf build dist/TileVisionAI dist/TileVisionAI.app
-pyinstaller packaging/tilevision_mac.spec --clean --noconfirm
+$PYTHON -m PyInstaller packaging/tilevision_mac.spec --clean --noconfirm
 
 APP_PATH="dist/TileVisionAI.app"
 if [[ ! -d "$APP_PATH" ]]; then

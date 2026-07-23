@@ -64,17 +64,20 @@ jobs:
           retention-days: 14
 
   build-macos:
-    name: macOS (.app)
+    name: macOS (.app, Intel x64)
     runs-on: macos-latest
     timeout-minutes: 120
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
+      # x64 build runs on Intel Macs natively and on Apple Silicon via Rosetta.
+      # GitHub's default arm64-only build breaks Intel showrooms (Core i5/i7/i9).
+      - name: Set up Python 3.12 (x64)
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          architecture: x64
           cache: pip
           cache-dependency-path: requirements.txt
 
@@ -98,6 +101,12 @@ jobs:
         env:
           TILEVISION_OFFLINE_MODEL: "1"
         run: pyinstaller packaging/tilevision_mac.spec --clean --noconfirm
+
+      - name: Verify Mac app is Intel x64 (works on client Intel iMacs)
+        run: |
+          BIN="dist/TileVisionAI.app/Contents/MacOS/TileVisionAI"
+          file "$BIN"
+          file "$BIN" | grep -E "x86_64|i386"
 
       - name: Create macOS DMG
         run: |
