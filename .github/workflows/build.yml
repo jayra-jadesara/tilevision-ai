@@ -97,11 +97,8 @@ jobs:
         run: pyinstaller packaging/tilevision.spec --clean --noconfirm
 
       - name: Verify Windows bundle
-        shell: bash
-        run: |
-          test -f dist/TileVisionAI/TileVisionAI.exe
-          test -f dist/TileVisionAI/model_weights/dinov2-large/config.json
-          echo "Windows bundle OK"
+        shell: pwsh
+        run: ./scripts/verify_frozen_windows.ps1
 
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
@@ -148,8 +145,6 @@ jobs:
         with:
           python-version: "3.12"
           architecture: ${{ matrix.arch }}
-          # Do not share pip cache between arm64 and x64 — wheels are arch-specific.
-          cache: false
 
       - name: Cache DINOv2 model weights
         id: model-cache

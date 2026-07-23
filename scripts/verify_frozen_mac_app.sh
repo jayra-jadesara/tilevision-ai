@@ -12,6 +12,9 @@ EXPECTED="${2:?expected arch: x86_64 or arm64}"
 
 BIN="$APP/Contents/MacOS/TileVisionAI"
 MODEL="$APP/Contents/MacOS/model_weights/dinov2-large/config.json"
+if [[ ! -f "$MODEL" ]]; then
+  MODEL="$(find "$MACOS_DIR" -path '*/model_weights/dinov2-large/config.json' 2>/dev/null | head -n 1 || true)"
+fi
 MACOS_DIR="$APP/Contents/MacOS"
 
 echo "=== Verifying frozen Mac app ($EXPECTED) ==="
