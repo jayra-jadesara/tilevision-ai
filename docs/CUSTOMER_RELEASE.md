@@ -72,11 +72,25 @@ Issue a **separate key** for each Mac and each Windows PC.
 - License key (trial or full)
 - Short note: *If Windows SmartScreen appears, click “More info” → “Run anyway”* (until you add code signing)
 
-### Mac showroom
+### Mac showroom (Intel AND Apple Silicon)
 
-- `TileVisionAI-macOS.dmg` (Intel x64 — works on **Intel iMac/MacBook** and Apple Silicon via Rosetta)
-- License key (trial or full)
-- Short note: *First time: Right-click the app → Open → Open. On M1/M2/M3 Macs, allow Rosetta if macOS asks.*
+Send **one zip** — works for every Mac:
+
+**`TileVisionAI-macOS-1.0.0.zip`**
+
+Inside the zip:
+| File | For which Mac |
+|------|----------------|
+| `TileVisionAI-macOS-Intel.dmg` | Intel iMac, Intel MacBook (Core i5/i7/i9) |
+| `TileVisionAI-macOS-AppleSilicon.dmg` | M1, M2, M3, M4 Macs |
+| `READ ME FIRST.txt` | Simple guide — customer picks the right file |
+
+Also include: **license key** (trial or full)
+
+**Client with Intel iMac 2020:** use **Intel** `.dmg`  
+**Client with M1/M2/M3 Mac:** use **Apple Silicon** `.dmg`
+
+First time: Right-click app → **Open** → **Open**
 
 ---
 
@@ -146,7 +160,9 @@ After the **Build** workflow finishes, the release includes:
 | File | Used by |
 |------|---------|
 | `TileVisionAI-Setup-1.0.1.exe` | Windows update link |
-| `TileVisionAI-macOS-1.0.1.dmg` | Mac update link |
+| `TileVisionAI-macOS-Intel-1.0.1.dmg` | Intel Mac update link (optional) |
+| `TileVisionAI-macOS-AppleSilicon-1.0.1.dmg` | Apple Silicon update link (optional) |
+| `TileVisionAI-macOS-1.0.1.zip` | **All Macs** — both DMGs + install guide |
 | `update_manifest.json` | In-app update checker |
 
 Customers can also use **Settings → Check for Updates** anytime.

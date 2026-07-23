@@ -1,0 +1,34 @@
+TileVision AI — Install on Mac
+================================
+
+Works on ALL Mac models. Pick the file that matches YOUR Mac:
+
+HOW TO CHECK (10 seconds)
+-------------------------
+1. Click Apple menu (top-left) → About This Mac
+
+2. If you see "Chip: Apple M1, M2, M3, or M4"
+   → Use:  TileVisionAI-macOS-AppleSilicon.dmg
+
+3. If you see "Processor: Intel Core i5, i7, i9..."
+   → Use:  TileVisionAI-macOS-Intel.dmg
+
+   (Intel iMac, Intel MacBook Pro/Air 2020 and earlier)
+
+
+INSTALL STEPS
+-------------
+1. Double-click the correct .dmg file above
+2. Drag "TileVision AI" to Applications
+3. First time only: Right-click the app → Open → Open
+4. Copy your Machine ID and send to your vendor
+5. Paste the license key they send you
+
+
+NOT SURE?
+---------
+Send your vendor a screenshot of About This Mac.
+They will tell you which file to use.
+
+
+Support: your TileVision vendor contact
