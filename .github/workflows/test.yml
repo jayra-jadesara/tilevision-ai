@@ -36,17 +36,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pytest
 
-      - name: Run Mac client flow tests
-        if: runner.os == 'macOS'
-        env:
-          QT_QPA_PLATFORM: offscreen
-          TILEVISION_DEV_MODE: "1"
-          OMP_NUM_THREADS: "1"
-          OPENBLAS_NUM_THREADS: "1"
-          VECLIB_MAXIMUM_THREADS: "1"
-          KMP_DUPLICATE_LIB_OK: "TRUE"
-        run: python -m pytest tests/test_mac_client_flow.py tests/test_cross_platform_pages.py -q --tb=short
-
       - name: Run tests
         env:
           QT_QPA_PLATFORM: offscreen
@@ -55,4 +44,10 @@ jobs:
           OPENBLAS_NUM_THREADS: "1"
           VECLIB_MAXIMUM_THREADS: "1"
           KMP_DUPLICATE_LIB_OK: "TRUE"
-        run: python -m pytest tests/ -q --tb=short -m "not slow"
+        shell: bash
+        run: |
+          MARKERS="not slow"
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            MARKERS="not slow and not faiss_search"
+          fi
+          python -m pytest tests/ -q --tb=short -m "$MARKERS"

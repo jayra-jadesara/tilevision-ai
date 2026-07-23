@@ -1,67 +1,25 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""
-PyInstaller build spec for TileVision AI (macOS).
-
-IMPORTANT — Intel vs Apple Silicon:
-  GitHub Actions builds BOTH architectures on Apple Silicon runners:
-  - Intel (x86_64): uses `arch -x86_64 python` under Rosetta
-  - Apple Silicon (arm64): native arm64 python
-
-Build on a Mac:
-
-    pip install -r requirements.txt pyinstaller
-    python scripts/download_dinov2_model.py
-    pyinstaller packaging/tilevision_mac.spec --clean
-
-On Apple Silicon, for Intel build:  arch -x86_64 bash scripts/build_mac.sh
-
-Output: dist/TileVisionAI.app
-"""
+"""PyInstaller build spec for TileVision AI (macOS)."""
 
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(SPECPATH)))
+from pyinstaller_common import EXCLUDES, HIDDEN_IMPORTS, collect_datas
+
 block_cipher = None
-
 PROJECT_ROOT = Path(SPECPATH).parent
-MODEL_DIR = PROJECT_ROOT / "model_weights" / "dinov2-large"
-
-datas = []
-if MODEL_DIR.is_dir():
-    datas.append((str(MODEL_DIR), str(Path("model_weights") / "dinov2-large")))
-
-resources = PROJECT_ROOT / "src" / "resources"
-if resources.is_dir():
-    datas.append((str(resources), "src/resources"))
-
-hidden_imports = [
-    "transformers",
-    "transformers.models.dinov2",
-    "timm",
-    "safetensors",
-    "tokenizers",
-    "huggingface_hub",
-    "torch",
-    "torchvision",
-    "faiss",
-    "cv2",
-    "PIL",
-    "skimage",
-    "cryptography",
-    "watchdog.observers",
-    "watchdog.events",
-]
 
 a = Analysis(
     [str(PROJECT_ROOT / "main.py")],
     pathex=[str(PROJECT_ROOT)],
     binaries=[],
-    datas=datas,
-    hiddenimports=hidden_imports,
+    datas=collect_datas(PROJECT_ROOT),
+    hiddenimports=HIDDEN_IMPORTS,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["matplotlib", "notebook", "jupyter"],
+    excludes=EXCLUDES,
     cipher=block_cipher,
     noarchive=False,
 )

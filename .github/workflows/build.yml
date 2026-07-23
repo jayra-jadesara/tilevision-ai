@@ -11,6 +11,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  validate-release:
+    name: Validate version matches tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check APP_VERSION matches git tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          TAG_VER="${GITHUB_REF_NAME#v}"
+          APP_VER="$(grep '^APP_VERSION' src/version.py | cut -d'"' -f2)"
+          ISS_VER="$(grep '#define MyAppVersion' packaging/tilevision_setup.iss | cut -d'"' -f2)"
+          echo "tag=$TAG_VER app=$APP_VER inno=$ISS_VER"
+          test "$TAG_VER" = "$APP_VER"
+          test "$TAG_VER" = "$ISS_VER"
+      - name: Skip version check (manual / non-tag build)
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        run: echo "Not a tag push — version check skipped"
+
   prepare-model:
     name: Download DINOv2 model (shared cache)
     runs-on: ubuntu-latest
@@ -42,7 +61,7 @@ jobs:
 
   build-windows:
     name: Windows (PyInstaller + Inno Setup)
-    needs: prepare-model
+    needs: [validate-release, prepare-model]
     runs-on: windows-latest
     timeout-minutes: 120
 
@@ -77,6 +96,13 @@ jobs:
           TILEVISION_OFFLINE_MODEL: "1"
         run: pyinstaller packaging/tilevision.spec --clean --noconfirm
 
+      - name: Verify Windows bundle
+        shell: bash
+        run: |
+          test -f dist/TileVisionAI/TileVisionAI.exe
+          test -f dist/TileVisionAI/model_weights/dinov2-large/config.json
+          echo "Windows bundle OK"
+
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
 
@@ -95,7 +121,7 @@ jobs:
 
   build-macos:
     name: macOS (${{ matrix.label }})
-    needs: prepare-model
+    needs: [validate-release, prepare-model]
     runs-on: macos-latest
     timeout-minutes: 120
     strategy:
@@ -134,41 +160,19 @@ jobs:
 
       - name: Create isolated venv and install dependencies
         shell: bash
+        env:
+          PYTHON_SETUP_PATH: ${{ steps.setup-python.outputs.python-path }}
         run: |
           set -euo pipefail
-          PY="${{ steps.setup-python.outputs.python-path }}"
-          VENV=".venv-macos-${{ matrix.arch }}"
-          echo "Using setup-python at: $PY"
-          file "$PY"
-
-          if [ "${{ matrix.arch }}" = "x64" ]; then
-            arch -x86_64 "$PY" -m venv "$VENV"
-            RUN="arch -x86_64 $VENV/bin/python"
-          else
-            "$PY" -m venv "$VENV"
-            RUN="$VENV/bin/python"
-          fi
-
-          $RUN -m pip install --upgrade pip
-          $RUN -m pip install --no-cache-dir -r requirements.txt pyinstaller
-          echo "MACOS_PYTHON=$RUN" >> "$GITHUB_ENV"
-          echo "MACOS_VENV=$VENV" >> "$GITHUB_ENV"
+          source scripts/setup_mac_build_env.sh ${{ matrix.arch }}
+          $MACOS_PYTHON -m pip install --upgrade pip
+          $MACOS_PYTHON -m pip install --no-cache-dir -r requirements.txt pyinstaller
+          echo "MACOS_PYTHON=$MACOS_PYTHON" >> "$GITHUB_ENV"
+          echo "MACOS_VENV=$MACOS_VENV" >> "$GITHUB_ENV"
 
       - name: Verify native libraries match target architecture
         shell: bash
-        run: |
-          set -euo pipefail
-          $MACOS_PYTHON -c "import platform; print('python:', platform.machine())"
-          if [ "${{ matrix.arch }}" = "x64" ]; then
-            $MACOS_PYTHON -c "import platform; assert platform.machine() in ('x86_64', 'AMD64'), platform.machine()"
-          else
-            $MACOS_PYTHON -c "import platform; assert platform.machine() == 'arm64', platform.machine()"
-          fi
-
-          RUST_SO="$(find "$MACOS_VENV" -name '_rust.abi3.so' | head -n 1)"
-          echo "cryptography native lib: $RUST_SO"
-          file "$RUST_SO"
-          file "$RUST_SO" | grep -q "${{ matrix.verify }}"
+        run: bash scripts/verify_mac_native_libs.sh ${{ matrix.verify }}
 
       - name: Build with PyInstaller
         shell: bash
@@ -176,11 +180,8 @@ jobs:
           TILEVISION_OFFLINE_MODEL: "1"
         run: $MACOS_PYTHON -m PyInstaller packaging/tilevision_mac.spec --clean --noconfirm
 
-      - name: Verify Mac app architecture (${{ matrix.label }})
-        run: |
-          BIN="dist/TileVisionAI.app/Contents/MacOS/TileVisionAI"
-          file "$BIN"
-          file "$BIN" | grep -q "${{ matrix.verify }}"
+      - name: Verify frozen Mac app (${{ matrix.label }})
+        run: bash scripts/verify_frozen_mac_app.sh dist/TileVisionAI.app ${{ matrix.verify }}
 
       - name: Create macOS DMG
         run: |
@@ -276,7 +277,7 @@ jobs:
 
   build-linux:
     name: Linux (binary)
-    needs: prepare-model
+    needs: [validate-release, prepare-model]
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
