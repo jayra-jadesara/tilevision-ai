@@ -35,7 +35,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: model_weights/dinov2-large
-          key: dinov2-large-${{ hashFiles('scripts/download_dinov2_model.py') }}
+          key: dinov2-large-v2-${{ hashFiles('scripts/download_dinov2_model.py') }}
 
       - name: Install dependencies
         run: |
@@ -78,10 +78,15 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: tilevision-windows
-          path: |
-            dist/TileVisionAI/
-            dist/installer/*.exe
+          path: dist/installer/*.exe
           retention-days: 14
+
+      - name: Upload Windows app folder (debug)
+        uses: actions/upload-artifact@v4
+        with:
+          name: tilevision-windows-app
+          path: dist/TileVisionAI/
+          retention-days: 3
 
   # ─── macOS Intel — native x86_64 runner (no Rosetta) ───────────────────────
   build-macos-intel:
@@ -106,7 +111,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: model_weights/dinov2-large
-          key: dinov2-large-${{ hashFiles('scripts/download_dinov2_model.py') }}
+          key: dinov2-large-v2-${{ hashFiles('scripts/download_dinov2_model.py') }}
 
       - name: Install dependencies (Intel x86_64)
         shell: bash
@@ -180,7 +185,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: model_weights/dinov2-large
-          key: dinov2-large-${{ hashFiles('scripts/download_dinov2_model.py') }}
+          key: dinov2-large-v2-${{ hashFiles('scripts/download_dinov2_model.py') }}
 
       - name: Install dependencies (Apple Silicon arm64)
         shell: bash
@@ -260,7 +265,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: model_weights/dinov2-large
-          key: dinov2-large-${{ hashFiles('scripts/download_dinov2_model.py') }}
+          key: dinov2-large-v2-${{ hashFiles('scripts/download_dinov2_model.py') }}
 
       - name: Install dependencies
         run: |
@@ -329,26 +334,37 @@ jobs:
       - name: Prepare release files
         shell: bash
         run: |
+          set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
-          WIN_EXE=$(find release/windows -name "*.exe" | head -n 1)
+          WIN_EXE=$(find release/windows -name "TileVisionAI-Setup-*.exe" | head -n 1)
           INTEL_DMG=$(find release/macos-intel -name "*.dmg" | head -n 1)
           ARM_DMG=$(find release/macos-arm64 -name "*.dmg" | head -n 1)
+
+          if [ -z "$WIN_EXE" ] || [ -z "$INTEL_DMG" ] || [ -z "$ARM_DMG" ]; then
+            echo "ERROR: missing release artifact (win=$WIN_EXE intel=$INTEL_DMG arm=$ARM_DMG)" >&2
+            find release -type f | head -50
+            exit 1
+          fi
 
           cp "$WIN_EXE" "TileVisionAI-Setup-${VERSION}.exe"
           cp "$INTEL_DMG" "TileVisionAI-macOS-Intel-${VERSION}.dmg"
           cp "$ARM_DMG" "TileVisionAI-macOS-AppleSilicon-${VERSION}.dmg"
           cp packaging/MAC_INSTALL.txt "TileVisionAI-macOS-READ-ME-FIRST.txt"
 
-          # GitHub rejects release assets >= 2 GiB (2147483648 bytes).
-          MAX_BYTES=$((2 * 1024 * 1024 * 1024 - 64 * 1024 * 1024))
+          # GitHub hard limit: 2147483648 bytes (2 GiB) per release asset.
+          GH_MAX=2147483648
+          SAFE_MAX=$((GH_MAX - 32 * 1024 * 1024))
           for f in TileVisionAI-*; do
             size=$(stat -c%s "$f")
-            if [ "$size" -gt "$MAX_BYTES" ]; then
-              echo "ERROR: $f is $size bytes — GitHub limit is 2147483648 bytes per file." >&2
-              echo "Do not bundle both Mac DMGs into one zip; upload them separately." >&2
+            echo "$(numfmt --to=iec-i --suffix=B "$size")  $f"
+            if [ "$size" -ge "$GH_MAX" ]; then
+              echo "ERROR: $f is $size bytes — exceeds GitHub limit $GH_MAX" >&2
               exit 1
             fi
-            echo "$(numfmt --to=iec-i --suffix=B "$size")  $f"
+            if [ "$size" -gt "$SAFE_MAX" ]; then
+              echo "ERROR: $f is too close to GitHub 2 GiB limit ($size > $SAFE_MAX)" >&2
+              exit 1
+            fi
           done
 
       - name: Generate update manifest
@@ -361,7 +377,7 @@ jobs:
             "${BASE}/TileVisionAI-Setup-${VERSION}.exe" \
             "${BASE}/TileVisionAI-macOS-Intel-${VERSION}.dmg" \
             "${BASE}/TileVisionAI-macOS-AppleSilicon-${VERSION}.dmg" \
-            "TileVision AI ${GITHUB_REF_NAME} — separate Intel and Apple Silicon Mac installers." \
+            "TileVision AI ${GITHUB_REF_NAME} - separate Intel and Apple Silicon Mac installers." \
             > update_manifest.json
           cat update_manifest.json
 
@@ -371,6 +387,8 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: TileVision AI ${{ github.ref_name }}
           generate_release_notes: true
+          fail_on_unmatched_files: true
+          replace: true
           body: |
             ## Mac customers — all models supported
 

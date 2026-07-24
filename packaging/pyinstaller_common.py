@@ -26,7 +26,17 @@ HIDDEN_IMPORTS = [
     "watchdog.events",
 ]
 
-EXCLUDES = ["matplotlib", "notebook", "jupyter"]
+EXCLUDES = [
+    "matplotlib",
+    "notebook",
+    "jupyter",
+    "torch.distributed",
+    "torch.testing",
+    "torch.cuda",
+    "tensorboard",
+    "triton",
+    "IPython",
+]
 
 
 def collect_datas(project_root: Path) -> list[tuple[str, str]]:

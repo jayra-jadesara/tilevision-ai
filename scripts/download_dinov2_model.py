@@ -27,15 +27,26 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.ai.model_paths import DEFAULT_MODEL_ID, bundled_model_dir  # noqa: E402
 
+# Keep offline bundle small — GitHub release assets must be < 2 GiB total per file.
+_MAX_MODEL_BYTES = 1_400_000_000  # ~1.3 GB (dinov2-large safetensors is ~1.1 GB)
+
 
 def _verify_download(out: Path) -> None:
     config = out / "config.json"
     if not config.is_file():
         raise FileNotFoundError(f"config.json missing after download: {out}")
-    # At least one weight file (safetensors or bin)
-    weights = list(out.glob("*.safetensors")) + list(out.glob("pytorch_model*.bin"))
+
+    weights = list(out.glob("*.safetensors"))
     if not weights:
-        raise FileNotFoundError(f"No model weight files found in {out}")
+        raise FileNotFoundError(f"No .safetensors weight file found in {out}")
+
+    total = sum(f.stat().st_size for f in out.rglob("*") if f.is_file())
+    print(f"Model bundle size: {total / (1024**3):.2f} GB ({total} bytes)")
+    if total > _MAX_MODEL_BYTES:
+        raise RuntimeError(
+            f"Model bundle too large for release builds ({total} bytes). "
+            "Use allow_patterns in snapshot_download or remove duplicate weight files."
+        )
 
 
 def main() -> int:
@@ -45,13 +56,26 @@ def main() -> int:
     print(f"Downloading {DEFAULT_MODEL_ID} to {out} ...")
     print("(This is ~1 GB — may take several minutes.)")
 
-    # huggingface_hub only — no torch/transformers import required (works on Mac Intel x64).
     from huggingface_hub import snapshot_download
 
     snapshot_download(
         repo_id=DEFAULT_MODEL_ID,
         local_dir=str(out),
         local_dir_use_symlinks=False,
+        allow_patterns=[
+            "config.json",
+            "preprocessor_config.json",
+            "model.safetensors",
+            "*.json",
+        ],
+        ignore_patterns=[
+            "*.bin",
+            "*.h5",
+            "*.ot",
+            "*.msgpack",
+            ".git*",
+            "*.md",
+        ],
     )
     _verify_download(out)
 
