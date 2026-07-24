@@ -11,7 +11,7 @@
 ;   iscc packaging\tilevision_setup.iss
 
 #define MyAppName "TileVision AI"
-#define MyAppVersion "1.0.1"
+#define MyAppVersion "1.0.2"
 #define MyAppPublisher "JD Software"
 #define MyAppExeName "TileVisionAI.exe"
 #define BuildSource "..\dist\TileVisionAI"
@@ -60,18 +60,3 @@ Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: no
 
 [Messages]
 WelcomeLabel2=This will install [name/ver] on your computer.%n%nTileVision AI is an offline visual tile search application for showrooms and distributors.
-
-[Code]
-function InitializeSetup(): Boolean;
-begin
-  if not DirExists(ExpandConstant('{#BuildSource}')) then
-  begin
-    MsgBox('PyInstaller build not found.' + #13#10 +
-      'Run first: powershell -ExecutionPolicy Bypass -File scripts\build_windows.ps1' + #13#10 +
-      'Expected folder: dist\TileVisionAI\',
-      mbError, MB_OK);
-    Result := False;
-  end
-  else
-    Result := True;
-end;

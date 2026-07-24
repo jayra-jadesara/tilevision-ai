@@ -1,0 +1,67 @@
+TileVision AI — Mac beta test (BEFORE final delivery)
+=======================================================
+
+Vendor: please ask your client to run this ONCE on their Mac and send
+you screenshots of any step that fails. Takes about 15-20 minutes.
+
+Client Mac from your screenshot:
+  iMac (Retina 5K, 27-inch, 2020) — Intel Core i9
+  -> Use ONLY: TileVisionAI-macOS-Intel-1.0.1.dmg
+  -> Do NOT use the Apple Silicon .dmg
+
+
+STEP 1 — CLEAN INSTALL
+----------------------
+[ ] Delete any old "TileVision AI" from Applications
+[ ] Download TileVisionAI-macOS-Intel-1.0.2.dmg (Intel version only)
+[ ] Open DMG, drag app to Applications
+
+
+STEP 2 — FIRST LAUNCH (unsigned app)
+------------------------------------
+[ ] Finder -> Applications -> RIGHT-CLICK "TileVision AI" -> Open
+[ ] Click "Open" in the security dialog (NOT double-click first time)
+[ ] App window opens (no "not supported on this Mac" error)
+
+
+STEP 3 — LICENSE
+----------------
+[ ] Open License / Activation in the app
+[ ] Copy Machine ID and send to vendor
+[ ] Vendor sends key -> paste key -> app shows licensed/trial
+
+
+STEP 4 — INDEX TILES
+--------------------
+[ ] Create a folder with 10-20 tile photos
+[ ] Index that folder in the app
+[ ] Indexing finishes without error
+
+
+STEP 5 — SEARCH
+---------------
+[ ] Search using one tile photo
+[ ] Similar tiles appear in results
+
+
+STEP 6 — PDF
+------------
+[ ] Export results to PDF
+[ ] Open PDF — tile images visible
+
+
+STEP 7 — RESTART
+----------------
+[ ] Quit app, reopen from Applications
+[ ] Still licensed, index still works
+
+
+REPORT BACK TO VENDOR
+---------------------
+Send vendor:
+  - Screenshot of About This Mac (already have)
+  - Screenshot of app main window after launch (Step 2)
+  - YES/NO for each step above
+  - Exact error message text if any step failed
+
+Only after ALL steps pass should vendor send the final license / go-live.

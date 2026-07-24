@@ -90,3 +90,6 @@ model_weights/dinov2-large/
 # Local CI log downloads (do not commit)
 ci_log_*.zip
 ubuntu_logs.zip
+
+# Local pre-release installer downloads
+test_release/

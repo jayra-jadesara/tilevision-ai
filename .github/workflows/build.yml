@@ -62,6 +62,18 @@ jobs:
         run: |
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging/tilevision_setup.iss
 
+      - name: Verify Windows installer (silent install)
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem dist/installer/*.exe | Select-Object -First 1
+          $target = Join-Path $env:RUNNER_TEMP "tilevision-install-test"
+          Remove-Item $target -Recurse -Force -ErrorAction SilentlyContinue
+          $proc = Start-Process -FilePath $installer.FullName -ArgumentList @(
+            "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$target"
+          ) -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "Installer failed with exit code $($proc.ExitCode)" }
+          ./scripts/verify_frozen_windows.ps1 -AppDir $target
+
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
