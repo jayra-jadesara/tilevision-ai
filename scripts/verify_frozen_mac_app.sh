@@ -32,4 +32,7 @@ if [[ -z "$MODEL" ]]; then
 fi
 echo "model bundled: $MODEL"
 
+echo "Running --verify-bundle (torch import smoke test)..."
+"$BIN" --verify-bundle
+
 echo "=== Frozen Mac app OK ($EXPECTED) ==="

@@ -23,4 +23,9 @@ if (-not $model) {
     exit 1
 }
 Write-Host "model: $($model.FullName)"
+
+Write-Host "Running --verify-bundle (torch import smoke test)..."
+& $exe.FullName --verify-bundle
+if ($LASTEXITCODE -ne 0) { throw "Bundle verify failed (torch import)" }
+
 Write-Host "Windows bundle OK"

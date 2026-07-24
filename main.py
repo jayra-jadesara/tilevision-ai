@@ -25,6 +25,14 @@ if _PROJECT_ROOT not in sys.path:
 
 def main() -> None:
     """Application entry point. Delegates to the composition root."""
+    if len(sys.argv) > 1 and sys.argv[1] == "--verify-bundle":
+        import torch
+
+        import torch.cuda  # noqa: F401 — required by torch.__init__ even on CPU-only PCs
+
+        print(f"bundle OK torch={torch.__version__} cuda_available={torch.cuda.is_available()}")
+        sys.exit(0)
+
     from src.app import build_application
     exit_code = build_application()
     sys.exit(exit_code)

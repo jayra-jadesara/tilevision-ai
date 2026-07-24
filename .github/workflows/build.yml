@@ -354,6 +354,8 @@ jobs:
           # GitHub hard limit: 2147483648 bytes (2 GiB) per release asset.
           GH_MAX=2147483648
           SAFE_MAX=$((GH_MAX - 32 * 1024 * 1024))
+          MIN_WIN=$((500 * 1024 * 1024))
+          MIN_DMG=$((700 * 1024 * 1024))
           for f in TileVisionAI-*; do
             size=$(stat -c%s "$f")
             echo "$(numfmt --to=iec-i --suffix=B "$size")  $f"
@@ -365,6 +367,20 @@ jobs:
               echo "ERROR: $f is too close to GitHub 2 GiB limit ($size > $SAFE_MAX)" >&2
               exit 1
             fi
+            case "$f" in
+              TileVisionAI-Setup-*.exe)
+                if [ "$size" -lt "$MIN_WIN" ]; then
+                  echo "ERROR: Windows installer too small ($size bytes) — expected full offline build" >&2
+                  exit 1
+                fi
+                ;;
+              *.dmg)
+                if [ "$size" -lt "$MIN_DMG" ]; then
+                  echo "ERROR: Mac DMG too small ($size bytes) — expected full offline build" >&2
+                  exit 1
+                fi
+                ;;
+            esac
           done
 
       - name: Generate update manifest

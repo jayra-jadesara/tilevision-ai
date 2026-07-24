@@ -13,7 +13,7 @@ Client Mac from your screenshot:
 STEP 1 — CLEAN INSTALL
 ----------------------
 [ ] Delete any old "TileVision AI" from Applications
-[ ] Download TileVisionAI-macOS-Intel-1.0.2.dmg (Intel version only)
+[ ] Download TileVisionAI-macOS-Intel-1.0.3.dmg (Intel version only)
 [ ] Open DMG, drag app to Applications
 
 
