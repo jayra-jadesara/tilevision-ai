@@ -28,6 +28,16 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.ai.model_paths import DEFAULT_MODEL_ID, bundled_model_dir  # noqa: E402
 
 
+def _verify_download(out: Path) -> None:
+    config = out / "config.json"
+    if not config.is_file():
+        raise FileNotFoundError(f"config.json missing after download: {out}")
+    # At least one weight file (safetensors or bin)
+    weights = list(out.glob("*.safetensors")) + list(out.glob("pytorch_model*.bin"))
+    if not weights:
+        raise FileNotFoundError(f"No model weight files found in {out}")
+
+
 def main() -> int:
     out = Path(os.environ.get("TILEVISION_MODEL_DIR", bundled_model_dir())).expanduser()
     out.mkdir(parents=True, exist_ok=True)
@@ -35,12 +45,15 @@ def main() -> int:
     print(f"Downloading {DEFAULT_MODEL_ID} to {out} ...")
     print("(This is ~1 GB — may take several minutes.)")
 
-    from transformers import AutoImageProcessor, AutoModel
+    # huggingface_hub only — no torch/transformers import required (works on Mac Intel x64).
+    from huggingface_hub import snapshot_download
 
-    processor = AutoImageProcessor.from_pretrained(DEFAULT_MODEL_ID)
-    model = AutoModel.from_pretrained(DEFAULT_MODEL_ID)
-    processor.save_pretrained(out)
-    model.save_pretrained(out)
+    snapshot_download(
+        repo_id=DEFAULT_MODEL_ID,
+        local_dir=str(out),
+        local_dir_use_symlinks=False,
+    )
+    _verify_download(out)
 
     print()
     print("Done.")

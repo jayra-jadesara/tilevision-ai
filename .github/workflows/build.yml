@@ -123,6 +123,10 @@ jobs:
         shell: bash
         run: bash scripts/macos_build_python.sh scripts/download_dinov2_model.py
 
+      - name: Verify DINOv2 weights present
+        shell: bash
+        run: test -f model_weights/dinov2-large/config.json
+
       - name: Verify native libraries (x86_64)
         shell: bash
         env:
@@ -192,6 +196,10 @@ jobs:
         if: steps.model-cache.outputs.cache-hit != 'true'
         shell: bash
         run: bash scripts/macos_build_python.sh scripts/download_dinov2_model.py
+
+      - name: Verify DINOv2 weights present
+        shell: bash
+        run: test -f model_weights/dinov2-large/config.json
 
       - name: Verify native libraries (arm64)
         shell: bash

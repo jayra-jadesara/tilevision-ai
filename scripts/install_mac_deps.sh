@@ -77,6 +77,22 @@ print(next(pathlib.Path(cryptography.__file__).parent.rglob('_rust.abi3.so')))
 
 verify_native_arch "$EXPECT_ARCH"
 
+# Mac Intel: last PyTorch wheel is 2.2.2 — pin explicitly and verify ML stack.
+if [[ "$MACOS_BUILD_ARCH" == "x64" ]]; then
+  "$MACOS_PYTHON_PATH" -m pip install --no-cache-dir --only-binary :all: \
+    "torch==2.2.2" "torchvision==0.17.2" "transformers>=4.45.0,<5.0.0"
+fi
+
+"$MACOS_PYTHON_PATH" -c "
+import torch
+import transformers
+print('torch:', torch.__version__)
+print('transformers:', transformers.__version__)
+from transformers import AutoImageProcessor  # noqa: F401
+import torchvision  # noqa: F401
+print('ML stack OK')
+"
+
 export MACOS_BUILD_ARCH MACOS_PYTHON_PATH
 echo "MACOS_BUILD_ARCH=$MACOS_BUILD_ARCH"
 echo "MACOS_PYTHON_PATH=$MACOS_PYTHON_PATH"
