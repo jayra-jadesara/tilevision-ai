@@ -73,7 +73,8 @@ jobs:
       - name: Verify Windows installer (silent install)
         shell: pwsh
         run: |
-          $installer = Get-ChildItem dist/installer/*.exe | Select-Object -First 1
+          $installer = Get-ChildItem dist/installer/TileVisionAI-Setup-*.exe | Select-Object -First 1
+          if (-not $installer) { throw "Customer Setup installer not found in dist/installer/" }
           $target = Join-Path $env:RUNNER_TEMP "tilevision-install-test"
           Remove-Item $target -Recurse -Force -ErrorAction SilentlyContinue
           $proc = Start-Process -FilePath $installer.FullName -ArgumentList @(
@@ -81,6 +82,9 @@ jobs:
           ) -Wait -PassThru
           if ($proc.ExitCode -ne 0) { throw "Installer failed with exit code $($proc.ExitCode)" }
           ./scripts/verify_frozen_windows.ps1 -AppDir $target
+          $adminInstaller = Get-ChildItem dist/installer/TileVisionAI-Admin-VENDOR-ONLY-*.exe | Select-Object -First 1
+          if (-not $adminInstaller) { throw "Vendor admin installer not found in dist/installer/" }
+          if ($adminInstaller.Length -lt 5MB) { throw "Vendor admin installer looks too small ($($adminInstaller.Length) bytes)" }
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
