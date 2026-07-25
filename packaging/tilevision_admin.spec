@@ -18,6 +18,7 @@ ADMIN_HIDDEN = [
     "cryptography.exceptions",
     "sqlite3",
     "license_ledger",
+    "admin_auth",
     "admin_theme",
     "vendor_backup",
     "web_date_picker",

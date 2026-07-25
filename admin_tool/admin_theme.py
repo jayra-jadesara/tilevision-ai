@@ -24,6 +24,22 @@ def get_admin_qss(theme: str) -> str:
         color: {p['text_primary']};
         background: transparent;
     }}
+    #DialogTitle {{
+        font-size: 18px;
+        font-weight: 700;
+        color: {p['text_primary']};
+        background: transparent;
+    }}
+    #DialogSubtitle {{
+        font-size: 12px;
+        color: {p['text_muted']};
+        background: transparent;
+    }}
+    #ErrorLabel {{
+        color: {p['warning_text']};
+        background: transparent;
+        font-weight: 600;
+    }}
     #Subtitle {{
         font-size: 12px;
         color: {p['text_muted']};

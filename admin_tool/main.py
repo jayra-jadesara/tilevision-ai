@@ -29,6 +29,8 @@ from PySide6.QtGui import QBrush, QColor, QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -53,6 +55,7 @@ from PySide6.QtWidgets import (
 )
 
 from license_ledger import LicenseLedger, LicenseRecord, is_trial_license_type
+from admin_auth import verify_admin_password
 from admin_theme import get_admin_qss
 from vendor_backup import get_last_backup_summary, resolve_backup_dir, run_vendor_backup
 from web_date_picker import WebDatePicker
@@ -73,6 +76,69 @@ _SETTINGS_PATH = _VENDOR_DIR / "admin_settings.json"
 _VENDOR_KEY_PATH = _VENDOR_DIR / "vendor_private_key.pem"
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DEV_KEY_PATH = _PROJECT_ROOT / "dev_tools" / "dev_private_key.pem"
+
+
+class AdminLoginDialog(QDialog):
+    """Password gate — vendor tool opens only after successful login."""
+
+    def __init__(self, theme: str = "light", parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("TileVision AI — Admin Login")
+        self.setModal(True)
+        self.setFixedWidth(420)
+        self._authenticated = False
+
+        icon_path = app_icon_path()
+        if icon_path is not None:
+            self.setWindowIcon(QIcon(str(icon_path)))
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 20)
+        layout.setSpacing(12)
+
+        title = QLabel("Vendor Admin")
+        title.setObjectName("DialogTitle")
+        subtitle = QLabel("Enter your admin password to open the license manager.")
+        subtitle.setWordWrap(True)
+        subtitle.setObjectName("DialogSubtitle")
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+
+        self._password = QLineEdit()
+        self._password.setEchoMode(QLineEdit.EchoMode.Password)
+        self._password.setPlaceholderText("Admin password")
+        self._password.returnPressed.connect(self._on_accept)
+        layout.addWidget(self._password)
+
+        self._error = QLabel("")
+        self._error.setObjectName("ErrorLabel")
+        self._error.setWordWrap(True)
+        self._error.hide()
+        layout.addWidget(self._error)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self._on_accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self.setStyleSheet(get_admin_qss(theme))
+        self._password.setFocus()
+
+    def _on_accept(self) -> None:
+        if verify_admin_password(self._password.text()):
+            self._authenticated = True
+            self.accept()
+            return
+        self._error.setText("Incorrect password. Try again.")
+        self._error.show()
+        self._password.clear()
+        self._password.setFocus()
+
+    @property
+    def is_authenticated(self) -> bool:
+        return self._authenticated
 
 
 class AdminLicenseWindow(QMainWindow):
@@ -1233,6 +1299,11 @@ def main() -> int:
     icon_path = app_icon_path()
     if icon_path is not None:
         app.setWindowIcon(QIcon(str(icon_path)))
+
+    login = AdminLoginDialog(theme="light")
+    if login.exec() != QDialog.DialogCode.Accepted or not login.is_authenticated:
+        return 0
+
     window = AdminLicenseWindow()
     window.showMaximized()
     return app.exec()

@@ -20,6 +20,15 @@ from the Start menu.
 python admin_tool/main.py
 ```
 
+## Admin login
+
+The admin tool asks for a password when it opens.
+
+Default password: `raj!RAJ!`
+
+Change it later by editing the hash in `%USERPROFILE%\.tilevision_ai_vendor\admin_settings.json`
+(contact support if you need help resetting it).
+
 ## First-time setup
 
 1. Click **Create New Key (First Setup)** and save your private key somewhere safe.
