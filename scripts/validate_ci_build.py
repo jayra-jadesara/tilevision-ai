@@ -17,6 +17,9 @@ def main() -> int:
         "packaging/tilevision.spec",
         "packaging/tilevision_mac.spec",
         "packaging/tilevision_linux.spec",
+        "packaging/tilevision_admin.spec",
+        "packaging/tilevision_admin_setup.iss",
+        "packaging/VENDOR_ADMIN_README.txt",
         "packaging/tilevision_setup.iss",
         "packaging/MAC_INSTALL.txt",
         "scripts/install_mac_deps.sh",
@@ -56,8 +59,20 @@ def main() -> int:
     else:
         iss_version = ""
 
+    admin_iss = (ROOT / "packaging" / "tilevision_admin_setup.iss").read_text(encoding="utf-8")
+    for line in admin_iss.splitlines():
+        if "#define MyAppVersion" in line:
+            admin_iss_version = line.split('"')[1]
+            break
+    else:
+        admin_iss_version = ""
+
     if app_version != iss_version:
         errors.append(f"version mismatch: version.py={app_version} iss={iss_version}")
+    if app_version != admin_iss_version:
+        errors.append(
+            f"version mismatch: version.py={app_version} admin_iss={admin_iss_version}"
+        )
 
     if errors:
         for err in errors:

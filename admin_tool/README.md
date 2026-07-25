@@ -10,13 +10,14 @@ Full guide: [docs/VENDOR_LICENSING.md](../docs/VENDOR_LICENSING.md)
 
 ## Start the tool
 
+**Windows (easiest):** install `TileVisionAI-Admin-VENDOR-ONLY-*.exe` from the GitHub release
+(vendor section — **never send this file to customers**), then open **TileVision AI Admin**
+from the Start menu.
+
+**From source (Windows or Mac):**
+
 ```
 python admin_tool/main.py
-```
-
-On Mac you can also use:
-```
-python3 admin_tool/main.py
 ```
 
 ## First-time setup

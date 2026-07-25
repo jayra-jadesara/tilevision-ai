@@ -62,6 +62,14 @@ jobs:
         run: |
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging/tilevision_setup.iss
 
+      - name: Build vendor admin tool (Windows only)
+        run: |
+          pyinstaller packaging/tilevision_admin.spec --clean --noconfirm
+          if (-not (Test-Path dist/TileVisionAI-Admin/TileVisionAI-Admin.exe)) {
+            throw "Admin build failed — TileVisionAI-Admin.exe not found"
+          }
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging/tilevision_admin_setup.iss
+
       - name: Verify Windows installer (silent install)
         shell: pwsh
         run: |
@@ -78,7 +86,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: tilevision-windows
-          path: dist/installer/*.exe
+          path: dist/installer/TileVisionAI-Setup-*.exe
+          retention-days: 14
+
+      - name: Upload vendor admin artifact (do not ship to customers)
+        uses: actions/upload-artifact@v4
+        with:
+          name: tilevision-windows-admin-vendor
+          path: dist/installer/TileVisionAI-Admin-VENDOR-ONLY-*.exe
           retention-days: 14
 
       - name: Upload Windows app folder (debug)
@@ -319,6 +334,12 @@ jobs:
           name: tilevision-windows
           path: release/windows
 
+      - name: Download vendor admin artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tilevision-windows-admin-vendor
+          path: release/admin-vendor
+
       - name: Download macOS Intel artifact
         uses: actions/download-artifact@v4
         with:
@@ -337,6 +358,7 @@ jobs:
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
           WIN_EXE=$(find release/windows -name "TileVisionAI-Setup-*.exe" | head -n 1)
+          ADMIN_EXE=$(find release/admin-vendor -name "TileVisionAI-Admin-VENDOR-ONLY-*.exe" | head -n 1)
           INTEL_DMG=$(find release/macos-intel -name "*.dmg" | head -n 1)
           ARM_DMG=$(find release/macos-arm64 -name "*.dmg" | head -n 1)
 
@@ -350,6 +372,12 @@ jobs:
           cp "$INTEL_DMG" "TileVisionAI-macOS-Intel-${VERSION}.dmg"
           cp "$ARM_DMG" "TileVisionAI-macOS-AppleSilicon-${VERSION}.dmg"
           cp packaging/MAC_INSTALL.txt "TileVisionAI-macOS-READ-ME-FIRST.txt"
+          if [ -n "$ADMIN_EXE" ]; then
+            cp "$ADMIN_EXE" "TileVisionAI-Admin-VENDOR-ONLY-${VERSION}.exe"
+            cp packaging/VENDOR_ADMIN_README.txt "TileVisionAI-Admin-VENDOR-ONLY-README.txt"
+          else
+            echo "WARNING: vendor admin installer missing — release will ship without it" >&2
+          fi
 
           # GitHub hard limit: 2147483648 bytes (2 GiB) per release asset.
           GH_MAX=2147483648
@@ -417,9 +445,18 @@ jobs:
             | **TileVisionAI-macOS-READ-ME-FIRST.txt** | Quick guide — how to pick the right file |
 
             First launch: Right-click app → **Open** → **Open**
+
+            ## Vendor only (do NOT send to customers)
+
+            | File | For |
+            |------|-----|
+            | **TileVisionAI-Admin-VENDOR-ONLY-*.exe** | Your PC — generate license keys |
+            | **TileVisionAI-Admin-VENDOR-ONLY-README.txt** | Reminder — never send admin to clients |
           files: |
             TileVisionAI-Setup-*.exe
             TileVisionAI-macOS-Intel-*.dmg
             TileVisionAI-macOS-AppleSilicon-*.dmg
             TileVisionAI-macOS-READ-ME-FIRST.txt
+            TileVisionAI-Admin-VENDOR-ONLY-*.exe
+            TileVisionAI-Admin-VENDOR-ONLY-README.txt
             update_manifest.json

@@ -54,7 +54,7 @@ if (-not (Test-Path $ExePath)) {
 
 Write-Host "  Built: $ExePath" -ForegroundColor Green
 
-Write-Host "`n[4/4] Building Inno Setup installer..." -ForegroundColor Yellow
+Write-Host "`n[4/5] Building Inno Setup installer..." -ForegroundColor Yellow
 $IsccCandidates = @(
     "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
     "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
@@ -86,4 +86,28 @@ if ($Installer) {
     Write-Host "  Installer:   $($Installer.FullName)" -ForegroundColor Green
 } else {
     Write-Warning "Inno Setup ran but no installer .exe was found in dist\installer\"
+}
+
+Write-Host "`n[5/5] Building vendor admin tool (Windows only, do not ship to customers)..." -ForegroundColor Yellow
+if (Test-Path "dist\TileVisionAI-Admin") {
+    Remove-Item -Recurse -Force "dist\TileVisionAI-Admin"
+}
+pyinstaller packaging/tilevision_admin.spec --clean --noconfirm
+
+$AdminExePath = Join-Path $ProjectRoot "dist\TileVisionAI-Admin\TileVisionAI-Admin.exe"
+if (-not (Test-Path $AdminExePath)) {
+    Write-Warning "Admin PyInstaller build failed — TileVisionAI-Admin.exe not found."
+    exit 0
+}
+
+Write-Host "  Built admin: $AdminExePath" -ForegroundColor Green
+
+if ($Iscc) {
+    & $Iscc "packaging\tilevision_admin_setup.iss"
+    $AdminInstaller = Get-ChildItem -Path $InstallerDir -Filter "TileVisionAI-Admin-VENDOR-ONLY-*.exe" |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if ($AdminInstaller) {
+        Write-Host "  Admin installer (vendor only): $($AdminInstaller.FullName)" -ForegroundColor Green
+    }
 }
