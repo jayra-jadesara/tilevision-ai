@@ -34,6 +34,7 @@ MANIFEST
 !packaging/tilevision.spec
 !packaging/tilevision_mac.spec
 !packaging/tilevision_linux.spec
+!packaging/tilevision_admin.spec
 
 # Installer logs
 pip-log.txt
