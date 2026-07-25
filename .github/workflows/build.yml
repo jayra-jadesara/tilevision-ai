@@ -159,6 +159,9 @@ jobs:
           KMP_DUPLICATE_LIB_OK: "TRUE"
         run: bash scripts/verify_mac_native_libs.sh x86_64
 
+      - name: Free disk space for large Intel DMG
+        run: bash scripts/free_mac_runner_disk.sh
+
       - name: Build with PyInstaller
         shell: bash
         env:
@@ -169,9 +172,7 @@ jobs:
         run: bash scripts/verify_frozen_mac_app.sh dist/TileVisionAI.app x86_64
 
       - name: Create macOS DMG
-        run: |
-          hdiutil create -volname "TileVision AI (Intel)" -srcfolder dist/TileVisionAI.app \
-            -ov -format UDZO dist/TileVisionAI-macOS-Intel.dmg
+        run: bash scripts/create_mac_dmg.sh dist/TileVisionAI.app dist/TileVisionAI-macOS-Intel.dmg "TileVision AI (Intel)"
 
       - name: Upload macOS Intel artifact
         uses: actions/upload-artifact@v4
@@ -233,6 +234,9 @@ jobs:
           KMP_DUPLICATE_LIB_OK: "TRUE"
         run: bash scripts/verify_mac_native_libs.sh arm64
 
+      - name: Free disk space for large DMG
+        run: bash scripts/free_mac_runner_disk.sh
+
       - name: Build with PyInstaller
         shell: bash
         env:
@@ -243,9 +247,7 @@ jobs:
         run: bash scripts/verify_frozen_mac_app.sh dist/TileVisionAI.app arm64
 
       - name: Create macOS DMG
-        run: |
-          hdiutil create -volname "TileVision AI (Apple Silicon)" -srcfolder dist/TileVisionAI.app \
-            -ov -format UDZO dist/TileVisionAI-macOS-AppleSilicon.dmg
+        run: bash scripts/create_mac_dmg.sh dist/TileVisionAI.app dist/TileVisionAI-macOS-AppleSilicon.dmg "TileVision AI (Apple Silicon)"
 
       - name: Upload macOS Apple Silicon artifact
         uses: actions/upload-artifact@v4

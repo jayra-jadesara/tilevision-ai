@@ -29,6 +29,8 @@ def main() -> int:
         "packaging/MAC_BETA_TEST.txt",
         "scripts/verify_mac_native_libs.sh",
         "scripts/verify_frozen_mac_app.sh",
+        "scripts/create_mac_dmg.sh",
+        "scripts/free_mac_runner_disk.sh",
         "scripts/verify_frozen_windows.ps1",
         "scripts/package_mac_universal.sh",
         "src/version.py",

@@ -73,8 +73,7 @@ build_one() {
 
   if command -v hdiutil >/dev/null 2>&1; then
     rm -f "dist/$dmg"
-    hdiutil create -volname "TileVision AI ($label)" -srcfolder dist/TileVisionAI.app \
-      -ov -format UDZO "dist/$dmg"
+    bash scripts/create_mac_dmg.sh dist/TileVisionAI.app "dist/$dmg" "TileVision AI ($label)"
     echo "  DMG: dist/$dmg"
   fi
 
