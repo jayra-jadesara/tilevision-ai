@@ -47,17 +47,14 @@ logger = logging.getLogger("tilevision.licensing.validator")
 #   3. Keep the private key (.pem file) securely offline — never commit it.
 #   4. Build the application: the public key is baked in; private key stays out.
 #
-# The key below IS a real, valid P-256 public key (unlike an earlier
-# placeholder that used dummy all-zero bytes and crashed on load) — its
-# matching private key is dev_tools/dev_private_key.pem, committed
-# intentionally so the app runs and generates test/trial licenses
-# out of the box for development. It is NOT secure for production: anyone
-# with this repo can mint licenses that validate against it. Replace both
-# halves before shipping to real customers.
+# Production vendor public key (JD Software). Matching private key lives in
+# ~/.tilevision_ai_vendor/vendor_private_key.pem — never commit the private key.
+# For local dev without the vendor folder, use admin_tool or dev_tools/generate_license.py
+# with a test keypair and pass public_key_pem= to LicenseValidator.
 # ─────────────────────────────────────────────────────────────────────────────
 EMBEDDED_PUBLIC_KEY_PEM = b"""-----BEGIN PUBLIC KEY-----
-MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE8oV3FXs5Mzc25mxzta6K9Snbtxaa
-7iXvMu4Srxuht3u0B7qFavlLuoYhrmqD8zV9sBY5QyJj5Yir8iZhTBGwrA==
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEvEJAv9bNTehjUgLnppKR5phBWaeA
+jLGzIPV/LROAutw6XXpXc4YL9zufXZ+XdGVxxZiLCUGB0abqQnCPvVT59Q==
 -----END PUBLIC KEY-----"""
 
 # When the vendor tool runs on the same PC as the customer app (typical dev/setup),

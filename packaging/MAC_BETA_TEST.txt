@@ -6,14 +6,14 @@ you screenshots of any step that fails. Takes about 15-20 minutes.
 
 Client Mac from your screenshot:
   iMac (Retina 5K, 27-inch, 2020) — Intel Core i9
-  -> Use ONLY: TileVisionAI-macOS-Intel-1.0.4.dmg
+  -> Use ONLY: TileVisionAI-macOS-Intel-1.0.5.dmg
   -> Do NOT use the Apple Silicon .dmg
 
 
 STEP 1 — CLEAN INSTALL
 ----------------------
 [ ] Delete any old "TileVision AI" from Applications
-[ ] Download TileVisionAI-macOS-Intel-1.0.4.dmg (Intel version only)
+[ ] Download TileVisionAI-macOS-Intel-1.0.5.dmg (Intel version only)
 [ ] Open DMG, drag app to Applications
 
 
