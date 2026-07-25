@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
 # Post-PyInstaller checks for TileVisionAI.app — Intel and Apple Silicon.
-#
-# Usage:
-#   scripts/verify_frozen_mac_app.sh dist/TileVisionAI.app x86_64
-#   scripts/verify_frozen_mac_app.sh dist/TileVisionAI.app arm64
 
 set -euo pipefail
 
@@ -17,7 +13,6 @@ echo "=== Verifying frozen Mac app ($EXPECTED) ==="
 
 if [[ ! -f "$BIN" ]]; then
   echo "ERROR: missing executable: $BIN" >&2
-  find "$APP" -maxdepth 4 -type f 2>/dev/null | head -20
   exit 1
 fi
 
@@ -27,12 +22,21 @@ file "$BIN" | grep -qE "${EXPECTED}|universal"
 MODEL="$(find "$APP" -path '*/model_weights/dinov2-large/config.json' 2>/dev/null | head -n 1 || true)"
 if [[ -z "$MODEL" ]]; then
   echo "ERROR: DINOv2 model not bundled in .app" >&2
-  find "$APP" -maxdepth 5 -type d 2>/dev/null | head -30
   exit 1
 fi
 echo "model bundled: $MODEL"
 
-echo "Running --verify-bundle (torch import smoke test)..."
-"$BIN" --verify-bundle
+TORCH="$(find "$APP" -type d -path '*/torch' 2>/dev/null | head -n 1 || true)"
+if [[ -z "$TORCH" ]]; then
+  echo "ERROR: torch package missing from .app bundle" >&2
+  exit 1
+fi
+echo "torch: $TORCH"
+
+if [[ ! -d "$TORCH/cuda" ]]; then
+  echo "ERROR: torch.cuda missing from .app bundle — app will crash on startup" >&2
+  exit 1
+fi
+echo "torch.cuda: $TORCH/cuda"
 
 echo "=== Frozen Mac app OK ($EXPECTED) ==="

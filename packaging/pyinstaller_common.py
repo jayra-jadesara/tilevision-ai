@@ -30,6 +30,7 @@ HIDDEN_IMPORTS = [
     "watchdog.events",
 ]
 
+# Never exclude torch.cuda — PyTorch imports it at startup on every platform.
 EXCLUDES = [
     "matplotlib",
     "notebook",
@@ -59,3 +60,18 @@ def collect_datas(project_root: Path) -> list[tuple[str, str]]:
         datas.append((str(resources), "src/resources"))
 
     return datas
+
+
+def collect_torch_bundle() -> tuple[list, list, list]:
+    """Collect torch + torchvision with all native libs (required for frozen apps)."""
+    from PyInstaller.utils.hooks import collect_all
+
+    datas: list = []
+    binaries: list = []
+    hiddenimports: list = []
+    for package in ("torch", "torchvision"):
+        pkg_datas, pkg_binaries, pkg_hidden = collect_all(package)
+        datas += pkg_datas
+        binaries += pkg_binaries
+        hiddenimports += pkg_hidden
+    return datas, binaries, hiddenimports

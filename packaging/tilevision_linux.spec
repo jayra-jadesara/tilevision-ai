@@ -5,17 +5,19 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(SPECPATH)))
-from pyinstaller_common import EXCLUDES, HIDDEN_IMPORTS, collect_datas
+from pyinstaller_common import EXCLUDES, HIDDEN_IMPORTS, collect_datas, collect_torch_bundle
 
 block_cipher = None
 PROJECT_ROOT = Path(SPECPATH).parent
 
+_torch_datas, _torch_binaries, _torch_hidden = collect_torch_bundle()
+
 a = Analysis(
     [str(PROJECT_ROOT / "main.py")],
     pathex=[str(PROJECT_ROOT)],
-    binaries=[],
-    datas=collect_datas(PROJECT_ROOT),
-    hiddenimports=HIDDEN_IMPORTS,
+    binaries=_torch_binaries,
+    datas=collect_datas(PROJECT_ROOT) + _torch_datas,
+    hiddenimports=HIDDEN_IMPORTS + _torch_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -35,7 +37,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     console=False,
 )
 
@@ -45,7 +47,7 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name="TileVisionAI",
 )
