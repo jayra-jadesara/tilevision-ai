@@ -72,6 +72,31 @@ def _mps_available() -> bool:
     return bool(mps and mps.is_available())
 
 
+_MPS_AUTOCAST_SUPPORTED: bool | None = None
+
+
+def mps_autocast_supported() -> bool:
+    """
+    Return True when torch.autocast(device_type=\"mps\") is usable.
+
+    Mac wheels (especially torch 2.2.x) may expose MPS for inference while
+    rejecting MPS autocast — callers must fall back to plain float32 on MPS.
+    """
+    global _MPS_AUTOCAST_SUPPORTED
+    if _MPS_AUTOCAST_SUPPORTED is not None:
+        return _MPS_AUTOCAST_SUPPORTED
+    if not _mps_available():
+        _MPS_AUTOCAST_SUPPORTED = False
+        return False
+    try:
+        with torch.autocast(device_type="mps"):
+            pass
+        _MPS_AUTOCAST_SUPPORTED = True
+    except (RuntimeError, ValueError, TypeError):
+        _MPS_AUTOCAST_SUPPORTED = False
+    return _MPS_AUTOCAST_SUPPORTED
+
+
 def _mps_device_name() -> str:
     adapters = detect_display_adapters()
     if adapters:

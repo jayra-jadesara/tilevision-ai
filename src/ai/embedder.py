@@ -27,7 +27,7 @@ from transformers import AutoImageProcessor, AutoModel
 
 from src.ai.models import PreprocessedImage
 from src.ai.inference_guard import synchronized_inference
-from src.ai.gpu_info import DevicePreference, detect_gpu_runtime
+from src.ai.gpu_info import DevicePreference, detect_gpu_runtime, mps_autocast_supported
 from src.ai.preprocess.image_preprocessor import ImagePreprocessor
 
 logger = logging.getLogger("tilevision.ai.embedder")
@@ -105,6 +105,19 @@ class DINOv2Embedder:
 
         logger.info("DINOv2 model loaded successfully.")
 
+    def _run_model_forward(self, inputs: dict) -> object:
+        """Run DINOv2 forward pass with autocast only when the device supports it."""
+        if self._device.type == "cuda":
+            with torch.autocast(device_type="cuda"):
+                return self._model(**inputs)
+        if self._device.type == "mps":
+            if mps_autocast_supported():
+                with torch.autocast(device_type="mps"):
+                    return self._model(**inputs)
+            logger.debug("MPS autocast unavailable — running float32 inference on MPS")
+            return self._model(**inputs)
+        return self._model(**inputs)
+
     def _forward_batch(self, images: List[Image.Image]) -> np.ndarray:
         """Single DINOv2 forward pass."""
         inputs = self._processor(images=images, return_tensors="pt")
@@ -114,14 +127,7 @@ class DINOv2Embedder:
         }
 
         with torch.inference_mode():
-            if self._device.type == "cuda":
-                with torch.autocast(device_type="cuda"):
-                    outputs = self._model(**inputs)
-            elif self._device.type == "mps":
-                with torch.autocast(device_type="mps"):
-                    outputs = self._model(**inputs)
-            else:
-                outputs = self._model(**inputs)
+            outputs = self._run_model_forward(inputs)
 
         embeddings = (
             outputs.last_hidden_state[:, 0]

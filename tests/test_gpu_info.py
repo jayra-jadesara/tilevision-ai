@@ -110,3 +110,36 @@ def test_mps_auto_selects_on_macos(monkeypatch):
     assert info.active_device == "mps"
     assert info.using_gpu
     assert "Apple GPU" in info.summary_for_ui()
+
+
+def test_mps_autocast_supported_false_when_autocast_rejects_mps(monkeypatch):
+    def _raise_autocast(*_args, **_kwargs):
+        raise RuntimeError("unsupported autocast device_type 'mps'")
+
+    fake_torch = SimpleNamespace(
+        backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True)),
+        autocast=_raise_autocast,
+    )
+    monkeypatch.setattr(gpu_info, "torch", fake_torch)
+    monkeypatch.setattr(gpu_info, "_mps_available", lambda: True)
+    monkeypatch.setattr(gpu_info, "_MPS_AUTOCAST_SUPPORTED", None)
+
+    assert gpu_info.mps_autocast_supported() is False
+
+
+def test_mps_autocast_supported_true_when_autocast_works(monkeypatch):
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _ok_autocast(*_args, **_kwargs):
+        yield
+
+    fake_torch = SimpleNamespace(
+        backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True)),
+        autocast=_ok_autocast,
+    )
+    monkeypatch.setattr(gpu_info, "torch", fake_torch)
+    monkeypatch.setattr(gpu_info, "_mps_available", lambda: True)
+    monkeypatch.setattr(gpu_info, "_MPS_AUTOCAST_SUPPORTED", None)
+
+    assert gpu_info.mps_autocast_supported() is True
