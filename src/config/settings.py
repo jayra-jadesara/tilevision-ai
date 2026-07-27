@@ -63,6 +63,7 @@ class AppSettings:
             "update_manifest_url": "",
             "skipped_update_version": "",
             "last_update_check_at": "",
+            "last_update_check_ok": True,
             "last_seen_update_version": "",
         }
         
@@ -345,6 +346,15 @@ class AppSettings:
     @last_update_check_at.setter
     def last_update_check_at(self, value: str) -> None:
         self._settings["last_update_check_at"] = str(value)
+        self.save()
+
+    @property
+    def last_update_check_ok(self) -> bool:
+        return bool(self._settings.get("last_update_check_ok", True))
+
+    @last_update_check_ok.setter
+    def last_update_check_ok(self, value: bool) -> None:
+        self._settings["last_update_check_ok"] = bool(value)
         self.save()
 
     @property

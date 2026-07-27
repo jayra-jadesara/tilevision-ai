@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from src.utils.update_check import UpdateInfo
+from src.utils.update_check import UpdateInfo, platform_download_label
 
 
 class UpdateAvailableDialog(QDialog):
@@ -47,10 +47,13 @@ class UpdateAvailableDialog(QDialog):
         layout.addWidget(headline)
 
         hint = QLabel(
-            "Download the installer for your computer, run it, then reopen TileVision AI. "
-            "Your license key and tile catalogue stay on this PC."
+            f"Download the update for your computer only: "
+            f"<b>{platform_download_label()}</b>. "
+            "Run the installer, then reopen TileVision AI. "
+            "Your license key and tile catalogue stay on this computer."
         )
         hint.setWordWrap(True)
+        hint.setTextFormat(Qt.TextFormat.RichText)
         layout.addWidget(hint)
 
         if info.release_notes:
@@ -71,7 +74,7 @@ class UpdateAvailableDialog(QDialog):
         skip_btn.clicked.connect(self._on_skip)
         buttons.addWidget(skip_btn)
 
-        download_btn = QPushButton("Download Update")
+        download_btn = QPushButton(f"Download {platform_download_label()}")
         download_btn.setDefault(True)
         download_btn.clicked.connect(self._on_download)
         buttons.addWidget(download_btn)

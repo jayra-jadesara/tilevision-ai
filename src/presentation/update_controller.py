@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -12,13 +13,13 @@ from PySide6.QtWidgets import QMessageBox, QWidget
 from src.config.settings import AppSettings
 from src.presentation.views.update_dialog import UpdateAvailableDialog
 from src.presentation.workers.update_check_worker import UpdateCheckWorker
-from src.utils.update_check import DEFAULT_MANIFEST_URL, UpdateInfo, check_for_updates
+from src.utils.update_check import DEFAULT_MANIFEST_URL, UpdateInfo
 from src.version import APP_VERSION
 
 logger = logging.getLogger("tilevision.update_controller")
 
-_CHECK_INTERVAL_HOURS = 24
-_STARTUP_DELAY_MS = 8000
+_STARTUP_DELAY_MS = 4000
+_ERROR_RETRY_HOURS = 1
 
 
 class UpdateController:
@@ -31,13 +32,11 @@ class UpdateController:
         self._parent: Optional[QWidget] = None
 
     def schedule_startup_check(self, parent: QWidget) -> None:
-        import sys
-
         if not getattr(sys, "frozen", False):
             return
         if not self._settings.check_for_updates:
             return
-        if not self._should_check_now():
+        if not self._should_retry_after_error():
             return
 
         self._parent = parent
@@ -47,25 +46,25 @@ class UpdateController:
         self._parent = parent
         self._start_check(silent=False)
 
-    def _should_check_now(self) -> bool:
-        skipped = self._settings.skipped_update_version
-        if skipped and skipped == self._settings.last_seen_update_version:
-            return False
-
+    def _should_retry_after_error(self) -> bool:
+        """After a failed check, retry soon — do not wait a full day."""
         last = self._settings.last_update_check_at
         if not last:
+            return True
+        if self._settings.last_update_check_ok:
             return True
         try:
             previous = datetime.fromisoformat(last)
             if previous.tzinfo is None:
                 previous = previous.replace(tzinfo=timezone.utc)
             elapsed_hours = (datetime.now(timezone.utc) - previous).total_seconds() / 3600
-            return elapsed_hours >= _CHECK_INTERVAL_HOURS
+            return elapsed_hours >= _ERROR_RETRY_HOURS
         except ValueError:
             return True
 
-    def _mark_checked(self) -> None:
+    def _mark_checked(self, *, success: bool) -> None:
         self._settings.last_update_check_at = datetime.now(timezone.utc).isoformat()
+        self._settings.last_update_check_ok = success
 
     def _start_check(self, *, silent: bool) -> None:
         if self._worker is not None and self._worker.isRunning():
@@ -83,10 +82,11 @@ class UpdateController:
         self._worker.start()
 
     def _on_finished(self, info: object, error: Optional[str], *, silent: bool) -> None:
-        self._mark_checked()
         parent = self._parent
 
         if error:
+            self._mark_checked(success=False)
+            logger.warning("Update check failed (silent=%s): %s", silent, error)
             if not silent and parent is not None:
                 QMessageBox.information(
                     parent,
@@ -96,6 +96,8 @@ class UpdateController:
                     "from your TileVision vendor.",
                 )
             return
+
+        self._mark_checked(success=True)
 
         if info is None:
             if not silent and parent is not None:

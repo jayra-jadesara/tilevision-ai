@@ -26,6 +26,7 @@ HIDDEN_IMPORTS = [
     "cryptography.hazmat.primitives.kdf.pbkdf2",
     "cryptography.hazmat.primitives.asymmetric.ec",
     "cryptography.hazmat.primitives.hashes",
+    "certifi",
     "watchdog.observers",
     "watchdog.events",
 ]
@@ -58,6 +59,13 @@ def collect_datas(project_root: Path) -> list[tuple[str, str]]:
     resources = project_root / "src" / "resources"
     if resources.is_dir():
         datas.append((str(resources), "src/resources"))
+
+    try:
+        import certifi
+
+        datas.append((certifi.where(), "certifi"))
+    except Exception:
+        pass
 
     return datas
 

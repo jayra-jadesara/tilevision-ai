@@ -52,6 +52,24 @@ def test_platform_download_key_mac_intel():
             assert update_check.platform_download_key() == "macos_intel"
 
 
+def test_mac_arm64_does_not_fallback_to_intel_url():
+    downloads = {
+        "macos_intel": "https://example.com/intel.dmg",
+        "macos_arm64": "https://example.com/arm.dmg",
+    }
+    assert update_check.resolve_download_url(downloads, "macos_arm64").endswith("arm.dmg")
+    assert update_check.resolve_download_url(downloads, "macos_intel").endswith("intel.dmg")
+
+
+def test_mac_arm64_missing_url_does_not_use_intel_build():
+    downloads = {"macos_intel": "https://example.com/intel.dmg"}
+    assert update_check.resolve_download_url(downloads, "macos_arm64") == ""
+
+
+def test_platform_download_label_windows():
+    assert update_check.platform_download_label("windows") == "Windows installer (.exe)"
+
+
 def test_check_for_updates_returns_info_when_newer():
     manifest = {
         "version": "1.2.0",

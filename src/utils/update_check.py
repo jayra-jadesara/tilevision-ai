@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import ssl
 import sys
 import urllib.error
 import urllib.request
@@ -39,6 +40,16 @@ DEFAULT_MANIFEST_URL = (
 )
 
 _VERSION_RE = re.compile(r"^v?(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)")
+
+
+def _build_ssl_context() -> ssl.SSLContext:
+    """Use certifi roots when bundled (helps frozen Mac/Windows HTTPS)."""
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,24 +94,39 @@ def platform_download_key() -> str:
     if is_macos():
         import platform
 
-        if platform.machine() == "arm64":
+        machine = platform.machine().lower()
+        if machine in {"arm64", "aarch64"}:
             return "macos_arm64"
         return "macos_intel"
     return "linux"
 
 
-def resolve_download_url(downloads: dict, platform_key: str) -> str:
-    """Pick the best download URL for this platform, with Mac arch fallbacks."""
-    candidates = [platform_key]
-    if platform_key.startswith("macos"):
-        candidates.extend(["macos", "macos_intel", "macos_arm64"])
-    elif platform_key == "linux":
-        candidates.append("url")
+def platform_download_label(platform_key: str | None = None) -> str:
+    """Human-readable installer type for the current (or given) platform."""
+    key = platform_key or platform_download_key()
+    labels = {
+        "windows": "Windows installer (.exe)",
+        "macos_intel": "Mac Intel installer (.dmg)",
+        "macos_arm64": "Mac Apple Silicon installer (.dmg)",
+        "linux": "Linux package",
+    }
+    return labels.get(key, "installer")
 
-    for key in candidates:
-        url = str(downloads.get(key) or "").strip()
-        if url:
-            return url
+
+def resolve_download_url(downloads: dict, platform_key: str) -> str:
+    """
+    Return the download URL for this platform only.
+
+    Mac Intel and Apple Silicon builds are never cross-selected.
+    """
+    direct = str(downloads.get(platform_key) or "").strip()
+    if direct:
+        return direct
+
+    if platform_key.startswith("macos"):
+        return str(downloads.get("macos") or "").strip()
+    if platform_key == "linux":
+        return str(downloads.get("linux") or downloads.get("url") or "").strip()
     return ""
 
 
@@ -113,7 +139,8 @@ def fetch_update_manifest(
         manifest_url,
         headers={"User-Agent": f"TileVisionAI/{APP_VERSION}"},
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    context = _build_ssl_context()
+    with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
         payload = response.read().decode("utf-8")
     data = json.loads(payload)
     if not isinstance(data, dict):
@@ -156,3 +183,23 @@ def check_for_updates(
         release_notes=notes,
         download_url=download_url,
     )
+
+
+def fetch_update_manifest_with_error(
+    *,
+    current_version: str = APP_VERSION,
+    manifest_url: str = DEFAULT_MANIFEST_URL,
+    timeout: float = 12.0,
+) -> tuple[Optional[UpdateInfo], Optional[str]]:
+    """
+    Like check_for_updates but never raises — returns (info, error_message).
+    """
+    try:
+        return check_for_updates(
+            current_version=current_version,
+            manifest_url=manifest_url,
+            timeout=timeout,
+        ), None
+    except Exception as exc:
+        logger.warning("Update check failed: %s", exc)
+        return None, str(exc)
