@@ -103,6 +103,16 @@ def _has_nvidia_adapter(adapters: list[str]) -> bool:
 
 
 def _mps_available() -> bool:
+    """
+    True only when Metal acceleration is usable on Apple Silicon.
+
+    Intel Macs never use MPS — even if a torch build incorrectly reports
+    ``mps.is_available()``, search/indexing must stay on CPU there.
+    """
+    from src.utils.platform_info import is_apple_silicon
+
+    if not is_apple_silicon():
+        return False
     mps = getattr(torch.backends, "mps", None)
     return bool(mps and mps.is_available())
 
@@ -140,6 +150,11 @@ def _mps_device_name() -> str:
 
 
 def _cpu_torch_reason() -> str:
+    from src.utils.platform_info import is_mac_intel
+
+    if is_mac_intel():
+        return "Intel Mac — CPU inference (Apple Silicon enables MPS automatically)"
+
     adapters = detect_display_adapters()
     if adapters and not has_nvidia_gpu() and not _mps_available():
         names = ", ".join(adapters[:2])

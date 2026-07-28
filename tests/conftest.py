@@ -78,7 +78,7 @@ def pytest_configure():
     _configure_faiss_runtime()
 
 
-def simulate_platform(monkeypatch, platform: str) -> None:
+def simulate_platform(monkeypatch, platform: str, *, machine: str | None = None) -> None:
     """Pretend the app runs on win32 or darwin (for cross-platform UI tests)."""
     monkeypatch.setattr(sys, "platform", platform)
     import src.utils.platform_info as platform_info
@@ -89,6 +89,19 @@ def simulate_platform(monkeypatch, platform: str) -> None:
     monkeypatch.setattr(platform_info, "is_linux", lambda: platform.startswith("linux"))
     monkeypatch.setattr(update_check, "is_windows", lambda: platform == "win32")
     monkeypatch.setattr(update_check, "is_macos", lambda: platform == "darwin")
+    if machine is not None:
+        monkeypatch.setattr(platform_info, "mac_machine", lambda: machine.lower())
+        monkeypatch.setattr(
+            platform_info,
+            "is_apple_silicon",
+            lambda: platform == "darwin" and machine.lower() in {"arm64", "aarch64"},
+        )
+        monkeypatch.setattr(
+            platform_info,
+            "is_mac_intel",
+            lambda: platform == "darwin"
+            and machine.lower() not in {"arm64", "aarch64"},
+        )
 
 
 @pytest.fixture
@@ -96,6 +109,13 @@ def mac_platform(monkeypatch):
     """Simulate a Mac showroom PC for page-by-page tests."""
     simulate_platform(monkeypatch, "darwin")
     return "darwin"
+
+
+@pytest.fixture
+def mac_intel_platform(monkeypatch):
+    """Simulate an Intel Mac (x86_64) showroom client."""
+    simulate_platform(monkeypatch, "darwin", machine="x86_64")
+    return "darwin-intel"
 
 
 @pytest.fixture

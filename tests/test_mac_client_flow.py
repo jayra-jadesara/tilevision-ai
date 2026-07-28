@@ -49,6 +49,7 @@ from src.utils.update_check import platform_download_key
 from src.version import APP_VERSION
 import src.utils.image_formats as image_formats
 import src.ai.gpu_info as gpu_info
+from tests.conftest import simulate_platform
 
 
 class _FakeIndexUseCase:
@@ -160,6 +161,8 @@ def test_mac_heic_supported_for_showroom_photos(mac_platform, monkeypatch):
 
 
 def test_mac_apple_silicon_mps_gpu(mac_platform, monkeypatch):
+    simulate_platform(monkeypatch, "darwin", machine="arm64")
+
     fake_torch = types.SimpleNamespace(
         __version__="2.5.1",
         cuda=types.SimpleNamespace(is_available=lambda: False, device_count=lambda: 0),

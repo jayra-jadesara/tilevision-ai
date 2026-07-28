@@ -153,6 +153,10 @@ def is_mps_torch_active() -> bool:
         import torch
     except Exception:
         return False
+    from src.utils.platform_info import is_apple_silicon
+
+    if not is_apple_silicon():
+        return False
     mps = getattr(torch.backends, "mps", None)
     return bool(mps and mps.is_available())
 

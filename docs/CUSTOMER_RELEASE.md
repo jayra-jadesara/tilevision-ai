@@ -160,8 +160,8 @@ After the **Build** workflow finishes, the release includes:
 | File | Used by |
 |------|---------|
 | `TileVisionAI-Setup-1.0.1.exe` | Windows update link |
-| `TileVisionAI-macOS-Intel-1.0.1.dmg` | Intel Mac update link (optional) |
-| `TileVisionAI-macOS-AppleSilicon-1.0.1.dmg` | Apple Silicon update link (optional) |
+| `TileVisionAI-macOS-Intel-1.0.1.dmg` | Intel Mac update link (required for Intel clients) |
+| `TileVisionAI-macOS-AppleSilicon-1.0.1.dmg` | Apple Silicon update link |
 | `TileVisionAI-macOS-1.0.1.zip` | **All Macs** — both DMGs + install guide |
 | `update_manifest.json` | In-app update checker |
 

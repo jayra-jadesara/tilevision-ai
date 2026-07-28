@@ -113,6 +113,28 @@ def test_mps_auto_selects_on_macos(monkeypatch):
     assert "Apple GPU" in info.summary_for_ui()
 
 
+def test_mps_blocked_on_mac_intel_even_if_torch_reports_mps(monkeypatch):
+    import src.utils.platform_info as platform_info
+
+    fake_torch = SimpleNamespace(
+        __version__="2.2.2",
+        cuda=SimpleNamespace(is_available=lambda: False, device_count=lambda: 0),
+        version=SimpleNamespace(cuda=None),
+        backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True)),
+    )
+    monkeypatch.setattr(gpu_info, "torch", fake_torch)
+    monkeypatch.setattr(platform_info, "is_macos", lambda: True)
+    monkeypatch.setattr(platform_info, "mac_machine", lambda: "x86_64")
+    monkeypatch.setattr(platform_info, "is_apple_silicon", lambda: False)
+    monkeypatch.setattr(platform_info, "is_mac_intel", lambda: True)
+    monkeypatch.setattr(gpu_info, "detect_display_adapters", lambda: ["Intel Iris"])
+    monkeypatch.setattr(gpu_info, "has_nvidia_gpu", lambda: False)
+
+    info = gpu_info.detect_gpu_runtime(preference="auto")
+    assert info.active_device == "cpu"
+    assert "Intel Mac" in info.cpu_fallback_reason
+
+
 def test_mps_autocast_supported_false_when_autocast_rejects_mps(monkeypatch):
     def _raise_autocast(*_args, **_kwargs):
         raise RuntimeError("unsupported autocast device_type 'mps'")
