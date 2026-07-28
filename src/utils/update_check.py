@@ -92,10 +92,9 @@ def platform_download_key() -> str:
     if is_windows():
         return "windows"
     if is_macos():
-        import platform
+        from src.utils.platform_info import is_apple_silicon
 
-        machine = platform.machine().lower()
-        if machine in {"arm64", "aarch64"}:
+        if is_apple_silicon():
             return "macos_arm64"
         return "macos_intel"
     return "linux"

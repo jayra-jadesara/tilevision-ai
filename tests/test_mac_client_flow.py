@@ -49,6 +49,7 @@ from src.utils.update_check import platform_download_key
 from src.version import APP_VERSION
 import src.utils.image_formats as image_formats
 import src.ai.gpu_info as gpu_info
+from tests.conftest import simulate_platform
 
 
 class _FakeIndexUseCase:
@@ -160,6 +161,8 @@ def test_mac_heic_supported_for_showroom_photos(mac_platform, monkeypatch):
 
 
 def test_mac_apple_silicon_mps_gpu(mac_platform, monkeypatch):
+    simulate_platform(monkeypatch, "darwin", machine="arm64")
+
     fake_torch = types.SimpleNamespace(
         __version__="2.5.1",
         cuda=types.SimpleNamespace(is_available=lambda: False, device_count=lambda: 0),
@@ -173,6 +176,16 @@ def test_mac_apple_silicon_mps_gpu(mac_platform, monkeypatch):
     info = gpu_info.detect_gpu_runtime(preference="auto")
     assert info.active_device == "mps"
     assert info.using_gpu
+
+
+def test_mac_mps_fallback_env_enabled(mac_platform, monkeypatch):
+    monkeypatch.setattr(gpu_info.sys, "platform", "darwin")
+    monkeypatch.delenv(gpu_info._MPS_FALLBACK_ENV, raising=False)
+    assert gpu_info.configure_mps_fallback() is True
+    assert gpu_info.is_mps_unsupported_op_error(
+        "The operator 'aten::upsample_bicubic2d.out' is not currently "
+        "implemented for the MPS device."
+    )
 
 
 def test_mac_activation_screen(mac_platform, qapp):
@@ -209,6 +222,7 @@ def test_mac_search_page_controls(mac_main_window):
     assert view._drop_zone is not None
     assert view._export_button.isEnabled()
     assert view._crop_button is not None  # enabled after user picks an image
+    assert view._auto_crop_button is not None
     assert view._results_table is not None
 
 

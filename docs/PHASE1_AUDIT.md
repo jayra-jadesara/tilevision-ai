@@ -70,7 +70,7 @@ query image
 |---------|------------|--------|
 | Cream marble classified as speckled | Rule-based classifier too aggressive on fine noise | **Fixed** — soft scoring + vein/structure dims |
 | White speckled tile ranked below cream marble | Speckled reranker over-weighted pattern vs embedding | **Fixed** — 70% embedding weight for speckled |
-| Room photos with furniture score low | Scene clutter, no catalog match | **Partial** — manual crop UI; no auto-segmentation |
+| Room photos with furniture score low | Scene clutter, no catalog match | **Improved** — fast OpenCV tile auto-crop on query (no SAM); manual Crop remains |
 | Filters show only "Unknown" | Filenames not structured; old metadata | **Fixed** — improved parsing; re-index required |
 | Filters had no effect on results | FAISS top-K only, not full filtered rerank | **Fixed** — DB pre-filter + full rerank ≤2000 |
 | Settings Rebuild FAISS Index hidden | Maintenance section commented out | **Fixed** |

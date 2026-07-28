@@ -357,6 +357,16 @@ class SearchView(QWidget):
         self._crop_button.setEnabled(False)
         button_col.addWidget(self._crop_button)
 
+        self._auto_crop_button = QPushButton("Auto Crop & Search")
+        self._auto_crop_button.setObjectName("SecondaryButton")
+        self._auto_crop_button.setToolTip(
+            "Fast tile-region crop for room photos (OpenCV, no SAM). "
+            "Use Crop and Search for a manual selection."
+        )
+        self._auto_crop_button.clicked.connect(self._on_auto_crop_clicked)
+        self._auto_crop_button.setEnabled(False)
+        button_col.addWidget(self._auto_crop_button)
+
         self._clear_button = QPushButton("Clear")
         self._clear_button.setObjectName("SecondaryButton")
         self._clear_button.clicked.connect(self._on_clear_clicked)
@@ -587,23 +597,17 @@ class SearchView(QWidget):
         logger.info(f"Query image selected: {image_path}")
         self._current_query_image_path = image_path
         self._crop_button.setEnabled(True)
+        self._auto_crop_button.setEnabled(True)
         self._confidence_banner.setVisible(False)
 
         suggest_crop, crop_reason = should_suggest_crop(image_path)
         if suggest_crop:
-            reply = QMessageBox.question(
-                self,
-                "Crop Recommended",
-                f"{crop_reason}\n\n"
-                "Crop to the tile area only for much better search accuracy.\n\n"
-                "Open Crop & Search now?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.Yes,
+            # Non-blocking: pipeline auto-crops room photos with fast OpenCV.
+            # Buttons remain for explicit Auto Crop or manual Crop.
+            self._status_label.setText(
+                f"{crop_reason} Searching with auto tile focus. "
+                "Use Auto Crop & Search or Crop & Search for more control."
             )
-            if reply == QMessageBox.StandardButton.Yes:
-                self._on_crop_clicked()
-                return
-
         self._viewmodel.search_by_image(image_path)
 
     def _on_crop_clicked(self) -> None:
@@ -614,10 +618,36 @@ class SearchView(QWidget):
             logger.info(f"Searching with cropped region: {dialog.cropped_image_path}")
             self._viewmodel.search_by_image(dialog.cropped_image_path)
 
+    def _on_auto_crop_clicked(self) -> None:
+        if not self._current_query_image_path:
+            return
+        try:
+            from src.ai.preprocess.fast_tile_crop import save_auto_tile_crop
+
+            crop_path, crop = save_auto_tile_crop(self._current_query_image_path)
+        except Exception as exc:
+            logger.error("Auto crop failed: %s", exc)
+            QMessageBox.warning(
+                self,
+                "Auto Crop Failed",
+                "Could not auto-crop this photo.\n\n"
+                "Try Crop and Search to select the tile area manually.",
+            )
+            return
+
+        self._status_label.setText(
+            f"Auto-cropped tile region ({crop.method}, {crop.confidence:.0%} confidence) "
+            "— searching…"
+        )
+        self._drop_zone.show_preview(str(crop_path))
+        logger.info("Searching with auto-cropped region: %s", crop_path)
+        self._viewmodel.search_by_image(str(crop_path))
+
     def _on_clear_clicked(self) -> None:
         self._drop_zone.reset()
         self._current_query_image_path = None
         self._crop_button.setEnabled(False)
+        self._auto_crop_button.setEnabled(False)
         self._confidence_banner.setVisible(False)
         self._viewmodel.clear_results()
         
@@ -650,6 +680,9 @@ class SearchView(QWidget):
         self._progress_bar.setVisible(is_searching)
         self._clear_button.setEnabled(state != SearchState.IDLE)
         self._crop_button.setEnabled(not is_searching and self._current_query_image_path is not None)
+        self._auto_crop_button.setEnabled(
+            not is_searching and self._current_query_image_path is not None
+        )
         for combo in self._filter_combos.values():
             combo.setEnabled(not is_searching)
 

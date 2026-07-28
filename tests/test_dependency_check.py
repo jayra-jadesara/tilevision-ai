@@ -42,6 +42,13 @@ def test_extras_step_lists_watchdog_as_required():
     assert watchdog.optional is False
 
 
+def test_core_step_lists_pillow_heif_optional_for_mac_photos():
+    core = next(step for step in INSTALL_STEPS if step.step_id == "core")
+    heif = next(pkg for pkg in core.packages if pkg.import_name == "pillow_heif")
+    assert heif.optional is True
+    assert "HEIC" in heif.display_name or "heif" in heif.pip_name
+
+
 def test_ai_stack_step_lists_tokenizers():
     ai = next(step for step in INSTALL_STEPS if step.step_id == "ai_stack")
     names = [pkg.import_name for pkg in ai.packages]

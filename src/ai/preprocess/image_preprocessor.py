@@ -406,6 +406,10 @@ class ImagePreprocessor:
 
         Does not change the indexing pipeline or feature_version — only
         applied at query time to improve room-photo searches.
+
+        Room photos use a fast OpenCV tile-region crop (no SAM / no GPU) so
+        DINOv2 sees the tile surface instead of furniture and walls.
+        Clean catalogue tiles skip that path entirely.
         """
         image = cls.load(image_path)
         original_width, original_height = image.size
@@ -415,8 +419,17 @@ class ImagePreprocessor:
         image = cls.crop_to_content_region(image, min_margin_ratio=0.05)
 
         if cls._looks_like_scene_photo(image):
-            logger.debug("Scene photo detected — applying center focus crop.")
-            image = cls.focus_center_region(image)
+            from src.ai.preprocess.fast_tile_crop import isolate_tile_region
+
+            crop = isolate_tile_region(image)
+            image = crop.image
+            logger.info(
+                "Query scene auto-crop: method=%s confidence=%.2f size=%dx%d",
+                crop.method,
+                crop.confidence,
+                image.size[0],
+                image.size[1],
+            )
 
         image = cls.normalize_lighting(image)
         image = cls.resize_letterbox(image)

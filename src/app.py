@@ -204,8 +204,12 @@ def build_application() -> int:
     # ── 7. Construct AI Layer ─────────────────────────────────────────────────
     from src.ai.embedder import DINOv2Embedder
     from src.ai.feature_extractor import FeatureExtractor
+    from src.ai.gpu_info import configure_mps_fallback
     from src.ai.preprocess.image_preprocessor import ImagePreprocessor
     from src.config.indexing_performance import IndexingPerformanceConfig
+
+    # Mac: must run before DINOv2/MPS inference (missing Metal ops → CPU).
+    configure_mps_fallback()
 
     logger.info("Initializing AI engine...")
     embedder = DINOv2Embedder(device_preference=settings.inference_device)

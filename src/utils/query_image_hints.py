@@ -142,7 +142,7 @@ def confidence_message(results: Sequence[SearchResult]) -> Optional[str]:
         return (
             "Low confidence — no strong visual match in your catalog "
             f"(best alternative: {best:.0f}%). "
-            "Try Crop & Search on the tile only, or add this tile as a "
+            "Try Crop & Search on the tile surface only, or add this tile as a "
             "clean product photo and re-index."
         )
 

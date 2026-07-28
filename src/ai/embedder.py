@@ -27,7 +27,13 @@ from transformers import AutoImageProcessor, AutoModel
 
 from src.ai.models import PreprocessedImage
 from src.ai.inference_guard import synchronized_inference
-from src.ai.gpu_info import DevicePreference, detect_gpu_runtime, mps_autocast_supported
+from src.ai.gpu_info import (
+    DevicePreference,
+    configure_mps_fallback,
+    detect_gpu_runtime,
+    is_mps_unsupported_op_error,
+    mps_autocast_supported,
+)
 from src.ai.preprocess.image_preprocessor import ImagePreprocessor
 
 logger = logging.getLogger("tilevision.ai.embedder")
@@ -37,17 +43,31 @@ logger = logging.getLogger("tilevision.ai.embedder")
 _VIEW_WEIGHTS: Tuple[float, ...] = (0.50, 0.30, 0.20)
 
 
+def _is_device_oom_error(device_type: str, message: str) -> bool:
+    """True only for genuine out-of-memory failures (not missing MPS ops)."""
+    text = (message or "").lower()
+    if "out of memory" in text or "insufficient memory" in text:
+        return True
+    # Do NOT treat bare "mps" as OOM — that matched "not implemented for MPS"
+    # and hid the real Mac search crash behind a useless batch-split retry.
+    if device_type == "cuda" and "cuda error" in text and "memory" in text:
+        return True
+    return False
+
+
 class DINOv2Embedder:
 
     MODEL_NAME = "facebook/dinov2-large"
     EMBEDDING_DIM = 1024
 
     def __init__(self, *, device_preference: DevicePreference = "auto") -> None:
+        configure_mps_fallback()
         self._device_preference: DevicePreference = device_preference
         self._runtime = detect_gpu_runtime(preference=device_preference)
         self._device = torch.device(self._runtime.active_device)
         self._processor = None
         self._model = None
+        self._mps_cpu_fallback_done = False
 
         logger.info(self._runtime.summary_for_log())
         logger.info(
@@ -97,6 +117,7 @@ class DINOv2Embedder:
                 self._runtime.vram_gb or 0.0,
             )
         elif self._device.type == "mps":
+            configure_mps_fallback()
             logger.info("Apple GPU (MPS): %s", self._runtime.device_name)
         else:
             thread_count = min(8, os.cpu_count() or 4)
@@ -104,6 +125,25 @@ class DINOv2Embedder:
             logger.info("CPU inference threads: %d", thread_count)
 
         logger.info("DINOv2 model loaded successfully.")
+
+    def _fallback_mps_to_cpu(self, reason: str) -> None:
+        """Move the model to CPU after an unimplemented MPS operator."""
+        if self._mps_cpu_fallback_done and self._device.type == "cpu":
+            return
+        short = reason.splitlines()[0][:160]
+        logger.warning(
+            "MPS operator unavailable — switching DINOv2 to CPU so search continues. (%s)",
+            short,
+        )
+        self._device = torch.device("cpu")
+        self._device_preference = "cpu"
+        self._runtime = detect_gpu_runtime(preference="cpu")
+        if self._model is not None:
+            self._model.to(self._device)
+            self._model.eval()
+        thread_count = min(8, os.cpu_count() or 4)
+        torch.set_num_threads(thread_count)
+        self._mps_cpu_fallback_done = True
 
     def _run_model_forward(self, inputs: dict) -> object:
         """Run DINOv2 forward pass with autocast only when the device supports it."""
@@ -196,12 +236,19 @@ class DINOv2Embedder:
             try:
                 return self._forward_batch(images)
             except RuntimeError as exc:
-                message = str(exc).lower()
-                is_oom = (
-                    "out of memory" in message
-                    or "cuda error" in message
-                    or "mps" in message
-                )
+                message = str(exc)
+                message_l = message.lower()
+
+                # Missing Metal ops (e.g. upsample_bicubic2d) → CPU, not OOM retry.
+                if (
+                    self._device.type == "mps"
+                    and is_mps_unsupported_op_error(message_l)
+                    and not self._mps_cpu_fallback_done
+                ):
+                    self._fallback_mps_to_cpu(message)
+                    return self._extract_batch(images)
+
+                is_oom = _is_device_oom_error(self._device.type, message_l)
                 if not is_oom or self._device.type not in ("cuda", "mps") or len(images) <= 1:
                     raise
 

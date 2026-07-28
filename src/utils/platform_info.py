@@ -28,6 +28,23 @@ def is_linux() -> bool:
     return sys.platform.startswith("linux")
 
 
+def mac_machine() -> str:
+    """Return normalized Mac CPU architecture (``arm64`` / ``x86_64`` / other)."""
+    import platform
+
+    return platform.machine().lower()
+
+
+def is_apple_silicon() -> bool:
+    """True on Apple Silicon Macs (M1/M2/M3/M4). Always False on Intel Macs."""
+    return is_macos() and mac_machine() in {"arm64", "aarch64"}
+
+
+def is_mac_intel() -> bool:
+    """True on Intel Macs. Always False on Apple Silicon."""
+    return is_macos() and not is_apple_silicon()
+
+
 def _run_command(args: Sequence[str], *, timeout: float = 15.0) -> str | None:
     try:
         kwargs: dict = {

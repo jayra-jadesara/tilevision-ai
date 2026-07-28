@@ -74,6 +74,12 @@ INSTALL_STEPS: List[InstallStep] = [
             PackageSpec("cryptography", "cryptography>=41.0.0", "Cryptography"),
             PackageSpec("reportlab", "reportlab>=4.2.2", "ReportLab"),
             PackageSpec("watchdog", "watchdog>=4.0.0", "Watchdog"),
+            PackageSpec(
+                "pillow_heif",
+                "pillow-heif>=0.18.0",
+                "pillow-heif (HEIC/iPhone photos)",
+                optional=True,
+            ),
         ),
     ),
     InstallStep(
@@ -100,8 +106,9 @@ INSTALL_STEPS: List[InstallStep] = [
         step_id="gpu_optional",
         title="Optional — GPU Acceleration",
         description=(
-            "Install CUDA PyTorch when an NVIDIA GPU is present. "
-            "Apple Silicon uses MPS automatically; AMD/Intel systems stay on CPU."
+            "Apple Silicon uses MPS with automatic CPU fallback for unsupported "
+            "Metal ops; install CUDA PyTorch when an NVIDIA GPU is present; "
+            "AMD/Intel systems stay on CPU."
         ),
         packages=(
             PackageSpec("__cuda_torch__", "", "CUDA PyTorch (NVIDIA only)", builtin=True),
@@ -145,6 +152,10 @@ def is_mps_torch_active() -> bool:
     try:
         import torch
     except Exception:
+        return False
+    from src.utils.platform_info import is_apple_silicon
+
+    if not is_apple_silicon():
         return False
     mps = getattr(torch.backends, "mps", None)
     return bool(mps and mps.is_available())

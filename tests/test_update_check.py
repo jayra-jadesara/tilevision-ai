@@ -37,19 +37,64 @@ def test_check_for_updates_mac_arm64_uses_arch_specific_url():
         def read(self):
             return payload
 
-    with patch.object(update_check.sys, "platform", "darwin"):
-        with patch.object(platform, "machine", lambda: "arm64"):
-            with patch.object(update_check.urllib.request, "urlopen", return_value=_Response()):
-                info = update_check.check_for_updates(current_version="1.0.0")
+    with patch.object(update_check, "is_macos", lambda: True):
+        with patch.object(update_check, "is_windows", lambda: False):
+            with patch(
+                "src.utils.platform_info.is_apple_silicon",
+                lambda: True,
+            ):
+                with patch.object(
+                    update_check.urllib.request, "urlopen", return_value=_Response()
+                ):
+                    info = update_check.check_for_updates(current_version="1.0.0")
 
     assert info is not None
     assert info.download_url.endswith("arm.dmg")
 
 
 def test_platform_download_key_mac_intel():
-    with patch.object(update_check.sys, "platform", "darwin"):
-        with patch.object(platform, "machine", lambda: "x86_64"):
-            assert update_check.platform_download_key() == "macos_intel"
+    with patch.object(update_check, "is_macos", lambda: True):
+        with patch.object(update_check, "is_windows", lambda: False):
+            with patch(
+                "src.utils.platform_info.is_apple_silicon",
+                lambda: False,
+            ):
+                assert update_check.platform_download_key() == "macos_intel"
+
+
+def test_check_for_updates_mac_intel_uses_intel_url():
+    manifest = {
+        "version": "1.0.11",
+        "downloads": {
+            "macos_intel": "https://example.com/intel.dmg",
+            "macos_arm64": "https://example.com/arm.dmg",
+        },
+    }
+    payload = json.dumps(manifest).encode("utf-8")
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return payload
+
+    with patch.object(update_check, "is_macos", lambda: True):
+        with patch.object(update_check, "is_windows", lambda: False):
+            with patch(
+                "src.utils.platform_info.is_apple_silicon",
+                lambda: False,
+            ):
+                with patch.object(
+                    update_check.urllib.request, "urlopen", return_value=_Response()
+                ):
+                    info = update_check.check_for_updates(current_version="1.0.10")
+
+    assert info is not None
+    assert info.download_url.endswith("intel.dmg")
 
 
 def test_mac_arm64_does_not_fallback_to_intel_url():

@@ -46,7 +46,12 @@ python main.py
 ### GPU acceleration
 
 - **Apple Silicon (M1/M2/M3):** Standard PyTorch wheel uses **MPS (Metal)** automatically.
-- **Intel Mac:** CPU inference only.
+- **MPS operator fallback:** TileVision sets `PYTORCH_ENABLE_MPS_FALLBACK=1` at startup so
+  missing Metal ops (e.g. `upsample_bicubic2d` used during visual search) run on CPU
+  instead of crashing. If an unsupported op still surfaces, search falls back to full CPU inference.
+- **Intel Mac:** CPU inference only — MPS is never selected on Intel hardware.
+- **Updates:** Packaged Intel builds check `update_manifest.json` on every launch and offer the
+  `macos_intel` DMG (never the Apple Silicon build).
 
 Check GPU status:
 
