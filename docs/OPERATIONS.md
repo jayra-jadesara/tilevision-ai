@@ -143,7 +143,7 @@ Metrics reported: **Recall@K**, **Precision@K**, **MRR**, **nDCG@K**
 
 1. Index a folder with varied tile types (speckled, marble, wood, plain)
 2. Use **catalogue-quality crop images** when possible (not room photos)
-3. For room photos, use the **crop dialog** before searching
+3. For room photos, search auto-focuses the tile region (fast OpenCV). Use **Crop & Search** for manual control if needed
 4. Apply filters (Brand/Category/Color/Size) after metadata is populated
 5. Verify self-match: search an indexed tile → top result should be **100%**
 

@@ -591,19 +591,12 @@ class SearchView(QWidget):
 
         suggest_crop, crop_reason = should_suggest_crop(image_path)
         if suggest_crop:
-            reply = QMessageBox.question(
-                self,
-                "Crop Recommended",
-                f"{crop_reason}\n\n"
-                "Crop to the tile area only for much better search accuracy.\n\n"
-                "Open Crop & Search now?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.Yes,
+            # Non-blocking: pipeline auto-crops room photos with fast OpenCV.
+            # Manual Crop remains available for precise control.
+            self._status_label.setText(
+                f"{crop_reason} Auto-focusing the tile region for search. "
+                "Use Crop & Search if you want to choose the area manually."
             )
-            if reply == QMessageBox.StandardButton.Yes:
-                self._on_crop_clicked()
-                return
-
         self._viewmodel.search_by_image(image_path)
 
     def _on_crop_clicked(self) -> None:
