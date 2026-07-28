@@ -175,6 +175,16 @@ def test_mac_apple_silicon_mps_gpu(mac_platform, monkeypatch):
     assert info.using_gpu
 
 
+def test_mac_mps_fallback_env_enabled(mac_platform, monkeypatch):
+    monkeypatch.setattr(gpu_info.sys, "platform", "darwin")
+    monkeypatch.delenv(gpu_info._MPS_FALLBACK_ENV, raising=False)
+    assert gpu_info.configure_mps_fallback() is True
+    assert gpu_info.is_mps_unsupported_op_error(
+        "The operator 'aten::upsample_bicubic2d.out' is not currently "
+        "implemented for the MPS device."
+    )
+
+
 def test_mac_activation_screen(mac_platform, qapp):
     use_case = MagicMock(spec=ValidateLicenseUseCase)
     use_case.get_hardware_fingerprint.return_value = "b" * 64

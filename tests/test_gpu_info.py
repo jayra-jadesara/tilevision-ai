@@ -1,5 +1,6 @@
 """Tests for GPU runtime detection."""
 
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -143,3 +144,28 @@ def test_mps_autocast_supported_true_when_autocast_works(monkeypatch):
     monkeypatch.setattr(gpu_info, "_MPS_AUTOCAST_SUPPORTED", None)
 
     assert gpu_info.mps_autocast_supported() is True
+
+
+def test_configure_mps_fallback_sets_env_on_darwin(monkeypatch):
+    monkeypatch.setattr(gpu_info.sys, "platform", "darwin")
+    monkeypatch.delenv(gpu_info._MPS_FALLBACK_ENV, raising=False)
+
+    assert gpu_info.configure_mps_fallback() is True
+    assert os.environ.get(gpu_info._MPS_FALLBACK_ENV) == "1"
+
+
+def test_configure_mps_fallback_noop_on_linux(monkeypatch):
+    monkeypatch.setattr(gpu_info.sys, "platform", "linux")
+    monkeypatch.delenv(gpu_info._MPS_FALLBACK_ENV, raising=False)
+
+    assert gpu_info.configure_mps_fallback() is False
+    assert os.environ.get(gpu_info._MPS_FALLBACK_ENV) is None
+
+
+def test_is_mps_unsupported_op_error_detects_upsample_bicubic2d():
+    message = (
+        "The operator 'aten::upsample_bicubic2d.out' is not currently "
+        "implemented for the MPS device."
+    )
+    assert gpu_info.is_mps_unsupported_op_error(message) is True
+    assert gpu_info.is_mps_unsupported_op_error("CUDA out of memory") is False

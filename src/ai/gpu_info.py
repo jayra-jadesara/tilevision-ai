@@ -8,6 +8,8 @@ Used at startup, in Settings, and by dev_tools/check_gpu.py.
 from __future__ import annotations
 
 import logging
+import os
+import sys
 from dataclasses import dataclass
 from typing import Literal
 
@@ -18,6 +20,39 @@ from src.utils.platform_info import detect_display_adapters, has_nvidia_gpu
 logger = logging.getLogger("tilevision.ai.gpu_info")
 
 DevicePreference = Literal["auto", "cuda", "cpu"]
+
+# PyTorch env that routes unimplemented Metal ops (e.g. upsample_bicubic2d) to CPU.
+_MPS_FALLBACK_ENV = "PYTORCH_ENABLE_MPS_FALLBACK"
+
+
+def configure_mps_fallback() -> bool:
+    """
+    Enable CPU fallback for Metal ops that PyTorch has not implemented on MPS.
+
+    Apple Silicon search/indexing can hit ``aten::upsample_bicubic2d`` (and similar)
+    which crashes visual search unless this env var is set before inference.
+    Safe to call multiple times; no-op on non-macOS.
+    """
+    if sys.platform != "darwin":
+        return False
+    if os.environ.get(_MPS_FALLBACK_ENV) == "1":
+        return True
+    os.environ[_MPS_FALLBACK_ENV] = "1"
+    logger.info(
+        "Enabled %s=1 so unimplemented MPS operators fall back to CPU",
+        _MPS_FALLBACK_ENV,
+    )
+    return True
+
+
+def is_mps_unsupported_op_error(message: str) -> bool:
+    """Return True when a RuntimeError describes a missing MPS operator."""
+    text = (message or "").lower()
+    return (
+        "not currently implemented for the mps device" in text
+        or "not implemented for the mps" in text
+        or ("upsample_bicubic2d" in text and "mps" in text)
+    )
 
 
 @dataclass(frozen=True, slots=True)

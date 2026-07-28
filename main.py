@@ -22,6 +22,11 @@ _PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
+# Mac Metal: enable CPU fallback for unimplemented MPS ops *before* torch is
+# imported by the app. Without this, DINOv2 search crashes on upsample_bicubic2d.
+if sys.platform == "darwin":
+    os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
 
 def main() -> None:
     """Application entry point. Delegates to the composition root."""
@@ -32,6 +37,10 @@ def main() -> None:
 
         print(f"bundle OK torch={torch.__version__} cuda_available={torch.cuda.is_available()}")
         sys.exit(0)
+
+    from src.ai.gpu_info import configure_mps_fallback
+
+    configure_mps_fallback()
 
     from src.app import build_application
     exit_code = build_application()
