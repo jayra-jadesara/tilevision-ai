@@ -222,6 +222,7 @@ def test_mac_search_page_controls(mac_main_window):
     assert view._drop_zone is not None
     assert view._export_button.isEnabled()
     assert view._crop_button is not None  # enabled after user picks an image
+    assert view._auto_crop_button is not None
     assert view._results_table is not None
 
 

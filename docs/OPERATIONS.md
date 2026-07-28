@@ -221,6 +221,6 @@ Indexing performance: device=... batch=24 ...
 |---------|-----|
 | Filters show only "Unknown" | Rename files + re-index |
 | Stale feature banner | Re-scan or Rebuild FAISS Index |
-| Low accuracy on room photos | Crop to tile surface |
+| Low accuracy on room photos | Use Auto Crop & Search, or Crop & Search on the tile surface |
 | Slow indexing | Use GPU or smaller catalog batches |
 | Rebuild FAISS not visible | Update to latest build; check Settings |

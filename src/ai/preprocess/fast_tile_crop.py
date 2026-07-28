@@ -8,11 +8,13 @@ tiles should skip this path; only scene-like queries benefit.
 from __future__ import annotations
 
 import logging
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 
 logger = logging.getLogger("tilevision.ai.fast_tile_crop")
 
@@ -254,3 +256,28 @@ def _center_crop(image: Image.Image, ratio: float = 0.70) -> Image.Image:
     left = (width - crop_w) // 2
     top = (height - crop_h) // 2
     return image.crop((left, top, left + crop_w, top + crop_h))
+
+
+def save_auto_tile_crop(image_path: str | Path) -> tuple[Path, TileCropResult]:
+    """
+    Isolate the tile region and write a JPEG under ``tilevision_crops``.
+
+    Used by Search → Auto Crop & Search so the user can run DINOv2 on the
+    cropped region explicitly (same temp-folder convention as manual crop).
+    """
+    path = Path(image_path)
+    with Image.open(path) as img:
+        source = ImageOps.exif_transpose(img.convert("RGB"))
+
+    result = isolate_tile_region(source)
+    temp_dir = Path(tempfile.gettempdir()) / "tilevision_crops"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    out_path = temp_dir / f"autocrop_{path.stem}_{id(result)}.jpg"
+    result.image.convert("RGB").save(str(out_path), "JPEG", quality=92)
+    logger.info(
+        "Saved auto tile crop: %s (method=%s conf=%.2f)",
+        out_path.name,
+        result.method,
+        result.confidence,
+    )
+    return out_path, result

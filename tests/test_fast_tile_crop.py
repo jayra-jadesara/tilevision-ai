@@ -75,3 +75,17 @@ def test_preprocess_for_query_handles_room_photo(tmp_path):
     assert processed.pil.size == (TARGET_SIZE, TARGET_SIZE)
     assert processed.width == 900
     assert processed.height == 420
+
+
+def test_save_auto_tile_crop_writes_temp_jpeg(tmp_path):
+    from src.ai.preprocess.fast_tile_crop import save_auto_tile_crop
+
+    path = tmp_path / "room_save.jpg"
+    _make_room_like_photo(path)
+    out_path, result = save_auto_tile_crop(path)
+    assert out_path.exists()
+    assert out_path.suffix.lower() == ".jpg"
+    assert "tilevision_crops" in out_path.as_posix()
+    assert result.image.size[0] > 0
+    with Image.open(out_path) as saved:
+        assert saved.size == result.image.size
