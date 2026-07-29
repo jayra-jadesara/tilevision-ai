@@ -45,36 +45,56 @@ _SAM2_HIDDEN_IMPORTS = [
 
 def should_bundle_sam2(*, macos_arch: str | None = None) -> bool:
     """
-    Whether to include model_weights/sam2.1-hiera-tiny in the installer.
+    Whether to include any SAM2 assets (Transformers and/or ONNX) in the installer.
 
     TILEVISION_BUNDLE_SAM2:
       0 / false / off  → never (default for production customer builds)
-      1 / true / on    → yes when the folder exists
-      auto             → Windows + Mac Apple Silicon + Linux; skip Mac Intel
-                         (production Intel torch cannot run Transformers SAM2)
+      1 / true / on    → yes when folders exist
+      auto             → yes on Windows, Mac Intel, Mac Apple Silicon, Linux
+                         (Mac Intel gets ONNX; Transformers weights optional)
     """
     flag = os.environ.get("TILEVISION_BUNDLE_SAM2", "").strip().lower()
     if flag in {"0", "false", "no", "off", ""}:
         return False
-    if flag in {"1", "true", "yes", "on"}:
-        return True
-    if flag == "auto":
-        arch = (macos_arch or os.environ.get("MACOS_BUILD_ARCH", "")).strip().lower()
-        if arch in {"x64", "x86_64", "intel"}:
-            return False
+    if flag in {"1", "true", "yes", "on", "auto"}:
         return True
     return False
 
 
+def should_bundle_sam2_transformers(*, macos_arch: str | None = None) -> bool:
+    """Transformers safetensors — skip Mac Intel (cannot run Sam2Model on torch 2.2)."""
+    if not should_bundle_sam2(macos_arch=macos_arch):
+        return False
+    arch = (macos_arch or os.environ.get("MACOS_BUILD_ARCH", "")).strip().lower()
+    if arch in {"x64", "x86_64", "intel"}:
+        return False
+    return True
+
+
+def should_bundle_sam2_onnx(*, macos_arch: str | None = None) -> bool:
+    """ONNX encoder/decoder — primary path for Mac Intel + Windows CPU."""
+    return should_bundle_sam2(macos_arch=macos_arch)
+
+
 def sam2_hidden_imports() -> list[str]:
-    """Return Sam2 hiddenimports only when the installed transformers has them."""
-    if not should_bundle_sam2():
-        return []
-    try:
-        from transformers import Sam2Model  # noqa: F401
-    except Exception:
-        return []
-    return list(_SAM2_HIDDEN_IMPORTS)
+    """Optional SAM2-related hiddenimports for frozen builds."""
+    imports: list[str] = []
+    if should_bundle_sam2_onnx():
+        imports.extend(
+            [
+                "onnxruntime",
+                "onnxruntime.capi",
+                "onnxruntime.capi.onnxruntime_pybind11_state",
+            ]
+        )
+    if should_bundle_sam2_transformers():
+        try:
+            from transformers import Sam2Model  # noqa: F401
+        except Exception:
+            pass
+        else:
+            imports.extend(_SAM2_HIDDEN_IMPORTS)
+    return imports
 
 # Never exclude torch.cuda — PyTorch imports it at startup on every platform.
 EXCLUDES = [
@@ -101,12 +121,18 @@ def collect_datas(project_root: Path) -> list[tuple[str, str]]:
     if model_dir.is_dir():
         datas.append((str(model_dir), str(Path("model_weights") / "dinov2-large")))
 
-    # Optional experimental SAM2 Precise Crop weights (~150 MB safetensors).
-    if should_bundle_sam2():
+    # Optional experimental SAM2 Precise Crop weights.
+    if should_bundle_sam2_transformers():
         sam2_dir = project_root / "model_weights" / "sam2.1-hiera-tiny"
         if sam2_dir.is_dir() and (sam2_dir / "config.json").is_file():
             datas.append(
                 (str(sam2_dir), str(Path("model_weights") / "sam2.1-hiera-tiny"))
+            )
+    if should_bundle_sam2_onnx():
+        onnx_dir = project_root / "model_weights" / "sam2.1-hiera-tiny-onnx"
+        if onnx_dir.is_dir() and any(onnx_dir.glob("*.encoder.onnx")):
+            datas.append(
+                (str(onnx_dir), str(Path("model_weights") / "sam2.1-hiera-tiny-onnx"))
             )
 
     resources = project_root / "src" / "resources"

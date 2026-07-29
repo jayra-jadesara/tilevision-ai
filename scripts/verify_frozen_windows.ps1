@@ -34,14 +34,22 @@ Write-Host "model: $($model.FullName)"
 $bundleSam2 = if ($env:TILEVISION_BUNDLE_SAM2) { $env:TILEVISION_BUNDLE_SAM2.ToLowerInvariant() } else { "" }
 $expectSam2 = $bundleSam2 -in @("1", "true", "yes", "on", "auto")
 if ($expectSam2) {
-    $sam2 = Get-ChildItem -Path $AppDir -Recurse -Filter "config.json" -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -match "sam2\.1-hiera-tiny" } |
+    $sam2Onnx = Get-ChildItem -Path $AppDir -Recurse -Filter "*.encoder.onnx" -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match "sam2\.1-hiera-tiny-onnx" } |
         Select-Object -First 1
-    if (-not $sam2) {
-        Write-Error "TILEVISION_BUNDLE_SAM2=$bundleSam2 but SAM2 weights (sam2.1-hiera-tiny/config.json) not bundled"
+    if (-not $sam2Onnx) {
+        Write-Error "TILEVISION_BUNDLE_SAM2=$bundleSam2 but ONNX SAM2 encoder not bundled"
         exit 1
     }
-    Write-Host "sam2: $($sam2.FullName)"
+    Write-Host "sam2 onnx: $($sam2Onnx.FullName)"
+    $sam2 = Get-ChildItem -Path $AppDir -Recurse -Filter "config.json" -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match "sam2\.1-hiera-tiny[\\/]" } |
+        Select-Object -First 1
+    if ($sam2) {
+        Write-Host "sam2 transformers: $($sam2.FullName)"
+    } else {
+        Write-Host "sam2 transformers optional missing (ONNX still present)"
+    }
 } else {
     Write-Host "sam2 bundle skipped (TILEVISION_BUNDLE_SAM2=$bundleSam2)"
 }

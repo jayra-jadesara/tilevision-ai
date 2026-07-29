@@ -4,10 +4,10 @@ Precise tile isolation for room photos (experimental).
 Works on **Windows, Mac Intel, and Mac Apple Silicon** with the same path:
 
   1. Fast OpenCV proposes a seed box
-  2. SAM 2 refines when ``TILEVISION_ENABLE_SAM2=1`` and the local stack can load it
-     (Windows / Mac Intel / Mac Silicon — no OS blacklist)
-  3. Otherwise OpenCV GrabCut refines the seed (universal CPU fallback)
-  4. Fast seed crop is the last resort — never fails the button
+  2. Transformers SAM 2 when the local stack can load it (Win / Silicon lab)
+  3. **ONNX SAM 2** on Mac Intel + Windows CPU (no torch 2.5 required)
+  4. Otherwise OpenCV GrabCut refines the seed (universal CPU fallback)
+  5. Fast seed crop is the last resort — never fails the button
 
 Default search / Auto Crop paths do NOT call this module.
 """
@@ -38,22 +38,33 @@ class PreciseCropResult:
     image: Image.Image
     box: tuple[int, int, int, int]
     confidence: float
-    method: str  # "sam2" | "grabcut" | "fast_fallback"
+    method: str  # "sam2" | "sam2_onnx" | "grabcut" | "fast_fallback"
     detail: str = ""
 
 
 def expected_precise_backend() -> str:
     """
-    Which backend Precise Crop will attempt on this machine.
+    Which backend Precise Crop will attempt first on this machine.
 
-    Returns ``sam2`` or ``grabcut``. GrabCut is the universal guarantee for
-    Windows + Mac Intel + Mac Silicon when SAM2 is off or unsupported.
+    Returns ``sam2``, ``sam2_onnx``, or ``grabcut``.
+    Mac Intel production stacks use ``sam2_onnx`` when weights are present.
     """
     try:
         from src.ai.preprocess import sam2_backend
 
         if sam2_backend.sam2_should_run():
             return "sam2"
+    except Exception:
+        pass
+    try:
+        from src.ai.preprocess import sam2_onnx_backend
+
+        if sam2_onnx_backend.sam2_onnx_should_run() and sam2_onnx_backend.resolve_sam2_onnx_dir():
+            return "sam2_onnx"
+        if sam2_onnx_backend.sam2_onnx_should_run():
+            # Enabled but weights not downloaded yet — still preferred over GrabCut
+            # once download runs; report onnx so UI status is honest.
+            return "sam2_onnx"
     except Exception:
         pass
     return "grabcut"
@@ -65,7 +76,7 @@ def precise_isolate_tile(image: Image.Image) -> PreciseCropResult:
     seed = isolate_tile_region(rgb)
     seed_box = seed.box
 
-    # Optional SAM2 — Windows / Mac Intel / Mac Silicon when stack allows.
+    # 1) Transformers SAM2 — Windows / Silicon when experimental stack allows.
     try:
         from src.ai.preprocess import sam2_backend
 
@@ -73,7 +84,7 @@ def precise_isolate_tile(image: Image.Image) -> PreciseCropResult:
             mask = sam2_backend.segment_tile_mask(rgb, box=seed_box)
             cropped, box = _crop_from_mask(rgb, mask)
             if cropped is not None and box is not None:
-                logger.info("Precise crop via SAM2 (%s)", sam2_backend.sam2_status())
+                logger.info("Precise crop via Transformers SAM2 (%s)", sam2_backend.sam2_status())
                 return PreciseCropResult(
                     image=cropped,
                     box=box,
@@ -82,7 +93,28 @@ def precise_isolate_tile(image: Image.Image) -> PreciseCropResult:
                     detail=sam2_backend.sam2_status(),
                 )
     except Exception as exc:
-        logger.warning("SAM2 precise crop unavailable — using GrabCut. (%s)", exc)
+        logger.warning("Transformers SAM2 unavailable — trying ONNX. (%s)", exc)
+
+    # 2) ONNX SAM2 — Mac Intel + Windows CPU (production torch OK).
+    try:
+        from src.ai.preprocess import sam2_onnx_backend
+
+        if sam2_onnx_backend.sam2_onnx_should_run():
+            mask = sam2_onnx_backend.segment_tile_mask_onnx(rgb, box=seed_box)
+            cropped, box = _crop_from_mask(rgb, mask)
+            if cropped is not None and box is not None:
+                logger.info(
+                    "Precise crop via ONNX SAM2 (%s)", sam2_onnx_backend.sam2_onnx_status()
+                )
+                return PreciseCropResult(
+                    image=cropped,
+                    box=box,
+                    confidence=0.84,
+                    method="sam2_onnx",
+                    detail=sam2_onnx_backend.sam2_onnx_status(),
+                )
+    except Exception as exc:
+        logger.warning("ONNX SAM2 unavailable — using GrabCut. (%s)", exc)
 
     grab = _grabcut_refine(rgb, seed_box)
     if grab is not None:
@@ -130,11 +162,17 @@ def _grabcut_detail() -> str:
     from src.utils.platform_info import is_mac_intel, is_macos, is_windows
 
     if is_mac_intel():
-        return "GrabCut on Mac Intel (SAM2 not loaded — install experimental stack to enable)"
+        return (
+            "GrabCut on Mac Intel "
+            "(ONNX SAM2 not active — run scripts/download_sam2_onnx_model.py)"
+        )
     if is_macos():
         return "GrabCut on Mac Apple Silicon (SAM2 not active)"
     if is_windows():
-        return "GrabCut on Windows (SAM2 not active)"
+        return (
+            "GrabCut on Windows "
+            "(ONNX/Transformers SAM2 not active — install onnxruntime + ONNX weights)"
+        )
     return "GrabCut (SAM2 not active)"
 
 

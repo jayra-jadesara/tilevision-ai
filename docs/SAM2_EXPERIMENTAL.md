@@ -4,13 +4,13 @@ Status: **feature branch / lab only**. Do **not** ship in customer DMG/EXE yet.
 
 ## Goal
 
-**Precise Crop & Search** uses the **same SAM2 path** on:
+**Precise Crop & Search** uses accurate SAM 2 on:
 
-| Platform | When SAM2 runs | Fallback |
-|----------|----------------|----------|
-| **Windows** | `TILEVISION_ENABLE_SAM2=1` + experimental deps | GrabCut |
-| **Mac Intel** | Same (no OS blacklist) | GrabCut |
-| **Mac Apple Silicon** | Same | GrabCut |
+| Platform | Primary backend | Fallback |
+|----------|-----------------|----------|
+| **Windows** | ONNX SAM2 (CPU) → Transformers SAM2 if experimental stack | GrabCut |
+| **Mac Intel** | **ONNX SAM2 (CPU)** — works with torch 2.2 / transformers&lt;5 | GrabCut |
+| **Mac Apple Silicon** | Transformers SAM2 if available → else ONNX | GrabCut |
 
 Default search / Auto Crop stay on fast OpenCV (no SAM, no slowdown).
 
@@ -21,33 +21,35 @@ Settings → Preferences → **Use SAM 2 for Precise Crop** (defaults to ON)
 
 Then Search → **Precise Crop & Search**.
 
-### Download local weights (optional, faster offline)
+### Download weights
+
+**Mac Intel + Windows (recommended — ONNX):**
 ```bash
+pip install onnxruntime   # already in requirements.txt
+python scripts/download_sam2_onnx_model.py
+# → model_weights/sam2.1-hiera-tiny-onnx/   (~126 MB)
+```
+
+**Optional Transformers path (Windows / Apple Silicon lab stacks):**
+```bash
+pip install -r requirements-sam2-experimental.txt
 python scripts/download_sam2_model.py
 ```
 
 ### Or via environment (lab / CI)
 ```bash
-pip install -r requirements-sam2-experimental.txt
 export TILEVISION_ENABLE_SAM2=1
 python main.py
 ```
 
-Then: Search → **Precise Crop & Search**.
+If neither SAM2 backend can load, GrabCut still runs so the button never breaks.
 
-If SAM2 cannot load (old torch / missing Sam2Model), GrabCut still runs so the
-button never breaks on Windows or Mac Intel.
+### Mac Intel — solved via ONNX
 
-### Mac Intel note
-
-Official PyTorch wheels for Mac x86_64 stop at torch 2.2.x, while SAM2 usually
-needs newer torch. Options:
-
-1. Use GrabCut (works today on Intel)
-2. Lab machine with a custom stack + `TILEVISION_SAM2_FORCE=1`
-3. Later: optional ONNX SAM package for Intel CPU
-
-Windows and Apple Silicon can use the experimental requirements file normally.
+Official PyTorch wheels for Mac x86_64 stop at torch 2.2.x, so Transformers
+`Sam2Model` is unavailable. **ONNX Runtime + SAM2.1 tiny encoder/decoder** is
+the production Accurate path for Mac Intel (and Windows CPU without experimental
+deps).
 
 ## Buttons
 
@@ -55,7 +57,7 @@ Windows and Apple Silicon can use the experimental requirements file normally.
 |--------|---------|
 | (default drop image) | Fast OpenCV scene focus |
 | Auto Crop & Search | Fast OpenCV |
-| Precise Crop & Search | SAM2 (if allowed) → else GrabCut → else fast |
+| Precise Crop & Search | Transformers SAM2 → ONNX SAM2 → GrabCut → fast |
 | Crop and Search | Manual |
 
 ## Before production
@@ -64,25 +66,24 @@ Windows and Apple Silicon can use the experimental requirements file normally.
 - [x] GrabCut fallback never fails the button
 - [x] Settings toggle for experimental SAM2 (default **ON**)
 - [x] Download helper: `scripts/download_sam2_model.py`
-- [x] Bundle optional SAM2 tiny weights into installers (per-platform)
-  - `TILEVISION_BUNDLE_SAM2=auto` → **Windows + Mac Apple Silicon** yes; **Mac Intel** skip
-  - `TILEVISION_BUNDLE_SAM2=0` → production DINOv2-only (default when unset)
-  - Build scripts download ~150 MB safetensors when bundling is on
-- [ ] Install experimental deps (`requirements-sam2-experimental.txt`) on Win/Silicon lab builds so frozen apps can *run* SAM2 (weights alone are not enough on production transformers&lt;5)
-- [ ] Intel ONNX path (if full SAM2 cannot ship on x86_64 Mac)
+- [x] **ONNX SAM2 for Mac Intel + Windows** (`scripts/download_sam2_onnx_model.py`)
+- [x] Bundle optional SAM2 weights into installers (per-platform)
+  - `TILEVISION_BUNDLE_SAM2=auto` → **ONNX on Windows + Mac Intel + Silicon**
+  - Transformers safetensors on Windows + Silicon (skipped on Mac Intel)
+  - `TILEVISION_BUNDLE_SAM2=0` → production DINOv2-only when unset
+- [ ] Optional: install experimental Transformers deps on Win/Silicon for non-ONNX path
 - [ ] Then version bump + release
 
 ### Lab installer build
 
 ```bash
-# Mac Apple Silicon (bundles SAM2); Mac Intel still GrabCut-only
+# Mac Intel + Apple Silicon (ONNX on both; Transformers on Silicon)
 export TILEVISION_BUNDLE_SAM2=auto
 bash scripts/build_mac.sh
 
-# Windows
-# PowerShell:
+# Windows (ONNX + optional Transformers weights)
 $env:TILEVISION_BUNDLE_SAM2 = "auto"
 powershell -ExecutionPolicy Bypass -File scripts/build_windows.ps1
 ```
 
-Production customer builds leave `TILEVISION_BUNDLE_SAM2` unset (or `0`).
+Production customer builds leave `TILEVISION_BUNDLE_SAM2` unset (or `0`) until approved.

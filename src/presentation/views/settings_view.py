@@ -406,8 +406,8 @@ class SettingsView(QWidget):
         )
         self._sam2_checkbox.setChecked(bool(self._settings.enable_sam2_precise_crop))
         self._sam2_checkbox.setToolTip(
-            "Default ON. Precise Crop & Search tries SAM 2 first, then GrabCut. "
-            "Requires experimental deps / local weights on some machines. "
+            "Default ON. Precise Crop tries Transformers SAM2, then ONNX SAM2 "
+            "(Mac Intel + Windows CPU), then GrabCut. "
             "Default drop-to-search stays on fast OpenCV."
         )
         self._sam2_checkbox.toggled.connect(self._on_sam2_toggled)
@@ -424,13 +424,16 @@ class SettingsView(QWidget):
     def _refresh_sam2_status(self) -> None:
         try:
             from src.ai.preprocess import sam2_backend
+            from src.ai.preprocess import sam2_onnx_backend
             from src.ai.preprocess.precise_tile_crop import expected_precise_backend
 
-            status = sam2_backend.sam2_status()
             backend = expected_precise_backend()
-            self._sam2_status_label.setText(
-                f"Status: {status}\nActive Precise Crop backend: {backend}"
-            )
+            lines = [
+                f"Transformers: {sam2_backend.sam2_status()}",
+                f"ONNX (Mac Intel / Windows CPU): {sam2_onnx_backend.sam2_onnx_status()}",
+                f"Active Precise Crop backend: {backend}",
+            ]
+            self._sam2_status_label.setText("\n".join(lines))
         except Exception as exc:
             self._sam2_status_label.setText(f"Status unavailable: {exc}")
 

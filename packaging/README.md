@@ -42,11 +42,13 @@ this folder automatically when present.
 
 ### Optional: SAM2 Precise Crop weights (lab only)
 
-Not used by default search. For experimental Precise Crop installers:
+Not used by default search. For experimental Precise Crop installers
+(**Mac Intel + Windows** use ONNX; Silicon can use Transformers or ONNX):
 
 ```bash
-python scripts/download_sam2_model.py   # ~150 MB safetensors
-export TILEVISION_BUNDLE_SAM2=auto      # Win + Mac arm64; skip Mac Intel
+python scripts/download_sam2_onnx_model.py   # ~126 MB — Mac Intel + Windows CPU
+python scripts/download_sam2_model.py        # ~150 MB — optional Transformers path
+export TILEVISION_BUNDLE_SAM2=auto          # ONNX all platforms; skip Transformers on Intel
 ```
 
 Leave `TILEVISION_BUNDLE_SAM2` unset for production DINOv2-only builds.

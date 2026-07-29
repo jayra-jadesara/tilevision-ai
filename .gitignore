@@ -77,9 +77,10 @@ dev_tools/dev_private_key.pem
 dev_tools/test_license.txt
 
 # Bundled AI model weights (download with scripts/download_dinov2_model.py
-# / scripts/download_sam2_model.py — do not commit multi-hundred-MB weights)
+# / scripts/download_sam2_model.py / scripts/download_sam2_onnx_model.py)
 model_weights/dinov2-large/
 model_weights/sam2.1-hiera-tiny/
+model_weights/sam2.1-hiera-tiny-onnx/
 
 # VS Code / IDEs
 .vscode/

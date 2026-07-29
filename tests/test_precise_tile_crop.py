@@ -61,9 +61,46 @@ def test_mac_intel_falls_back_when_sam2_api_missing(monkeypatch):
     simulate_platform(monkeypatch, "darwin", machine="x86_64")
     monkeypatch.setenv("TILEVISION_ENABLE_SAM2", "1")
     monkeypatch.setattr(sam2_backend, "sam2_api_available", lambda: False)
+    # Without ONNX either → GrabCut
+    monkeypatch.setattr(
+        "src.ai.preprocess.sam2_onnx_backend.sam2_onnx_should_run",
+        lambda: False,
+    )
 
     assert sam2_backend.sam2_platform_supported() is False
     assert expected_precise_backend() == "grabcut"
+
+
+def test_mac_intel_prefers_onnx_when_transformers_unavailable(monkeypatch):
+    simulate_platform(monkeypatch, "darwin", machine="x86_64")
+    monkeypatch.setenv("TILEVISION_ENABLE_SAM2", "1")
+    sam2_backend.configure_sam2_from_settings(True)
+    monkeypatch.setattr(sam2_backend, "sam2_should_run", lambda: False)
+    monkeypatch.setattr(
+        "src.ai.preprocess.sam2_onnx_backend.sam2_onnx_should_run",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "src.ai.preprocess.sam2_onnx_backend.resolve_sam2_onnx_dir",
+        lambda: Path("/tmp/fake-onnx"),
+    )
+    assert expected_precise_backend() == "sam2_onnx"
+
+
+def test_windows_prefers_onnx_when_transformers_unavailable(monkeypatch):
+    simulate_platform(monkeypatch, "win32")
+    monkeypatch.setenv("TILEVISION_ENABLE_SAM2", "1")
+    sam2_backend.configure_sam2_from_settings(True)
+    monkeypatch.setattr(sam2_backend, "sam2_should_run", lambda: False)
+    monkeypatch.setattr(
+        "src.ai.preprocess.sam2_onnx_backend.sam2_onnx_should_run",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "src.ai.preprocess.sam2_onnx_backend.resolve_sam2_onnx_dir",
+        lambda: Path("/tmp/fake-onnx"),
+    )
+    assert expected_precise_backend() == "sam2_onnx"
 
 
 def test_apple_silicon_can_enable_sam2(monkeypatch):
@@ -102,6 +139,10 @@ def test_precise_crop_works_on_all_major_platforms(tmp_path, monkeypatch, platfo
     sam2_backend.configure_sam2_from_settings(False)
     # Force GrabCut path for this cross-platform smoke test.
     monkeypatch.setattr(sam2_backend, "sam2_should_run", lambda: False)
+    monkeypatch.setattr(
+        "src.ai.preprocess.sam2_onnx_backend.sam2_onnx_should_run",
+        lambda: False,
+    )
 
     path = tmp_path / f"room_{platform}_{machine or 'na'}.jpg"
     _make_room_like_photo(path)

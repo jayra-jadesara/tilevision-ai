@@ -26,26 +26,30 @@ if [[ -z "$MODEL" ]]; then
 fi
 echo "model bundled: $MODEL"
 
-# Optional SAM2 Precise Crop — required only when TILEVISION_BUNDLE_SAM2 is on
-# for this arch (auto skips Mac Intel).
+# Optional SAM2 Precise Crop — ONNX required for Mac Intel + Silicon when bundling.
 BUNDLE_SAM2="${TILEVISION_BUNDLE_SAM2:-}"
 BUNDLE_SAM2_LC="$(printf '%s' "$BUNDLE_SAM2" | tr '[:upper:]' '[:lower:]')"
 expect_sam2=0
 case "$BUNDLE_SAM2_LC" in
-  1|true|yes|on) expect_sam2=1 ;;
-  auto)
-    if [[ "$EXPECTED" == "arm64" ]]; then
-      expect_sam2=1
-    fi
-    ;;
+  1|true|yes|on|auto) expect_sam2=1 ;;
 esac
 if [[ "$expect_sam2" == "1" ]]; then
-  SAM2="$(find "$APP" -path '*/model_weights/sam2.1-hiera-tiny/config.json' 2>/dev/null | head -n 1 || true)"
-  if [[ -z "$SAM2" ]]; then
-    echo "ERROR: TILEVISION_BUNDLE_SAM2=$BUNDLE_SAM2 but SAM2 weights not in .app" >&2
+  SAM2_ONNX="$(find "$APP" -path '*/model_weights/sam2.1-hiera-tiny-onnx/*.encoder.onnx' 2>/dev/null | head -n 1 || true)"
+  if [[ -z "$SAM2_ONNX" ]]; then
+    echo "ERROR: TILEVISION_BUNDLE_SAM2=$BUNDLE_SAM2 but ONNX SAM2 encoder not in .app" >&2
     exit 1
   fi
-  echo "sam2 bundled: $SAM2"
+  echo "sam2 onnx bundled: $SAM2_ONNX"
+  if [[ "$EXPECTED" == "arm64" ]]; then
+    SAM2_TR="$(find "$APP" -path '*/model_weights/sam2.1-hiera-tiny/config.json' 2>/dev/null | head -n 1 || true)"
+    if [[ -n "$SAM2_TR" ]]; then
+      echo "sam2 transformers bundled: $SAM2_TR"
+    else
+      echo "sam2 transformers optional missing (ONNX still present)"
+    fi
+  else
+    echo "Mac Intel: ONNX SAM2 path verified (Transformers not required)"
+  fi
 else
   echo "sam2 bundle skipped (TILEVISION_BUNDLE_SAM2=${BUNDLE_SAM2:-off})"
 fi

@@ -21,6 +21,9 @@ faiss-cpu>=1.7.4
 Pillow>=10.0.0
 opencv-python-headless>=4.8.0
 
+# ONNX Runtime — SAM 2 Precise Crop on Mac Intel + Windows CPU (no torch 2.5 needed)
+onnxruntime>=1.17.0
+
 # ─── PDF Export ───────────────────────────────────────────────────────────────
 reportlab>=4.2.2
 

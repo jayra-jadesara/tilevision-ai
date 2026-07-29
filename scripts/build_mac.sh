@@ -62,30 +62,35 @@ build_one() {
     echo "  Model weights already present at $MODEL_DIR"
   fi
 
-  # Optional SAM2 Precise Crop weights (lab). auto = arm64 yes, Intel no.
+  # Optional SAM2 Precise Crop (lab).
+  # auto/on: ONNX for Intel + Silicon; Transformers safetensors for Silicon only.
   export TILEVISION_BUNDLE_SAM2="${TILEVISION_BUNDLE_SAM2:-auto}"
   if [[ "$TILEVISION_BUNDLE_SAM2" != "0" && "$TILEVISION_BUNDLE_SAM2" != "off" && "$TILEVISION_BUNDLE_SAM2" != "false" ]]; then
-    # Skip download on Mac Intel when using auto (weights unused without torch>=2.5).
-    bundle_sam2=0
+    bundle_any=0
     case "$TILEVISION_BUNDLE_SAM2" in
-      1|true|yes|on) bundle_sam2=1 ;;
-      auto)
-        if [[ "$arch" != "x64" ]]; then
-          bundle_sam2=1
-        fi
-        ;;
+      1|true|yes|on|auto) bundle_any=1 ;;
     esac
-    if [[ "$bundle_sam2" == "1" ]]; then
-      echo "[3b/5] Ensuring optional SAM2 Precise Crop weights..."
-      SAM2_DIR="model_weights/sam2.1-hiera-tiny"
-      if [[ ! -f "$SAM2_DIR/config.json" ]]; then
-        echo "  Downloading SAM2 tiny (~150 MB)..."
-        bash scripts/macos_build_python.sh scripts/download_sam2_model.py
+    if [[ "$bundle_any" == "1" ]]; then
+      echo "[3b/5] Ensuring ONNX SAM2 Precise Crop weights (Mac Intel + Silicon)..."
+      ONNX_DIR="model_weights/sam2.1-hiera-tiny-onnx"
+      if [[ ! -f "$ONNX_DIR/sam2.1_hiera_tiny.encoder.onnx" && ! -f "$ONNX_DIR/encoder.onnx" ]]; then
+        echo "  Downloading ONNX SAM2 tiny (~126 MB)..."
+        bash scripts/macos_build_python.sh scripts/download_sam2_onnx_model.py
       else
-        echo "  SAM2 weights already present at $SAM2_DIR"
+        echo "  ONNX SAM2 weights already present at $ONNX_DIR"
       fi
-    else
-      echo "[3b/5] Skipping SAM2 bundle for Mac Intel (GrabCut fallback)."
+      if [[ "$arch" != "x64" ]]; then
+        echo "[3c/5] Ensuring Transformers SAM2 weights (Apple Silicon)..."
+        SAM2_DIR="model_weights/sam2.1-hiera-tiny"
+        if [[ ! -f "$SAM2_DIR/config.json" ]]; then
+          echo "  Downloading SAM2 tiny safetensors (~150 MB)..."
+          bash scripts/macos_build_python.sh scripts/download_sam2_model.py
+        else
+          echo "  Transformers SAM2 weights already present at $SAM2_DIR"
+        fi
+      else
+        echo "[3c/5] Mac Intel: Transformers SAM2 skipped (ONNX path used)."
+      fi
     fi
   fi
 
