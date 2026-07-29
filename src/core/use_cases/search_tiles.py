@@ -11,6 +11,7 @@ from typing import Dict, List, Optional
 
 from src.ai.pattern_classifier import PatternClassifier
 from src.ai.similarity_score import calibrate_display_percent
+from src.ai.inference_guard import InferenceBusyError
 
 from src.core.models import TileImage, SearchResult
 from src.data.repository_interface import IImageRepository
@@ -117,6 +118,14 @@ class SearchTilesUseCase:
         """Return feature-version compatibility status for the indexed catalog."""
         return self._repo.get_feature_version_status()
 
+    def get_searchable_count(self) -> int:
+        """Return how many vectors FAISS can actually search right now."""
+        try:
+            return int(self._index.get_total_count())
+        except Exception as exc:
+            logger.warning("Could not read FAISS searchable count: %s", exc)
+            return 0
+
     def execute(
         self,
         query_image_path: str,
@@ -222,8 +231,10 @@ class SearchTilesUseCase:
             total_vectors = self._index.get_total_count()
 
             if total_vectors <= 0:
-                logger.info("FAISS index is empty. No search results available.")
-                return []
+                raise RuntimeError(
+                    "The searchable vector index is empty even though tiles may be listed. "
+                    "Go to Settings → Rebuild FAISS Index, then search again."
+                )
 
             filtered_ids: Optional[set[int]] = None
             if active_filters:
@@ -400,6 +411,8 @@ class SearchTilesUseCase:
 
             timer.log_summary(log=logger)
             return results
+        except InferenceBusyError:
+            raise
         except Exception as e:
             logger.error(f"Failed to execute tile search query: {e}")
             raise RuntimeError(f"Visual similarity search execution error: {e}") from e

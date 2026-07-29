@@ -30,6 +30,7 @@ from src.ai.inference_guard import (
     DEFAULT_INDEX_LOCK_TIMEOUT_S,
     DEFAULT_SEARCH_LOCK_TIMEOUT_S,
     synchronized_inference,
+    wait_while_search_priority,
 )
 from src.ai.gpu_info import (
     DevicePreference,
@@ -339,9 +340,10 @@ class DINOv2Embedder:
             return []
 
         results: List[np.ndarray] = []
-        # Keep lock holds short so an active Search is not blocked for hours.
-        chunk_size = 2
+        # One image at a time: release the lock between tiles and yield to Search.
+        chunk_size = 1
         for start in range(0, len(processed_images), chunk_size):
+            wait_while_search_priority()
             chunk = processed_images[start : start + chunk_size]
             all_views: List[Image.Image] = []
             view_counts: List[int] = []
