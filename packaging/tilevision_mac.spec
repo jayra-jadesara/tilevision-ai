@@ -5,7 +5,12 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(SPECPATH)))
-from pyinstaller_common import EXCLUDES, HIDDEN_IMPORTS, collect_datas, collect_torch_bundle
+from pyinstaller_common import (
+    EXCLUDES,
+    collect_datas,
+    collect_hidden_imports,
+    collect_torch_bundle,
+)
 
 block_cipher = None
 PROJECT_ROOT = Path(SPECPATH).parent
@@ -17,7 +22,7 @@ a = Analysis(
     pathex=[str(PROJECT_ROOT)],
     binaries=_torch_binaries,
     datas=collect_datas(PROJECT_ROOT) + _torch_datas,
-    hiddenimports=HIDDEN_IMPORTS + _torch_hidden,
+    hiddenimports=collect_hidden_imports() + _torch_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

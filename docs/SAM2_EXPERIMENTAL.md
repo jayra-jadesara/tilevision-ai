@@ -64,6 +64,25 @@ Windows and Apple Silicon can use the experimental requirements file normally.
 - [x] GrabCut fallback never fails the button
 - [x] Settings toggle for experimental SAM2 (default **ON**)
 - [x] Download helper: `scripts/download_sam2_model.py`
-- [ ] Bundle optional SAM2 tiny weights into installers (decide per-platform)
+- [x] Bundle optional SAM2 tiny weights into installers (per-platform)
+  - `TILEVISION_BUNDLE_SAM2=auto` → **Windows + Mac Apple Silicon** yes; **Mac Intel** skip
+  - `TILEVISION_BUNDLE_SAM2=0` → production DINOv2-only (default when unset)
+  - Build scripts download ~150 MB safetensors when bundling is on
+- [ ] Install experimental deps (`requirements-sam2-experimental.txt`) on Win/Silicon lab builds so frozen apps can *run* SAM2 (weights alone are not enough on production transformers&lt;5)
 - [ ] Intel ONNX path (if full SAM2 cannot ship on x86_64 Mac)
 - [ ] Then version bump + release
+
+### Lab installer build
+
+```bash
+# Mac Apple Silicon (bundles SAM2); Mac Intel still GrabCut-only
+export TILEVISION_BUNDLE_SAM2=auto
+bash scripts/build_mac.sh
+
+# Windows
+# PowerShell:
+$env:TILEVISION_BUNDLE_SAM2 = "auto"
+powershell -ExecutionPolicy Bypass -File scripts/build_windows.ps1
+```
+
+Production customer builds leave `TILEVISION_BUNDLE_SAM2` unset (or `0`).

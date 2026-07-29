@@ -38,6 +38,23 @@ if (-not (Test-Path $ConfigFile)) {
     Write-Host "  Model weights already present at $ModelDir"
 }
 
+# Optional SAM2 Precise Crop weights (lab). Default auto = bundle on Windows.
+if (-not $env:TILEVISION_BUNDLE_SAM2) {
+    $env:TILEVISION_BUNDLE_SAM2 = "auto"
+}
+$bundleSam2 = $env:TILEVISION_BUNDLE_SAM2.ToLowerInvariant()
+if ($bundleSam2 -in @("1", "true", "yes", "on", "auto")) {
+    Write-Host "`n[2b/4] Ensuring optional SAM2 Precise Crop weights..." -ForegroundColor Yellow
+    $Sam2Dir = Join-Path $ProjectRoot "model_weights\sam2.1-hiera-tiny"
+    $Sam2Config = Join-Path $Sam2Dir "config.json"
+    if (-not (Test-Path $Sam2Config)) {
+        Write-Host "  Downloading SAM2 tiny (~150 MB)..."
+        python scripts/download_sam2_model.py
+    } else {
+        Write-Host "  SAM2 weights already present at $Sam2Dir"
+    }
+}
+
 Write-Host "`n[3/4] Running PyInstaller..." -ForegroundColor Yellow
 if (Test-Path "dist\TileVisionAI") {
     Remove-Item -Recurse -Force "dist\TileVisionAI"

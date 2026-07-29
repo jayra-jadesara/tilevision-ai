@@ -26,6 +26,30 @@ if [[ -z "$MODEL" ]]; then
 fi
 echo "model bundled: $MODEL"
 
+# Optional SAM2 Precise Crop — required only when TILEVISION_BUNDLE_SAM2 is on
+# for this arch (auto skips Mac Intel).
+BUNDLE_SAM2="${TILEVISION_BUNDLE_SAM2:-}"
+BUNDLE_SAM2_LC="$(printf '%s' "$BUNDLE_SAM2" | tr '[:upper:]' '[:lower:]')"
+expect_sam2=0
+case "$BUNDLE_SAM2_LC" in
+  1|true|yes|on) expect_sam2=1 ;;
+  auto)
+    if [[ "$EXPECTED" == "arm64" ]]; then
+      expect_sam2=1
+    fi
+    ;;
+esac
+if [[ "$expect_sam2" == "1" ]]; then
+  SAM2="$(find "$APP" -path '*/model_weights/sam2.1-hiera-tiny/config.json' 2>/dev/null | head -n 1 || true)"
+  if [[ -z "$SAM2" ]]; then
+    echo "ERROR: TILEVISION_BUNDLE_SAM2=$BUNDLE_SAM2 but SAM2 weights not in .app" >&2
+    exit 1
+  fi
+  echo "sam2 bundled: $SAM2"
+else
+  echo "sam2 bundle skipped (TILEVISION_BUNDLE_SAM2=${BUNDLE_SAM2:-off})"
+fi
+
 TORCH="$(find "$APP" -type d -path '*/torch' 2>/dev/null | head -n 1 || true)"
 if [[ -z "$TORCH" ]]; then
   echo "ERROR: torch package missing from .app bundle" >&2

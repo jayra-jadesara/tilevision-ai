@@ -40,6 +40,18 @@ python scripts/download_dinov2_model.py
 This creates `model_weights/dinov2-large/` (~1 GB). PyInstaller specs bundle
 this folder automatically when present.
 
+### Optional: SAM2 Precise Crop weights (lab only)
+
+Not used by default search. For experimental Precise Crop installers:
+
+```bash
+python scripts/download_sam2_model.py   # ~150 MB safetensors
+export TILEVISION_BUNDLE_SAM2=auto      # Win + Mac arm64; skip Mac Intel
+```
+
+Leave `TILEVISION_BUNDLE_SAM2` unset for production DINOv2-only builds.
+See [docs/SAM2_EXPERIMENTAL.md](../docs/SAM2_EXPERIMENTAL.md).
+
 For strict offline runtime, set on customer builds:
 
 ```bash

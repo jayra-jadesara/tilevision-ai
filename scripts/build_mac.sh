@@ -62,6 +62,33 @@ build_one() {
     echo "  Model weights already present at $MODEL_DIR"
   fi
 
+  # Optional SAM2 Precise Crop weights (lab). auto = arm64 yes, Intel no.
+  export TILEVISION_BUNDLE_SAM2="${TILEVISION_BUNDLE_SAM2:-auto}"
+  if [[ "$TILEVISION_BUNDLE_SAM2" != "0" && "$TILEVISION_BUNDLE_SAM2" != "off" && "$TILEVISION_BUNDLE_SAM2" != "false" ]]; then
+    # Skip download on Mac Intel when using auto (weights unused without torch>=2.5).
+    bundle_sam2=0
+    case "$TILEVISION_BUNDLE_SAM2" in
+      1|true|yes|on) bundle_sam2=1 ;;
+      auto)
+        if [[ "$arch" != "x64" ]]; then
+          bundle_sam2=1
+        fi
+        ;;
+    esac
+    if [[ "$bundle_sam2" == "1" ]]; then
+      echo "[3b/5] Ensuring optional SAM2 Precise Crop weights..."
+      SAM2_DIR="model_weights/sam2.1-hiera-tiny"
+      if [[ ! -f "$SAM2_DIR/config.json" ]]; then
+        echo "  Downloading SAM2 tiny (~150 MB)..."
+        bash scripts/macos_build_python.sh scripts/download_sam2_model.py
+      else
+        echo "  SAM2 weights already present at $SAM2_DIR"
+      fi
+    else
+      echo "[3b/5] Skipping SAM2 bundle for Mac Intel (GrabCut fallback)."
+    fi
+  fi
+
   export TILEVISION_OFFLINE_MODEL=1
 
   echo "[4/5] Running PyInstaller..."
