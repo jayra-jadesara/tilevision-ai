@@ -422,16 +422,32 @@ class SettingsView(QWidget):
         return box
 
     def _refresh_sam2_status(self) -> None:
-        try:
-            from src.ai.preprocess import sam2_onnx_backend
-            from src.ai.preprocess.precise_tile_crop import expected_precise_backend
+        """
+        Show Precise Crop readiness without importing onnxruntime.
 
-            backend = expected_precise_backend()
-            lines = [
-                f"ONNX SAM2 (shared Mac/Windows path): {sam2_onnx_backend.sam2_onnx_status()}",
-                f"Active Precise Crop backend: {backend}",
-            ]
-            self._sam2_status_label.setText("\n".join(lines))
+        Importing ORT during MainWindow construction has contended with torch
+        on some Mac installs and left Search stuck on "Searching...".
+        Weights presence is enough for status; ORT loads on first Precise Crop.
+        """
+        try:
+            from src.ai.preprocess.sam2_onnx_backend import (
+                resolve_sam2_onnx_dir,
+                sam2_onnx_enabled,
+            )
+
+            if not sam2_onnx_enabled():
+                status = "Disabled in Settings"
+            elif resolve_sam2_onnx_dir() is not None:
+                status = "ONNX weights ready (loads on first Precise Crop)"
+            else:
+                status = (
+                    "ONNX weights missing — reinstall v1.0.13+ or run "
+                    "scripts/download_sam2_onnx_model.py"
+                )
+            self._sam2_status_label.setText(
+                f"ONNX SAM2: {status}\n"
+                "Default Search does not use SAM2 (fast OpenCV only)."
+            )
         except Exception as exc:
             self._sam2_status_label.setText(f"Status unavailable: {exc}")
 

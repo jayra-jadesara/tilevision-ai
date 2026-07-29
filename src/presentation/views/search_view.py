@@ -600,7 +600,8 @@ class SearchView(QWidget):
     def _tick_searching_animation(self) -> None:
         self._search_animation_dots = (self._search_animation_dots + 1) % 4
         dots = "." * self._search_animation_dots
-        self._status_label.setText(f"{self._search_animation_base_text}{dots}")
+        name = Path(self._current_query_image_path).name if self._current_query_image_path else "image"
+        self._status_label.setText(f"Searching for tiles similar to '{name}'{dots}")
 
     # ── Event Handlers ───────────────────────────────────────────────────
 
@@ -734,9 +735,26 @@ class SearchView(QWidget):
         if is_searching:
             self._stats_label.setVisible(False)
             self._confidence_banner.setVisible(False)
+            self._results_table.setVisible(False)
+            self._empty_state_widget.setVisible(True)
+            self._empty_state_label.setText(
+                "Searching for similar tiles…\nPlease wait — this can take a few seconds on first search."
+            )
             self._start_searching_animation()
         else:
             self._stop_searching_animation()
+            if state == SearchState.NO_RESULTS:
+                self._empty_state_label.setText(
+                    "No similar tiles found.\nTry another photo, Auto Crop, or confirm your catalogue is indexed."
+                )
+            elif state == SearchState.IDLE:
+                self._empty_state_label.setText(
+                    "No results yet.\nDrag or browse a tile photo above to start searching."
+                )
+            elif state == SearchState.ERROR:
+                self._empty_state_label.setText(
+                    "Search failed.\nCheck the message, then try again or use Auto Crop & Search."
+                )
 
     @Slot(list)
     def _on_results_ready(self, results: List[SearchResult]) -> None:
