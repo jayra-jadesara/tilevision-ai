@@ -67,6 +67,26 @@ def test_speckled_weights_favor_embedding():
     assert weights["embedding"] >= 0.65
 
 
+def test_marble_wood_stone_boost_handcrafted_signals():
+    """Material tiles rely more on color/texture/edge than embedding alone."""
+    for pattern_type in (PatternType.MARBLE, PatternType.WOOD, PatternType.STONE):
+        weights = HybridReRanker.get_weights(pattern_type)
+        handcrafted = (
+            weights["color"] + weights["texture"] + weights["edge"] + weights["pattern"]
+        )
+        assert weights["embedding"] >= 0.50
+        assert handcrafted >= 0.45
+        assert weights["color"] + weights["texture"] >= 0.25
+
+
+def test_marble_vs_wood_is_penalized():
+    penalty = PatternClassifier.compatibility_adjustment(
+        PatternType.MARBLE,
+        PatternType.WOOD,
+    )
+    assert penalty <= -0.04
+
+
 def test_pattern_compatibility_penalizes_speckled_vs_plain():
     penalty = PatternClassifier.compatibility_adjustment(
         PatternType.SPECKLED,
