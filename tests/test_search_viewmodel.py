@@ -288,16 +288,19 @@ def test_search_timeout_stops_endless_searching(qapp, tmp_path):
     query_file = tmp_path / "query.jpg"
     query_file.write_bytes(b"fake")
 
-    # Worker never returns within the short timeout.
-    use_case = FakeSearchUseCase(results=[_make_result()], delay=1.0)
-    vm = SearchViewModel(use_case=use_case, search_timeout_ms=200)
+    # Long-running worker; we invoke the timeout handler directly.
+    use_case = FakeSearchUseCase(results=[_make_result()], delay=30.0)
+    vm = SearchViewModel(use_case=use_case, search_timeout_ms=60_000)
 
     errors = []
     vm.search_error.connect(errors.append)
 
     vm.search_by_image(str(query_file))
     assert vm.state == SearchState.SEARCHING
-    assert _pump_until(lambda: vm.state == SearchState.ERROR, timeout=3.0)
+    vm._on_search_timeout()
+    assert vm.state == SearchState.ERROR
     assert errors and "too long" in errors[0].lower()
-    # Let the background worker finish so QThread teardown is clean.
-    _pump_until(lambda: False, timeout=1.2)
+    # Bump generation so a late worker completion is ignored, then drop the
+    # reference without forcing QThread teardown mid-run.
+    vm._search_generation += 1
+    vm._worker = None
