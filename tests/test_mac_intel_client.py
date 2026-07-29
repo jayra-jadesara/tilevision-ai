@@ -122,3 +122,100 @@ def test_mac_intel_frozen_startup_schedules_update_check(
     controller.schedule_startup_check(parent)
     assert "callback" in scheduled
     assert scheduled["delay"] == 4000
+
+
+def test_mac_intel_search_timeout_allows_cpu_headroom(mac_intel_platform):
+    from src.presentation.viewmodels.search_viewmodel import (
+        SearchViewModel,
+        _default_search_timeout_ms,
+    )
+
+    assert _default_search_timeout_ms() == 120_000
+    use_case = MagicMock()
+    use_case.get_index_health.return_value = MagicMock(
+        is_compatible=True, stale_count=0, indexed_count=1
+    )
+    use_case.get_searchable_count.return_value = 1
+    vm = SearchViewModel(use_case=use_case)
+    assert vm._search_timeout_ms == 120_000
+
+
+def test_mac_intel_sam2_onnx_uses_cpu_provider_only(mac_intel_platform, monkeypatch):
+    from src.ai.preprocess import sam2_onnx_backend
+
+    fake_ort = types.ModuleType("onnxruntime")
+    fake_ort.get_available_providers = lambda: [
+        "CoreMLExecutionProvider",
+        "CPUExecutionProvider",
+        "CUDAExecutionProvider",
+    ]
+    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+
+    providers = sam2_onnx_backend._cpu_providers()
+    assert providers == ["CPUExecutionProvider"]
+    assert "CoreMLExecutionProvider" not in providers
+
+
+def test_mac_intel_query_views_capped_for_dino_latency(mac_intel_platform, tmp_path, monkeypatch):
+    from PIL import Image
+
+    import src.ai.preprocess.fast_tile_crop as fast_tile_crop
+    from src.ai.preprocess.image_preprocessor import ImagePreprocessor
+
+    path = tmp_path / "room.jpg"
+    Image.new("RGB", (900, 500), color=(170, 160, 150)).save(path)
+
+    # Force scene path so multi-view candidates would normally expand.
+    monkeypatch.setattr(
+        ImagePreprocessor,
+        "_looks_like_scene_photo",
+        classmethod(lambda cls, img: True),
+    )
+    monkeypatch.setattr(
+        fast_tile_crop,
+        "list_tile_region_candidates",
+        lambda image, limit=3: [
+            types.SimpleNamespace(
+                image=Image.new("RGB", (128, 128), color=(i * 40, 80, 100)),
+                method=f"cand{i}",
+                confidence=0.9,
+            )
+            for i in range(max(1, int(limit)))
+        ],
+    )
+    views = ImagePreprocessor.prepare_query_views(path, max_views=3)
+    assert 1 <= len(views) <= 2
+
+
+def test_drop_search_isolate_skips_sam2(monkeypatch):
+    """Default drop-search must never call Precise/SAM2 crop (UI freeze risk)."""
+    from PIL import Image
+
+    import src.ai.preprocess.fast_tile_crop as fast_tile_crop
+    from src.ai.preprocess.image_preprocessor import ImagePreprocessor
+
+    calls = {"precise": 0}
+
+    def _boom(*_args, **_kwargs):
+        calls["precise"] += 1
+        raise AssertionError("SAM2 precise crop must not run on drop-search")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "src.ai.preprocess.precise_tile_crop",
+        types.SimpleNamespace(precise_isolate_tile=_boom),
+    )
+    monkeypatch.setattr(
+        fast_tile_crop,
+        "isolate_tile_region",
+        lambda image: types.SimpleNamespace(
+            image=image.crop((10, 10, 100, 100)),
+            method="opencv",
+            confidence=0.7,
+        ),
+    )
+    image = Image.new("RGB", (640, 400), color=(120, 110, 100))
+    cropped = ImagePreprocessor._isolate_query_tile(image)
+    assert calls["precise"] == 0
+    assert cropped is not None
+    assert cropped.size == (90, 90)

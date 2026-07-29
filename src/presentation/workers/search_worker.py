@@ -66,10 +66,22 @@ class SearchWorker(QThread):
         start_time = time.monotonic()
 
         try:
+            if self.isInterruptionRequested():
+                logger.info("Search QThread interrupted before execute.")
+                return
+
             results = self._use_case.execute(
                 self._query_image_path, top_k=self._top_k, filters=self._filters
             )
             elapsed = time.monotonic() - start_time
+
+            # Timed-out UI already bumped generation; do not emit stale results.
+            if self.isInterruptionRequested():
+                logger.info(
+                    "Search QThread interrupted after %.3fs — suppressing result emit.",
+                    elapsed,
+                )
+                return
 
             logger.info(f"Search QThread finished in {elapsed:.3f}s. Results: {len(results)}")
             if elapsed > 2.0:
@@ -81,5 +93,12 @@ class SearchWorker(QThread):
             self.search_timed.emit(elapsed)
             self.search_completed.emit(results)
         except Exception as e:
+            if self.isInterruptionRequested():
+                logger.info(
+                    "Search QThread interrupted during failure for '%s': %s",
+                    self._query_image_path,
+                    e,
+                )
+                return
             logger.error(f"Search worker failed for query '{self._query_image_path}': {e}")
             self.search_failed.emit(str(e))

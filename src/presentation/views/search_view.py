@@ -47,6 +47,7 @@ from PySide6.QtWidgets import (
 from src.core.models import SearchResult
 from src.presentation.viewmodels.search_viewmodel import SearchViewModel, SearchState
 from src.presentation.views.crop_dialog import CropDialog
+from src.presentation.workers.tile_crop_worker import TileCropWorker
 from src.theme.theme_manager import get_palette, get_shared_view_qss
 from src.utils.query_image_hints import confidence_message, should_suggest_crop
 
@@ -285,6 +286,8 @@ class SearchView(QWidget):
         self._catalogue_master_service = catalogue_master_service
         self._current_results: List[SearchResult] = []
         self._current_query_image_path: Optional[str] = None
+        self._crop_worker: Optional[TileCropWorker] = None
+        self._crop_busy = False
         self._preview_panel = _ResultPreviewPanel(self, theme=theme)
         self._search_animation_timer = QTimer(self)
         self._search_animation_timer.setInterval(400)
@@ -633,64 +636,110 @@ class SearchView(QWidget):
     def _on_auto_crop_clicked(self) -> None:
         if not self._current_query_image_path:
             return
-        try:
-            from src.ai.preprocess.fast_tile_crop import save_auto_tile_crop
-
-            crop_path, crop = save_auto_tile_crop(self._current_query_image_path)
-        except Exception as exc:
-            logger.error("Auto crop failed: %s", exc)
-            QMessageBox.warning(
-                self,
-                "Auto Crop Failed",
-                "Could not auto-crop this photo.\n\n"
-                "Try Crop and Search to select the tile area manually.",
-            )
-            return
-
-        self._status_label.setText(
-            f"Auto-cropped tile region ({crop.method}, {crop.confidence:.0%} confidence) "
-            "— searching…"
-        )
-        self._drop_zone.show_preview(str(crop_path))
-        logger.info("Searching with auto-cropped region: %s", crop_path)
-        self._viewmodel.search_by_image(str(crop_path))
+        self._start_background_crop("auto")
 
     def _on_precise_crop_clicked(self) -> None:
         if not self._current_query_image_path:
             return
-        try:
-            from src.ai.preprocess.precise_tile_crop import save_precise_tile_crop
+        self._start_background_crop("precise")
 
-            crop_path, crop = save_precise_tile_crop(self._current_query_image_path)
-        except Exception as exc:
-            logger.error("Precise crop failed: %s", exc)
+    def _start_background_crop(self, mode: str) -> None:
+        """Run Auto/Precise crop off the UI thread (critical on Mac Intel)."""
+        if self._crop_busy or self._viewmodel.is_searching:
+            return
+        if not self._current_query_image_path:
+            return
+
+        label = "Precise Crop" if mode == "precise" else "Auto Crop"
+        self._crop_busy = True
+        self._set_crop_controls_enabled(False)
+        self._status_label.setText(f"{label} running… UI stays responsive.")
+        self._progress_bar.setVisible(True)
+
+        worker = TileCropWorker(self._current_query_image_path, mode)  # type: ignore[arg-type]
+        self._crop_worker = worker
+        worker.crop_finished.connect(
+            lambda path, crop, m=mode: self._on_background_crop_finished(m, path, crop)
+        )
+        worker.crop_failed.connect(
+            lambda message, m=mode: self._on_background_crop_failed(m, message)
+        )
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _on_background_crop_finished(self, mode: str, crop_path: str, crop) -> None:
+        self._crop_busy = False
+        self._crop_worker = None
+        self._progress_bar.setVisible(self._viewmodel.is_searching)
+        method = getattr(crop, "method", "crop")
+        confidence = float(getattr(crop, "confidence", 0.0) or 0.0)
+        if mode == "precise":
+            self._status_label.setText(
+                f"Precise crop ({method}, {confidence:.0%}) — searching…"
+            )
+            logger.info(
+                "Searching with precise crop: %s method=%s detail=%s",
+                crop_path,
+                method,
+                getattr(crop, "detail", ""),
+            )
+        else:
+            self._status_label.setText(
+                f"Auto-cropped tile region ({method}, {confidence:.0%} confidence) "
+                "— searching…"
+            )
+            logger.info("Searching with auto-cropped region: %s", crop_path)
+
+        self._drop_zone.show_preview(str(crop_path))
+        self._viewmodel.search_by_image(str(crop_path))
+
+    def _on_background_crop_failed(self, mode: str, message: str) -> None:
+        self._crop_busy = False
+        self._crop_worker = None
+        self._progress_bar.setVisible(self._viewmodel.is_searching)
+        self._refresh_crop_controls()
+        logger.error("%s crop failed: %s", mode, message)
+        if mode == "precise":
             QMessageBox.warning(
                 self,
                 "Precise Crop Failed",
                 "Could not run precise crop on this photo.\n\n"
                 "Try Auto Crop & Search or manual Crop and Search.",
             )
-            return
+        else:
+            QMessageBox.warning(
+                self,
+                "Auto Crop Failed",
+                "Could not auto-crop this photo.\n\n"
+                "Try Crop and Search to select the tile area manually.",
+            )
 
-        self._status_label.setText(
-            f"Precise crop ({crop.method}, {crop.confidence:.0%}) — searching…"
-        )
-        self._drop_zone.show_preview(str(crop_path))
-        logger.info(
-            "Searching with precise crop: %s method=%s detail=%s",
-            crop_path,
-            crop.method,
-            crop.detail,
-        )
-        self._viewmodel.search_by_image(str(crop_path))
+    def _set_crop_controls_enabled(self, enabled: bool) -> None:
+        has_query = self._current_query_image_path is not None
+        allow = enabled and has_query and not self._crop_busy
+        self._crop_button.setEnabled(allow)
+        self._auto_crop_button.setEnabled(allow)
+        self._precise_crop_button.setEnabled(allow)
+
+    def _refresh_crop_controls(self) -> None:
+        searching = self._viewmodel.is_searching
+        self._set_crop_controls_enabled(not searching and not self._crop_busy)
 
     def _on_clear_clicked(self) -> None:
+        if self._crop_worker is not None and self._crop_worker.isRunning():
+            try:
+                self._crop_worker.requestInterruption()
+            except Exception:
+                pass
+        self._crop_busy = False
+        self._crop_worker = None
         self._drop_zone.reset()
         self._current_query_image_path = None
         self._crop_button.setEnabled(False)
         self._auto_crop_button.setEnabled(False)
         self._precise_crop_button.setEnabled(False)
         self._confidence_banner.setVisible(False)
+        self._progress_bar.setVisible(False)
         self._viewmodel.clear_results()
         
     def _on_history_clicked(self) -> None:
@@ -718,18 +767,12 @@ class SearchView(QWidget):
     @Slot(str)
     def _on_state_changed(self, state: str) -> None:
         is_searching = state == SearchState.SEARCHING
-        self._drop_zone.set_busy(is_searching)
-        self._progress_bar.setVisible(is_searching)
-        self._clear_button.setEnabled(state != SearchState.IDLE)
-        self._crop_button.setEnabled(not is_searching and self._current_query_image_path is not None)
-        self._auto_crop_button.setEnabled(
-            not is_searching and self._current_query_image_path is not None
-        )
-        self._precise_crop_button.setEnabled(
-            not is_searching and self._current_query_image_path is not None
-        )
+        self._drop_zone.set_busy(is_searching or self._crop_busy)
+        self._progress_bar.setVisible(is_searching or self._crop_busy)
+        self._clear_button.setEnabled(state != SearchState.IDLE and not self._crop_busy)
+        self._refresh_crop_controls()
         for combo in self._filter_combos.values():
-            combo.setEnabled(not is_searching)
+            combo.setEnabled(not is_searching and not self._crop_busy)
 
         if is_searching:
             self._stats_label.setVisible(False)

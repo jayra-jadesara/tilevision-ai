@@ -128,9 +128,20 @@ def sam2_onnx_status() -> str:
 
 
 def _cpu_providers() -> list[str]:
+    """Prefer CPU on Mac Intel — CoreML ORT can stall or underperform there."""
     import onnxruntime as ort
 
+    from src.utils.platform_info import is_mac_intel
+
     available = ort.get_available_providers()
+    if is_mac_intel():
+        # Force CPU-only providers on Intel Macs for stable Precise Crop.
+        return (
+            ["CPUExecutionProvider"]
+            if "CPUExecutionProvider" in available
+            else (list(available)[:1] or ["CPUExecutionProvider"])
+        )
+
     preferred = []
     for name in ("CUDAExecutionProvider", "CoreMLExecutionProvider", "CPUExecutionProvider"):
         if name in available:

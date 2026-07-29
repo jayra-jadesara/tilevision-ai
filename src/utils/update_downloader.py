@@ -401,3 +401,27 @@ def format_bytes(num: float) -> str:
 
 def format_speed(bytes_per_sec: float) -> str:
     return f"{format_bytes(bytes_per_sec)}/s"
+
+
+def eta_seconds(received: int, total: int, speed_bps: float) -> float | None:
+    """Estimated seconds remaining at the current download speed."""
+    if speed_bps <= 1.0 or total <= 0:
+        return None
+    remaining = max(0, int(total) - int(received))
+    if remaining <= 0:
+        return 0.0
+    return remaining / float(speed_bps)
+
+
+def format_eta(seconds: float | None) -> str:
+    """Human-readable remaining time for update downloads."""
+    if seconds is None:
+        return "calculating…"
+    total = max(0, int(round(seconds)))
+    if total < 60:
+        return f"~{total}s left"
+    minutes, secs = divmod(total, 60)
+    if minutes < 60:
+        return f"~{minutes}m {secs:02d}s left"
+    hours, minutes = divmod(minutes, 60)
+    return f"~{hours}h {minutes:02d}m left"

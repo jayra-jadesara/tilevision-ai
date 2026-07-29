@@ -23,7 +23,13 @@ from PySide6.QtWidgets import (
 
 from src.presentation.workers.update_download_worker import UpdateDownloadWorker
 from src.utils.update_check import UpdateInfo, platform_download_label
-from src.utils.update_downloader import DEFAULT_CONNECTIONS, format_bytes, format_speed
+from src.utils.update_downloader import (
+    DEFAULT_CONNECTIONS,
+    eta_seconds,
+    format_bytes,
+    format_eta,
+    format_speed,
+)
 
 logger = logging.getLogger("tilevision.presentation.views.update_dialog")
 
@@ -166,14 +172,15 @@ class UpdateAvailableDialog(QDialog):
     def _on_progress(self, received: int, total: int, speed: float) -> None:
         if total > 0:
             self._progress.setValue(int(received * 1000 / total))
+            eta = format_eta(eta_seconds(received, total, speed))
             self._status.setText(
                 f"Downloading… {format_bytes(received)} / {format_bytes(total)} "
-                f"({format_speed(speed)})"
+                f"({format_speed(speed)}) — {eta}"
             )
         else:
             self._progress.setRange(0, 0)
             self._status.setText(
-                f"Downloading… {format_bytes(received)} ({format_speed(speed)})"
+                f"Downloading… {format_bytes(received)} ({format_speed(speed)}) — calculating…"
             )
 
     def _on_download_ok(self, path: str) -> None:
