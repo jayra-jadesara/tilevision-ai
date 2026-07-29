@@ -104,13 +104,15 @@ class FeatureExtractor:
     def extract_from_preprocessed(
         self,
         image: PreprocessedImage,
+        *,
+        for_query: bool = False,
     ) -> TileFeatures:
         """Extract full features when the image is already preprocessed."""
         total_start = time.perf_counter()
 
         t1 = time.perf_counter()
         embedding = np.asarray(
-            self._embedder.extract_from_preprocessed(image),
+            self._embedder.extract_from_preprocessed(image, for_query=for_query),
             dtype=np.float32,
         )
         dinov2_elapsed = time.perf_counter() - t1
@@ -248,7 +250,7 @@ class FeatureExtractor:
             image = ImagePreprocessor.preprocess(image_path)
         preprocess_elapsed = time.perf_counter() - t0
 
-        features = self.extract_from_preprocessed(image)
+        features = self.extract_from_preprocessed(image, for_query=for_query)
         features_elapsed = time.perf_counter() - total_start
 
         self._last_timings = ExtractTimings(

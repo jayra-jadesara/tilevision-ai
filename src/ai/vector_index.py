@@ -16,7 +16,11 @@ except ImportError:
     # Fallback/mock support for environments where faiss is not pre-installed yet
     faiss = None
 
-from src.ai.inference_guard import synchronized_inference
+from src.ai.inference_guard import (
+    DEFAULT_INDEX_LOCK_TIMEOUT_S,
+    DEFAULT_SEARCH_LOCK_TIMEOUT_S,
+    synchronized_inference,
+)
 
 logger = logging.getLogger("tilevision.ai.vector_index")
 
@@ -59,7 +63,7 @@ class FaissIndexManager:
         # Ensure parent folder exists
         self._index_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with synchronized_inference():
+        with synchronized_inference(timeout=DEFAULT_INDEX_LOCK_TIMEOUT_S, purpose="FAISS"):
             if self._index_path.exists() and self._index_path.stat().st_size > 0:
                 logger.info(f"Loading existing FAISS index from: {self._index_path}")
                 try:
@@ -105,7 +109,7 @@ class FaissIndexManager:
             raise ValueError("Size mismatch: The number of IDs must match the number of vectors.")
 
         try:
-            with synchronized_inference():
+            with synchronized_inference(timeout=DEFAULT_INDEX_LOCK_TIMEOUT_S, purpose="FAISS add"):
                 ids_np = np.array(ids, dtype=np.int64)
                 vectors_np = np.array(vectors, dtype=np.float32)
 
@@ -119,8 +123,9 @@ class FaissIndexManager:
                 # Add to index
                 self._index.add_with_ids(vectors_np, ids_np)
                 logger.info(f"Added {len(ids)} vectors to FAISS index. Total now: {self._index.ntotal}")
-                if persist:
-                    self.save_index()
+            # Persist outside the add critical section so Search can interleave.
+            if persist:
+                self.save_index()
         except Exception as e:
             logger.error(f"Failed to add vectors to FAISS index: {e}")
             raise RuntimeError(f"FAISS index write error: {e}") from e
@@ -154,7 +159,7 @@ class FaissIndexManager:
             return
 
         try:
-            with synchronized_inference():
+            with synchronized_inference(timeout=DEFAULT_INDEX_LOCK_TIMEOUT_S, purpose="FAISS"):
                 self._index.remove_ids(np.array(ids, dtype=np.int64))
         except Exception as e:
             logger.debug(f"No pre-existing vector(s) to remove for ids {ids} (or removal failed): {e}")
@@ -178,14 +183,15 @@ class FaissIndexManager:
             return False
 
         try:
-            with synchronized_inference():
+            removed_count = 0
+            with synchronized_inference(timeout=DEFAULT_INDEX_LOCK_TIMEOUT_S, purpose="FAISS"):
                 ids_np = np.array(ids, dtype=np.int64)
                 # remove_ids returns number of removed elements
                 removed_count = self._index.remove_ids(ids_np)
                 logger.info(f"Removed {removed_count} vectors from FAISS index. Total remaining: {self._index.ntotal}")
-                if removed_count > 0:
-                    self.save_index()
-                    return True
+            if removed_count > 0:
+                self.save_index()
+                return True
         except Exception as e:
             logger.error(f"Failed to remove IDs {ids} from FAISS index: {e}")
         return False
@@ -220,7 +226,9 @@ class FaissIndexManager:
             return [], []
 
         try:
-            with synchronized_inference():
+            with synchronized_inference(
+                timeout=DEFAULT_SEARCH_LOCK_TIMEOUT_S, purpose="FAISS search"
+            ):
                 # Format query vector as 2D numpy array
                 query_np = np.ascontiguousarray(
                     np.array([query_vector], dtype=np.float32)
@@ -269,7 +277,7 @@ class FaissIndexManager:
             return
 
         try:
-            with synchronized_inference():
+            with synchronized_inference(timeout=DEFAULT_INDEX_LOCK_TIMEOUT_S, purpose="FAISS"):
                 # Ensure folder exists
                 self._index_path.parent.mkdir(parents=True, exist_ok=True)
                 faiss.write_index(self._index, str(self._index_path))
@@ -280,7 +288,7 @@ class FaissIndexManager:
 
     def clear_all(self) -> None:
         """Reset the index and delete the binary file."""
-        with synchronized_inference():
+        with synchronized_inference(timeout=DEFAULT_INDEX_LOCK_TIMEOUT_S, purpose="FAISS"):
             self._create_new_index()
             try:
                 if self._index_path.exists():

@@ -285,22 +285,15 @@ def test_empty_index_fails_fast_without_worker(qapp, tmp_path):
 
 
 def test_search_timeout_stops_endless_searching(qapp, tmp_path):
-    query_file = tmp_path / "query.jpg"
-    query_file.write_bytes(b"fake")
-
-    # Long-running worker; we invoke the timeout handler directly.
-    use_case = FakeSearchUseCase(results=[_make_result()], delay=30.0)
-    vm = SearchViewModel(use_case=use_case, search_timeout_ms=60_000)
+    # Do not start a real QThread — destroying a still-running worker aborts.
+    use_case = FakeSearchUseCase(results=[_make_result()])
+    vm = SearchViewModel(use_case=use_case, search_timeout_ms=45_000)
 
     errors = []
     vm.search_error.connect(errors.append)
 
-    vm.search_by_image(str(query_file))
-    assert vm.state == SearchState.SEARCHING
+    vm._last_query_path = str(tmp_path / "query.jpg")
+    vm._set_state(SearchState.SEARCHING)
     vm._on_search_timeout()
     assert vm.state == SearchState.ERROR
     assert errors and "too long" in errors[0].lower()
-    # Bump generation so a late worker completion is ignored, then drop the
-    # reference without forcing QThread teardown mid-run.
-    vm._search_generation += 1
-    vm._worker = None

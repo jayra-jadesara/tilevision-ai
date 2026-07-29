@@ -20,7 +20,7 @@ from src.presentation.workers.search_worker import SearchWorker
 logger = logging.getLogger("tilevision.presentation.viewmodels.search_viewmodel")
 
 # Hard stop so the UI never sits on "Searching..." forever (DINOv2/MPS/lock hangs).
-_SEARCH_TIMEOUT_MS = 90_000
+_SEARCH_TIMEOUT_MS = 45_000
 
 
 class SearchState:
@@ -268,11 +268,12 @@ class SearchViewModel(QObject):
         self._set_state(SearchState.ERROR)
         message = (
             "Search is taking too long and was stopped.\n\n"
-            "Common fixes:\n"
-            "• Wait for Indexing to finish, then try again\n"
-            "• Use Auto Crop & Search on room photos\n"
-            "• On Mac, restart the app if search stays stuck\n"
-            "• Confirm tiles appear under Index before searching"
+            "If you indexed many tiles, wait until Indexing fully finishes "
+            "(progress bar done), then search again.\n\n"
+            "Also try:\n"
+            "• Auto Crop & Search on room photos\n"
+            "• Restart the app\n"
+            "• Confirm tiles are listed under Index"
         )
         self.status_message.emit("Search timed out.")
         self.search_error.emit(message)
