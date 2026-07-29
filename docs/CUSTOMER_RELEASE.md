@@ -143,8 +143,15 @@ when the PC has internet — **once per day**. Customers see a dialog with a
 1. You push a version tag → GitHub Actions builds Windows + Mac installers
 2. CI publishes a **GitHub Release** with `update_manifest.json`
 3. Customer app reads the manifest and compares versions
-4. Customer clicks **Download Update** → browser opens the Windows `.exe` or Mac `.dmg`
-5. They run the installer — license and tile catalogue stay on the PC
+4. Customer clicks **Download Update** → the app downloads the Windows `.exe` or Mac `.dmg`
+   in-process with a fast multi-connection transfer (progress bar). Browser open remains
+   available as a fallback.
+5. They run the downloaded installer — license and tile catalogue stay on the PC
+
+**Note on speed:** Installers are published on GitHub Releases. A single browser download
+from GitHub can be very slow in some regions; the in-app downloader uses parallel HTTP
+Range requests against the same files to saturate a good connection. For maximum speed
+you may also mirror the same installer on Google Drive / your CDN and share that link.
 
 ### Release a version with update links
 
