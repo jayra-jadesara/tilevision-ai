@@ -44,7 +44,7 @@ from typing import List
 import numpy as np
 
 from src.ai.embedder import DINOv2Embedder
-from src.ai.models import TileFeatures
+from src.ai.models import TileFeatures, PreprocessedImage
 from src.ai.preprocess.image_preprocessor import ImagePreprocessor
 from src.ai.descriptors.color_descriptor import ColorDescriptor
 from src.ai.descriptors.texture_descriptor import TextureDescriptor
@@ -244,13 +244,18 @@ class FeatureExtractor:
         total_start = time.perf_counter()
 
         t0 = time.perf_counter()
+        views: List[PreprocessedImage] = []
         if for_query:
-            image = ImagePreprocessor.preprocess_for_query(image_path)
+            views = ImagePreprocessor.prepare_query_views(image_path, max_views=3)
+            image = views[0]
         else:
             image = ImagePreprocessor.preprocess(image_path)
         preprocess_elapsed = time.perf_counter() - t0
 
-        features = self.extract_from_preprocessed(image, for_query=for_query)
+        if for_query and len(views) > 1:
+            features = self._extract_multi_view_query(views)
+        else:
+            features = self.extract_from_preprocessed(image, for_query=for_query)
         features_elapsed = time.perf_counter() - total_start
 
         self._last_timings = ExtractTimings(
@@ -262,11 +267,75 @@ class FeatureExtractor:
 
         logger.debug(
             "Feature extract timing: preprocessing=%.3fs dinov2=%.3fs "
-            "descriptors=%.3fs total=%.3fs",
+            "descriptors=%.3fs total=%.3fs views=%d",
             preprocess_elapsed,
             self._last_timings.dinov2,
             self._last_timings.descriptors,
             self._last_timings.total,
+            max(1, len(views)),
         )
 
         return features
+
+    def _extract_multi_view_query(
+        self,
+        views: List[PreprocessedImage],
+    ) -> TileFeatures:
+        """
+        Embed several query crops and fuse DINOv2 vectors (L2-normalized mean).
+
+        Descriptors come from the primary (best) crop. Query-only — does not
+        change indexed catalog vectors.
+        """
+        total_start = time.perf_counter()
+        embeddings: list[np.ndarray] = []
+        dinov2_elapsed = 0.0
+
+        for view in views:
+            t1 = time.perf_counter()
+            emb = np.asarray(
+                self._embedder.extract_from_preprocessed(view, for_query=True),
+                dtype=np.float32,
+            )
+            dinov2_elapsed += time.perf_counter() - t1
+            embeddings.append(emb)
+
+        stacked = np.vstack(embeddings)
+        fused = stacked.mean(axis=0)
+        fused = fused / (np.linalg.norm(fused) + 1e-8)
+        fused = fused.astype(np.float32)
+
+        primary = views[0]
+        t2 = time.perf_counter()
+        (
+            color_hist,
+            texture_hist,
+            edge_hist,
+            pattern_features,
+            dominant,
+        ) = self.extract_descriptors_from_preprocessed(primary)
+        descriptors_elapsed = time.perf_counter() - t2
+
+        self._last_timings = ExtractTimings(
+            preprocessing=0.0,
+            dinov2=dinov2_elapsed,
+            descriptors=descriptors_elapsed,
+            total=time.perf_counter() - total_start,
+        )
+
+        logger.info(
+            "Query multi-crop DINOv2 fuse: views=%d dim=%d",
+            len(views),
+            fused.shape[0],
+        )
+
+        return TileFeatures(
+            embedding=fused,
+            color_histogram=color_hist,
+            texture_histogram=texture_hist,
+            edge_histogram=edge_hist,
+            pattern_features=pattern_features,
+            dominant_color=dominant,
+            width=primary.width,
+            height=primary.height,
+        )

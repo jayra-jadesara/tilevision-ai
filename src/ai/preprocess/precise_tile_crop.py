@@ -9,7 +9,8 @@ Precise tile isolation for room photos (experimental).
   4. OpenCV GrabCut
   5. Fast seed crop — never fails the button
 
-Default search / Auto Crop paths do NOT call this module.
+Default drop search uses this for scene photos when ONNX SAM2 is available;
+Auto Crop stays on the fast OpenCV path.
 """
 
 from __future__ import annotations

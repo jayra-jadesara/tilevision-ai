@@ -55,8 +55,8 @@ _NEAR_EXACT_DHASH_THRESHOLD = 3
 
 # Drop clearly weak matches so a small catalog does not always fill top_k
 # with unrelated tiles (room photos, marble, etc.).
-_WEAK_RESULT_RELATIVE_FLOOR = 0.52
-_WEAK_RESULT_ABSOLUTE_RAW_FLOOR = 0.30
+_WEAK_RESULT_RELATIVE_FLOOR = 0.60
+_WEAK_RESULT_ABSOLUTE_RAW_FLOOR = 0.38
 
 # Crop-from-catalog: when embedding similarity to the source product is this
 # high, treat it as the same catalog tile (100% match).
