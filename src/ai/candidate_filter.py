@@ -24,7 +24,7 @@ class CandidateFilter:
     # LAB distance at which the maximum penalty is reached.
     COLOR_DISTANCE_SOFT_END = 72.0
     # Maximum soft penalty applied to the hybrid final score.
-    COLOR_PENALTY_MAX = 0.06
+    COLOR_PENALTY_MAX = 0.08
 
     @staticmethod
     def color_distance(c1, c2) -> float:

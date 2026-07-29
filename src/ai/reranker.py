@@ -21,10 +21,11 @@ from src.ai.pattern_classifier import PatternClassifier, PatternType
 # DINOv2 must never fall below this fraction of the final blend.
 _MIN_EMBEDDING_WEIGHT = 0.50
 
-# Soft compatibility adjustment applied after the weighted blend.
+        # Soft compatibility adjustment applied after the weighted blend.
 # Bounded to avoid hard exclusions from classifier mistakes.
-_COMPAT_BOOST_SAME = 0.02
-_COMPAT_PENALTY_INCOMPATIBLE = -0.03
+# (Actual values live in PatternClassifier.compatibility_adjustment.)
+_COMPAT_BOOST_SAME = 0.025
+_COMPAT_PENALTY_INCOMPATIBLE = -0.035
 
 
 class HybridReRanker:
@@ -122,6 +123,13 @@ class HybridReRanker:
             and embedding < 0.42
         ):
             final *= 0.82
+        elif query_pattern_type in (
+            PatternType.MARBLE,
+            PatternType.WOOD,
+            PatternType.STONE,
+        ) and embedding < 0.40:
+            # Material lookalikes (marble↔wood, stone↔marble) need a stronger cut.
+            final *= 0.80
         elif embedding < 0.36:
             # Room-photo false friends (walls, furniture, similar tone).
             final *= 0.78
@@ -140,79 +148,85 @@ class HybridReRanker:
     @staticmethod
     def get_weights(pattern_type: PatternType) -> dict[str, float]:
         """
-        Dynamic per-pattern weights.  DINOv2 embedding weight is always >= 0.50.
+        Dynamic per-pattern weights for tile surfaces.
+
+        DINOv2 stays dominant (>= 0.50), but marble / wood / stone lean harder
+        on color + texture + edge so lookalikes do not rank only on embedding.
         """
         if pattern_type == PatternType.SPECKLED:
             weights = {
-                "embedding": 0.70,
-                "pattern": 0.20,
-                "color": 0.05,
-                "texture": 0.03,
-                "edge": 0.02,
+                "embedding": 0.68,
+                "pattern": 0.18,
+                "color": 0.07,
+                "texture": 0.04,
+                "edge": 0.03,
             }
         elif pattern_type == PatternType.TERRAZZO:
             weights = {
                 "embedding": 0.55,
-                "pattern": 0.20,
-                "color": 0.12,
-                "texture": 0.08,
+                "pattern": 0.18,
+                "color": 0.13,
+                "texture": 0.09,
                 "edge": 0.05,
             }
         elif pattern_type == PatternType.MARBLE:
+            # Veins/edge + tone separate grey marbles that DINOv2 confuses.
             weights = {
-                "embedding": 0.60,
-                "pattern": 0.03,
-                "color": 0.10,
+                "embedding": 0.52,
+                "pattern": 0.06,
+                "color": 0.14,
                 "texture": 0.12,
-                "edge": 0.15,
+                "edge": 0.16,
             }
         elif pattern_type == PatternType.WOOD:
+            # Grain (texture/edge) + stain color beat generic brown embeddings.
             weights = {
-                "embedding": 0.60,
+                "embedding": 0.52,
                 "pattern": 0.05,
-                "color": 0.08,
-                "texture": 0.12,
-                "edge": 0.15,
+                "color": 0.13,
+                "texture": 0.16,
+                "edge": 0.14,
             }
         elif pattern_type == PatternType.GEOMETRIC:
             weights = {
-                "embedding": 0.65,
-                "pattern": 0.08,
+                "embedding": 0.62,
+                "pattern": 0.10,
                 "color": 0.08,
-                "texture": 0.07,
-                "edge": 0.12,
+                "texture": 0.06,
+                "edge": 0.14,
             }
         elif pattern_type == PatternType.STONE:
+            # Granite/sandstone/travertine: texture + color over soft embedding.
             weights = {
-                "embedding": 0.58,
-                "pattern": 0.12,
-                "color": 0.12,
-                "texture": 0.13,
-                "edge": 0.05,
+                "embedding": 0.52,
+                "pattern": 0.10,
+                "color": 0.15,
+                "texture": 0.16,
+                "edge": 0.07,
             }
         elif pattern_type == PatternType.MOSAIC:
             weights = {
-                "embedding": 0.58,
+                "embedding": 0.55,
                 "pattern": 0.18,
-                "color": 0.12,
-                "texture": 0.07,
+                "color": 0.14,
+                "texture": 0.08,
                 "edge": 0.05,
             }
         elif pattern_type == PatternType.PLAIN:
             weights = {
-                "embedding": 0.55,
+                "embedding": 0.52,
                 "pattern": 0.03,
-                "color": 0.30,
-                "texture": 0.07,
+                "color": 0.32,
+                "texture": 0.08,
                 "edge": 0.05,
             }
         else:
             # TEXTURED and fallback
             weights = {
-                "embedding": 0.55,
+                "embedding": 0.53,
                 "pattern": 0.12,
-                "color": 0.13,
-                "texture": 0.13,
+                "color": 0.14,
+                "texture": 0.14,
                 "edge": 0.07,
             }
 

@@ -364,11 +364,11 @@ class PatternClassifier:
         """
         Soft ranking signal based on pattern-family compatibility.
 
-        Returns a small additive adjustment in [-0.03, +0.02].
+        Returns a small additive adjustment in [-0.045, +0.025].
         Never hard-excludes candidates.
         """
         if query_type == candidate_type:
-            return 0.02
+            return 0.025
 
         pair = frozenset({query_type, candidate_type})
 
@@ -387,12 +387,26 @@ class PatternClassifier:
         if pair in compatible_pairs:
             return 0.0
 
+        # Strong material confusions that DINOv2 often mixes up on tiles.
+        material_confusion_pairs = {
+            frozenset({PatternType.MARBLE, PatternType.WOOD}),
+            frozenset({PatternType.WOOD, PatternType.STONE}),
+            frozenset({PatternType.WOOD, PatternType.MARBLE}),
+            frozenset({PatternType.SPECKLED, PatternType.WOOD}),
+            frozenset({PatternType.GEOMETRIC, PatternType.WOOD}),
+            frozenset({PatternType.PLAIN, PatternType.WOOD}),
+        }
+        if pair in material_confusion_pairs:
+            return -0.045
+
         incompatible_pairs = {
             frozenset({PatternType.SPECKLED, PatternType.PLAIN}),
             frozenset({PatternType.SPECKLED, PatternType.MARBLE}),
             frozenset({PatternType.PLAIN, PatternType.TERRAZZO}),
+            frozenset({PatternType.WOOD, PatternType.MOSAIC}),
+            frozenset({PatternType.WOOD, PatternType.SPECKLED}),
         }
         if pair in incompatible_pairs:
-            return -0.03
+            return -0.035
 
         return 0.0
