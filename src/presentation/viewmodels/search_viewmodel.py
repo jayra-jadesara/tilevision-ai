@@ -22,19 +22,12 @@ logger = logging.getLogger("tilevision.presentation.viewmodels.search_viewmodel"
 
 # Hard stop so the UI never sits on "Searching..." forever (DINOv2/MPS/lock hangs).
 # Must be longer than the inference lock wait so a yielded search can finish.
-# Mac Intel uses CPU DINOv2 — allow a bit more headroom for multi-crop queries.
-_SEARCH_TIMEOUT_MS = 90_000
-_SEARCH_TIMEOUT_MAC_INTEL_MS = 120_000
+# Desktop clients (Windows / Mac Intel / Mac Silicon) use a longer default because
+# room-photo multi-crop + CPU query embeds need headroom on showroom PCs.
+_SEARCH_TIMEOUT_MS = 120_000
 
 
 def _default_search_timeout_ms() -> int:
-    try:
-        from src.utils.platform_info import is_mac_intel
-
-        if is_mac_intel():
-            return _SEARCH_TIMEOUT_MAC_INTEL_MS
-    except Exception:
-        pass
     return _SEARCH_TIMEOUT_MS
 
 

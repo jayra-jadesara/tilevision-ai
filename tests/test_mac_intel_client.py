@@ -130,6 +130,7 @@ def test_mac_intel_search_timeout_allows_cpu_headroom(mac_intel_platform):
         _default_search_timeout_ms,
     )
 
+    # Shared desktop default (Windows / Mac Intel / Mac Silicon).
     assert _default_search_timeout_ms() == 120_000
     use_case = MagicMock()
     use_case.get_index_health.return_value = MagicMock(

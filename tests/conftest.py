@@ -121,6 +121,20 @@ def mac_intel_platform(monkeypatch):
 
 
 @pytest.fixture
+def mac_silicon_platform(monkeypatch):
+    """Simulate an Apple Silicon Mac (arm64) showroom client."""
+    simulate_platform(monkeypatch, "darwin", machine="arm64")
+    return "darwin-arm64"
+
+
+@pytest.fixture
+def windows_platform(monkeypatch):
+    """Simulate a Windows showroom PC."""
+    simulate_platform(monkeypatch, "win32")
+    return "win32"
+
+
+@pytest.fixture
 def catalogue_master_service(tmp_path):
     """In-memory SQLite export profile service for UI tests."""
     from src.data.db_context import DatabaseContext

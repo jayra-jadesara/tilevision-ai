@@ -452,7 +452,8 @@ class ImagePreprocessor:
 
         Primary view matches ``preprocess_for_query``. Extra views come from
         alternate OpenCV tile candidates when the photo looks like a room scene.
-        On Mac Intel, cap extras to keep DINOv2 CPU latency reasonable.
+        On Mac (Intel + Silicon) and Windows CPU, cap extras so DINOv2 query
+        latency stays reasonable and search does not feel stuck.
         """
         path = Path(image_path)
         primary = cls.preprocess_for_query(path)
@@ -462,12 +463,9 @@ class ImagePreprocessor:
             return views
 
         try:
-            from src.utils.platform_info import is_mac_intel
-
-            if is_mac_intel():
-                max_views = min(int(max_views), 2)
+            max_views = cls._capped_query_max_views(int(max_views))
         except Exception:
-            pass
+            max_views = min(int(max_views), 2)
 
         image = cls.load(path)
         image = cls.to_rgb(image)
@@ -492,12 +490,38 @@ class ImagePreprocessor:
         return views
 
     @classmethod
+    def _capped_query_max_views(cls, requested: int) -> int:
+        """
+        Limit multi-crop DINOv2 work when query inference is effectively CPU.
+
+        - Mac Intel: always CPU
+        - Mac Silicon: query path forces CPU to avoid MPS hangs
+        - Windows without CUDA: CPU showroom PCs
+        CUDA Windows keeps the full requested view count.
+        """
+        requested = max(1, int(requested))
+        from src.utils.platform_info import is_macos, is_windows
+
+        if is_macos():
+            return min(requested, 2)
+        if is_windows():
+            try:
+                from src.ai.gpu_info import detect_gpu_runtime
+
+                if detect_gpu_runtime(preference="auto").active_device == "cuda":
+                    return requested
+            except Exception:
+                pass
+            return min(requested, 2)
+        return min(requested, 2)
+
+    @classmethod
     def _isolate_query_tile(cls, image: Image.Image) -> Image.Image:
         """
         Fast OpenCV isolation for default drop-search (all platforms).
 
         SAM2 Precise Crop stays on the explicit Precise Crop & Search button
-        so Mac Intel drop-search stays responsive and does not hang.
+        so Windows / Mac Intel / Mac Silicon drop-search stays responsive.
         """
         from src.ai.preprocess.fast_tile_crop import isolate_tile_region
 
