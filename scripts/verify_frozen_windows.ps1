@@ -31,6 +31,21 @@ if (-not $model) {
 }
 Write-Host "model: $($model.FullName)"
 
+$bundleSam2 = if ($env:TILEVISION_BUNDLE_SAM2) { $env:TILEVISION_BUNDLE_SAM2.ToLowerInvariant() } else { "" }
+$expectSam2 = $bundleSam2 -in @("1", "true", "yes", "on", "auto")
+if ($expectSam2) {
+    $sam2Onnx = Get-ChildItem -Path $AppDir -Recurse -Filter "*.encoder.onnx" -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match "sam2\.1-hiera-tiny-onnx" } |
+        Select-Object -First 1
+    if (-not $sam2Onnx) {
+        Write-Error "TILEVISION_BUNDLE_SAM2=$bundleSam2 but ONNX SAM2 encoder not bundled"
+        exit 1
+    }
+    Write-Host "sam2 onnx bundled (shared Mac/Windows path): $($sam2Onnx.FullName)"
+} else {
+    Write-Host "sam2 bundle skipped (TILEVISION_BUNDLE_SAM2=$bundleSam2)"
+}
+
 $torchDir = Join-Path $root "torch"
 if (-not (Test-Path $torchDir)) {
     Write-Error "torch package missing from bundle ($torchDir)"

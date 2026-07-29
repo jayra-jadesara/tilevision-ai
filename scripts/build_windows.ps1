@@ -38,6 +38,38 @@ if (-not (Test-Path $ConfigFile)) {
     Write-Host "  Model weights already present at $ModelDir"
 }
 
+# Optional SAM2 Precise Crop — same ONNX path as Mac (Intel + Silicon).
+if (-not $env:TILEVISION_BUNDLE_SAM2) {
+    $env:TILEVISION_BUNDLE_SAM2 = "auto"
+}
+$bundleSam2 = $env:TILEVISION_BUNDLE_SAM2.ToLowerInvariant()
+if ($bundleSam2 -in @("1", "true", "yes", "on", "auto")) {
+    Write-Host "`n[2b/4] Ensuring ONNX SAM2 Precise Crop weights (same as Mac)..." -ForegroundColor Yellow
+    $OnnxDir = Join-Path $ProjectRoot "model_weights\sam2.1-hiera-tiny-onnx"
+    $OnnxEnc = Join-Path $OnnxDir "sam2.1_hiera_tiny.encoder.onnx"
+    if (-not (Test-Path $OnnxEnc)) {
+        Write-Host "  Downloading ONNX SAM2 tiny (~126 MB)..."
+        python scripts/download_sam2_onnx_model.py
+    } else {
+        Write-Host "  ONNX SAM2 weights already present at $OnnxDir"
+    }
+    $trFlag = if ($env:TILEVISION_BUNDLE_SAM2_TRANSFORMERS) {
+        $env:TILEVISION_BUNDLE_SAM2_TRANSFORMERS.ToLowerInvariant()
+    } else { "" }
+    if ($trFlag -in @("1", "true", "yes", "on")) {
+        Write-Host "`n[2c/4] Ensuring optional Transformers SAM2 weights..." -ForegroundColor Yellow
+        $Sam2Dir = Join-Path $ProjectRoot "model_weights\sam2.1-hiera-tiny"
+        $Sam2Config = Join-Path $Sam2Dir "config.json"
+        if (-not (Test-Path $Sam2Config)) {
+            python scripts/download_sam2_model.py
+        } else {
+            Write-Host "  Transformers SAM2 weights already present at $Sam2Dir"
+        }
+    } else {
+        Write-Host "`n[2c/4] Transformers SAM2 skipped (ONNX is the shared Mac/Windows path)." -ForegroundColor Yellow
+    }
+}
+
 Write-Host "`n[3/4] Running PyInstaller..." -ForegroundColor Yellow
 if (Test-Path "dist\TileVisionAI") {
     Remove-Item -Recurse -Force "dist\TileVisionAI"

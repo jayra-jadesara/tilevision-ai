@@ -401,7 +401,49 @@ class SettingsView(QWidget):
         self._language_combo.setToolTip("Additional languages coming in a future release.")
         form.addRow(self._form_label("Language"), self._language_combo)
 
+        self._sam2_checkbox = QCheckBox(
+            "Use SAM 2 for Precise Crop (same on Windows / Mac Intel / Silicon) — default ON"
+        )
+        self._sam2_checkbox.setChecked(bool(self._settings.enable_sam2_precise_crop))
+        self._sam2_checkbox.setToolTip(
+            "Default ON. Precise Crop uses the same ONNX SAM2 path on Windows, "
+            "Mac Intel, and Mac Apple Silicon, then GrabCut if needed. "
+            "Default drop-to-search stays on fast OpenCV."
+        )
+        self._sam2_checkbox.toggled.connect(self._on_sam2_toggled)
+        form.addRow(self._form_label("Precise Crop"), self._sam2_checkbox)
+
+        self._sam2_status_label = QLabel()
+        self._sam2_status_label.setObjectName("SectionNote")
+        self._sam2_status_label.setWordWrap(True)
+        self._refresh_sam2_status()
+        form.addRow("", self._sam2_status_label)
+
         return box
+
+    def _refresh_sam2_status(self) -> None:
+        try:
+            from src.ai.preprocess import sam2_onnx_backend
+            from src.ai.preprocess.precise_tile_crop import expected_precise_backend
+
+            backend = expected_precise_backend()
+            lines = [
+                f"ONNX SAM2 (shared Mac/Windows path): {sam2_onnx_backend.sam2_onnx_status()}",
+                f"Active Precise Crop backend: {backend}",
+            ]
+            self._sam2_status_label.setText("\n".join(lines))
+        except Exception as exc:
+            self._sam2_status_label.setText(f"Status unavailable: {exc}")
+
+    def _on_sam2_toggled(self, enabled: bool) -> None:
+        self._settings.enable_sam2_precise_crop = enabled
+        try:
+            from src.ai.preprocess.sam2_backend import configure_sam2_from_settings
+
+            configure_sam2_from_settings(enabled)
+        except Exception as exc:
+            logger.warning("Could not apply SAM2 setting: %s", exc)
+        self._refresh_sam2_status()
 
     def _build_maintenance_section(self) -> QGroupBox:
         box = self._section_box("Maintenance")

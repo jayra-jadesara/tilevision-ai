@@ -62,6 +62,38 @@ build_one() {
     echo "  Model weights already present at $MODEL_DIR"
   fi
 
+  # Optional SAM2 Precise Crop — identical ONNX bundle on Intel + Silicon.
+  export TILEVISION_BUNDLE_SAM2="${TILEVISION_BUNDLE_SAM2:-auto}"
+  if [[ "$TILEVISION_BUNDLE_SAM2" != "0" && "$TILEVISION_BUNDLE_SAM2" != "off" && "$TILEVISION_BUNDLE_SAM2" != "false" ]]; then
+    bundle_any=0
+    case "$TILEVISION_BUNDLE_SAM2" in
+      1|true|yes|on|auto) bundle_any=1 ;;
+    esac
+    if [[ "$bundle_any" == "1" ]]; then
+      echo "[3b/5] Ensuring ONNX SAM2 Precise Crop weights (same on Intel + Silicon)..."
+      ONNX_DIR="model_weights/sam2.1-hiera-tiny-onnx"
+      if [[ ! -f "$ONNX_DIR/sam2.1_hiera_tiny.encoder.onnx" && ! -f "$ONNX_DIR/encoder.onnx" ]]; then
+        echo "  Downloading ONNX SAM2 tiny (~126 MB)..."
+        bash scripts/macos_build_python.sh scripts/download_sam2_onnx_model.py
+      else
+        echo "  ONNX SAM2 weights already present at $ONNX_DIR"
+      fi
+      # Optional Transformers weights — off unless explicitly requested (keeps Mac=Windows).
+      TR_FLAG="$(printf '%s' "${TILEVISION_BUNDLE_SAM2_TRANSFORMERS:-}" | tr '[:upper:]' '[:lower:]')"
+      if [[ "$TR_FLAG" == "1" || "$TR_FLAG" == "true" || "$TR_FLAG" == "yes" || "$TR_FLAG" == "on" ]]; then
+        echo "[3c/5] Ensuring optional Transformers SAM2 weights..."
+        SAM2_DIR="model_weights/sam2.1-hiera-tiny"
+        if [[ ! -f "$SAM2_DIR/config.json" ]]; then
+          bash scripts/macos_build_python.sh scripts/download_sam2_model.py
+        else
+          echo "  Transformers SAM2 weights already present at $SAM2_DIR"
+        fi
+      else
+        echo "[3c/5] Transformers SAM2 skipped (ONNX is the shared Mac/Windows path)."
+      fi
+    fi
+  fi
+
   export TILEVISION_OFFLINE_MODEL=1
 
   echo "[4/5] Running PyInstaller..."

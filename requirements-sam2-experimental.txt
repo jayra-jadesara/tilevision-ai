@@ -1,0 +1,18 @@
+# Experimental SAM 2 stack — NOT for production customer builds yet.
+#
+# Production requirements.txt stays on transformers<5 for Mac Intel (torch 2.2.x).
+# SAM2 via Hugging Face Transformers needs a newer stack (typically transformers 5.x).
+#
+# Dev / Apple Silicon / Windows GPU experimentation:
+#   pip install -r requirements-sam2-experimental.txt
+#   export TILEVISION_ENABLE_SAM2=1
+#   # optional local weights:
+#   # export TILEVISION_SAM2_MODEL_DIR=/path/to/sam2.1-hiera-tiny
+#
+# Default search path never loads SAM2. Use Search → Precise Crop & Search.
+
+transformers>=5.0.0
+torch>=2.5.1
+torchvision>=0.20.1
+huggingface-hub>=0.24.0
+safetensors>=0.4.3

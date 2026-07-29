@@ -80,10 +80,12 @@ def pytest_configure():
 
 def simulate_platform(monkeypatch, platform: str, *, machine: str | None = None) -> None:
     """Pretend the app runs on win32 or darwin (for cross-platform UI tests)."""
-    monkeypatch.setattr(sys, "platform", platform)
+    # Import BEFORE changing sys.platform — PySide6 probes the host OS at
+    # import time and crashes on Linux if it thinks it is on Windows.
     import src.utils.platform_info as platform_info
     import src.utils.update_check as update_check
 
+    monkeypatch.setattr(sys, "platform", platform)
     monkeypatch.setattr(platform_info, "is_windows", lambda: platform == "win32")
     monkeypatch.setattr(platform_info, "is_macos", lambda: platform == "darwin")
     monkeypatch.setattr(platform_info, "is_linux", lambda: platform.startswith("linux"))

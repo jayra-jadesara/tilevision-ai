@@ -367,6 +367,17 @@ class SearchView(QWidget):
         self._auto_crop_button.setEnabled(False)
         button_col.addWidget(self._auto_crop_button)
 
+        self._precise_crop_button = QPushButton("Precise Crop & Search")
+        self._precise_crop_button.setObjectName("SecondaryButton")
+        self._precise_crop_button.setToolTip(
+            "Precise tile crop for Windows, Mac Intel, and Mac Apple Silicon. "
+            "Uses SAM 2 when enabled in Settings → Experimental (or TILEVISION_ENABLE_SAM2=1); "
+            "otherwise GrabCut. Not used by default search."
+        )
+        self._precise_crop_button.clicked.connect(self._on_precise_crop_clicked)
+        self._precise_crop_button.setEnabled(False)
+        button_col.addWidget(self._precise_crop_button)
+
         self._clear_button = QPushButton("Clear")
         self._clear_button.setObjectName("SecondaryButton")
         self._clear_button.clicked.connect(self._on_clear_clicked)
@@ -598,6 +609,7 @@ class SearchView(QWidget):
         self._current_query_image_path = image_path
         self._crop_button.setEnabled(True)
         self._auto_crop_button.setEnabled(True)
+        self._precise_crop_button.setEnabled(True)
         self._confidence_banner.setVisible(False)
 
         suggest_crop, crop_reason = should_suggest_crop(image_path)
@@ -643,11 +655,41 @@ class SearchView(QWidget):
         logger.info("Searching with auto-cropped region: %s", crop_path)
         self._viewmodel.search_by_image(str(crop_path))
 
+    def _on_precise_crop_clicked(self) -> None:
+        if not self._current_query_image_path:
+            return
+        try:
+            from src.ai.preprocess.precise_tile_crop import save_precise_tile_crop
+
+            crop_path, crop = save_precise_tile_crop(self._current_query_image_path)
+        except Exception as exc:
+            logger.error("Precise crop failed: %s", exc)
+            QMessageBox.warning(
+                self,
+                "Precise Crop Failed",
+                "Could not run precise crop on this photo.\n\n"
+                "Try Auto Crop & Search or manual Crop and Search.",
+            )
+            return
+
+        self._status_label.setText(
+            f"Precise crop ({crop.method}, {crop.confidence:.0%}) — searching…"
+        )
+        self._drop_zone.show_preview(str(crop_path))
+        logger.info(
+            "Searching with precise crop: %s method=%s detail=%s",
+            crop_path,
+            crop.method,
+            crop.detail,
+        )
+        self._viewmodel.search_by_image(str(crop_path))
+
     def _on_clear_clicked(self) -> None:
         self._drop_zone.reset()
         self._current_query_image_path = None
         self._crop_button.setEnabled(False)
         self._auto_crop_button.setEnabled(False)
+        self._precise_crop_button.setEnabled(False)
         self._confidence_banner.setVisible(False)
         self._viewmodel.clear_results()
         
@@ -681,6 +723,9 @@ class SearchView(QWidget):
         self._clear_button.setEnabled(state != SearchState.IDLE)
         self._crop_button.setEnabled(not is_searching and self._current_query_image_path is not None)
         self._auto_crop_button.setEnabled(
+            not is_searching and self._current_query_image_path is not None
+        )
+        self._precise_crop_button.setEnabled(
             not is_searching and self._current_query_image_path is not None
         )
         for combo in self._filter_combos.values():
