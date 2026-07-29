@@ -407,30 +407,23 @@ class ImagePreprocessor:
         Does not change the indexing pipeline or feature_version — only
         applied at query time to improve room-photo searches.
 
-        Room photos use a fast OpenCV tile-region crop (no SAM / no GPU) so
-        DINOv2 sees the tile surface instead of furniture and walls.
+        Room photos prefer ONNX SAM2 Precise Crop when available (offline),
+        else fast OpenCV isolation, then optional perspective straighten.
         Clean catalogue tiles skip that path entirely.
         """
-        image = cls.load(image_path)
+        path = Path(image_path)
+        image = cls.load(path)
         original_width, original_height = image.size
 
         image = cls.to_rgb(image)
         image = cls.trim_uniform_borders(image)
         image = cls.crop_to_content_region(image, min_margin_ratio=0.05)
 
-        if cls._looks_like_scene_photo(image):
-            from src.ai.preprocess.fast_tile_crop import isolate_tile_region
+        already_cropped = "tilevision_crops" in path.as_posix().lower()
+        if not already_cropped and cls._looks_like_scene_photo(image):
+            image = cls._isolate_query_tile(image)
 
-            crop = isolate_tile_region(image)
-            image = crop.image
-            logger.info(
-                "Query scene auto-crop: method=%s confidence=%.2f size=%dx%d",
-                crop.method,
-                crop.confidence,
-                image.size[0],
-                image.size[1],
-            )
-
+        image = cls._maybe_straighten(image)
         image = cls.normalize_lighting(image)
         image = cls.resize_letterbox(image)
 
@@ -438,6 +431,114 @@ class ImagePreprocessor:
         bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
 
+        return PreprocessedImage(
+            pil=image,
+            rgb=rgb,
+            bgr=bgr,
+            gray=gray,
+            width=original_width,
+            height=original_height,
+        )
+
+    @classmethod
+    def prepare_query_views(
+        cls,
+        image_path: str | Path,
+        *,
+        max_views: int = 3,
+    ) -> list[PreprocessedImage]:
+        """
+        Build 1–N query views for multi-crop embedding (search-only).
+
+        Primary view matches ``preprocess_for_query``. Extra views come from
+        alternate OpenCV tile candidates when the photo looks like a room scene.
+        """
+        path = Path(image_path)
+        primary = cls.preprocess_for_query(path)
+        views = [primary]
+
+        if "tilevision_crops" in path.as_posix().lower():
+            return views
+
+        image = cls.load(path)
+        image = cls.to_rgb(image)
+        image = cls.trim_uniform_borders(image)
+        image = cls.crop_to_content_region(image, min_margin_ratio=0.05)
+        if not cls._looks_like_scene_photo(image):
+            return views
+
+        from src.ai.preprocess.fast_tile_crop import list_tile_region_candidates
+
+        candidates = list_tile_region_candidates(image, limit=max(1, int(max_views)))
+        original_width, original_height = image.size
+        for crop in candidates[1:max_views]:
+            view = cls._finalize_query_pil(
+                crop.image,
+                original_width=original_width,
+                original_height=original_height,
+            )
+            views.append(view)
+
+        logger.info("Query multi-crop views prepared: %d", len(views))
+        return views
+
+    @classmethod
+    def _isolate_query_tile(cls, image: Image.Image) -> Image.Image:
+        """Prefer offline SAM2 Precise Crop; fall back to fast OpenCV."""
+        # 1) ONNX SAM2 / GrabCut precise path when enabled & bundled.
+        try:
+            from src.ai.preprocess.precise_tile_crop import precise_isolate_tile
+            from src.ai.preprocess import sam2_onnx_backend
+
+            if sam2_onnx_backend.sam2_onnx_should_run():
+                result = precise_isolate_tile(image)
+                logger.info(
+                    "Query scene precise crop: method=%s conf=%.2f size=%dx%d",
+                    result.method,
+                    result.confidence,
+                    result.image.size[0],
+                    result.image.size[1],
+                )
+                return result.image
+        except Exception as exc:
+            logger.info("Query precise crop unavailable — using OpenCV. (%s)", exc)
+
+        from src.ai.preprocess.fast_tile_crop import isolate_tile_region
+
+        crop = isolate_tile_region(image)
+        logger.info(
+            "Query scene auto-crop: method=%s confidence=%.2f size=%dx%d",
+            crop.method,
+            crop.confidence,
+            crop.image.size[0],
+            crop.image.size[1],
+        )
+        return crop.image
+
+    @classmethod
+    def _maybe_straighten(cls, image: Image.Image) -> Image.Image:
+        try:
+            from src.ai.preprocess.perspective_straighten import straighten_tile_view
+
+            return straighten_tile_view(image)
+        except Exception as exc:
+            logger.debug("Perspective straighten skipped: %s", exc)
+            return image
+
+    @classmethod
+    def _finalize_query_pil(
+        cls,
+        image: Image.Image,
+        *,
+        original_width: int,
+        original_height: int,
+    ) -> PreprocessedImage:
+        image = cls._maybe_straighten(image.convert("RGB"))
+        image = cls.normalize_lighting(image)
+        image = cls.resize_letterbox(image)
+        rgb = cls.to_numpy(image)
+        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         return PreprocessedImage(
             pil=image,
             rgb=rgb,

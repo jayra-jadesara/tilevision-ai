@@ -38,7 +38,7 @@ def test_isolate_tile_region_shrinks_room_photo(tmp_path):
     cw, ch = result.image.size
     assert cw * ch < sw * sh
     assert result.confidence > 0.0
-    assert result.method in {"contour", "texture", "center_fallback"}
+    assert result.method in {"contour", "texture", "floor_band", "center_fallback"}
 
 
 def test_isolate_tile_region_is_fast_on_cpu(tmp_path):
@@ -75,6 +75,42 @@ def test_preprocess_for_query_handles_room_photo(tmp_path):
     assert processed.pil.size == (TARGET_SIZE, TARGET_SIZE)
     assert processed.width == 900
     assert processed.height == 420
+
+
+def test_list_tile_region_candidates_returns_at_least_one(tmp_path):
+    from src.ai.preprocess.fast_tile_crop import list_tile_region_candidates
+
+    path = tmp_path / "room_cands.jpg"
+    _make_room_like_photo(path)
+    with Image.open(path) as img:
+        source = img.convert("RGB")
+    cands = list_tile_region_candidates(source, limit=3)
+    assert len(cands) >= 1
+    assert all(c.image.size[0] > 0 for c in cands)
+
+
+def test_preprocess_for_query_skips_recrop_on_temp_crops(tmp_path, monkeypatch):
+    """Already-cropped temp files must not be re-isolated."""
+    crops = tmp_path / "tilevision_crops"
+    crops.mkdir()
+    path = crops / "autocrop_tile.jpg"
+    rng = np.random.default_rng(2)
+    Image.fromarray(rng.integers(50, 200, size=(240, 240, 3), dtype=np.uint8)).save(path)
+
+    called = {"n": 0}
+
+    def _boom(_image):
+        called["n"] += 1
+        raise AssertionError("should not isolate again")
+
+    monkeypatch.setattr(
+        ImagePreprocessor,
+        "_isolate_query_tile",
+        classmethod(lambda cls, image: _boom(image)),
+    )
+    processed = ImagePreprocessor.preprocess_for_query(path)
+    assert processed.pil.size == (TARGET_SIZE, TARGET_SIZE)
+    assert called["n"] == 0
 
 
 def test_save_auto_tile_crop_writes_temp_jpeg(tmp_path):
