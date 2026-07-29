@@ -57,4 +57,12 @@ Leave `TILEVISION_BUNDLE_SAM2` unset for production DINOv2-only builds.
 - [x] Settings toggle (default **ON**)
 - [x] `scripts/download_sam2_onnx_model.py`
 - [x] Installer bundling via `TILEVISION_BUNDLE_SAM2=auto`
-- [ ] Explicit approve → version bump + release
+- [x] CI Build workflow caches/downloads ONNX on Windows + Mac Intel + Silicon
+- [x] Version bump to **1.0.13** (Precise Crop ONNX on all platforms)
+- [ ] Tag `v1.0.13` after merge to `main` → GitHub Actions publishes installers
+
+### v1.0.13 customer notes
+
+- **Precise Crop & Search** uses the **same ONNX SAM2** path on Windows, Mac Intel, and Mac Apple Silicon
+- Default search / Auto Crop unchanged (fast OpenCV)
+- Settings toggle defaults ON; GrabCut remains the safety fallback

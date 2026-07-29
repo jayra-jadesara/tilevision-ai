@@ -46,13 +46,27 @@ jobs:
         if: steps.model-cache.outputs.cache-hit != 'true'
         run: python scripts/download_dinov2_model.py
 
+      - name: Cache ONNX SAM2 Precise Crop weights
+        id: sam2-onnx-cache
+        uses: actions/cache@v4
+        with:
+          path: model_weights/sam2.1-hiera-tiny-onnx
+          key: sam2-onnx-tiny-v1-${{ hashFiles('scripts/download_sam2_onnx_model.py') }}
+
+      - name: Download ONNX SAM2 weights
+        if: steps.sam2-onnx-cache.outputs.cache-hit != 'true'
+        run: python scripts/download_sam2_onnx_model.py
+
       - name: Build with PyInstaller
         env:
           TILEVISION_OFFLINE_MODEL: "1"
+          TILEVISION_BUNDLE_SAM2: "auto"
         run: pyinstaller packaging/tilevision.spec --clean --noconfirm
 
       - name: Verify Windows bundle
         shell: pwsh
+        env:
+          TILEVISION_BUNDLE_SAM2: "auto"
         run: ./scripts/verify_frozen_windows.ps1
 
       - name: Install Inno Setup
@@ -151,6 +165,22 @@ jobs:
         shell: bash
         run: test -f model_weights/dinov2-large/config.json
 
+      - name: Cache ONNX SAM2 Precise Crop weights
+        id: sam2-onnx-cache
+        uses: actions/cache@v4
+        with:
+          path: model_weights/sam2.1-hiera-tiny-onnx
+          key: sam2-onnx-tiny-v1-${{ hashFiles('scripts/download_sam2_onnx_model.py') }}
+
+      - name: Download ONNX SAM2 weights
+        if: steps.sam2-onnx-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: bash scripts/macos_build_python.sh scripts/download_sam2_onnx_model.py
+
+      - name: Verify ONNX SAM2 weights present
+        shell: bash
+        run: test -f model_weights/sam2.1-hiera-tiny-onnx/sam2.1_hiera_tiny.encoder.onnx
+
       - name: Verify native libraries (x86_64)
         shell: bash
         env:
@@ -166,9 +196,13 @@ jobs:
         shell: bash
         env:
           TILEVISION_OFFLINE_MODEL: "1"
+          TILEVISION_BUNDLE_SAM2: "auto"
+          MACOS_BUILD_ARCH: "x64"
         run: bash scripts/macos_build_python.sh -m PyInstaller packaging/tilevision_mac.spec --clean --noconfirm
 
       - name: Verify frozen Mac app
+        env:
+          TILEVISION_BUNDLE_SAM2: "auto"
         run: bash scripts/verify_frozen_mac_app.sh dist/TileVisionAI.app x86_64
 
       - name: Create macOS DMG
@@ -226,6 +260,22 @@ jobs:
         shell: bash
         run: test -f model_weights/dinov2-large/config.json
 
+      - name: Cache ONNX SAM2 Precise Crop weights
+        id: sam2-onnx-cache
+        uses: actions/cache@v4
+        with:
+          path: model_weights/sam2.1-hiera-tiny-onnx
+          key: sam2-onnx-tiny-v1-${{ hashFiles('scripts/download_sam2_onnx_model.py') }}
+
+      - name: Download ONNX SAM2 weights
+        if: steps.sam2-onnx-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: bash scripts/macos_build_python.sh scripts/download_sam2_onnx_model.py
+
+      - name: Verify ONNX SAM2 weights present
+        shell: bash
+        run: test -f model_weights/sam2.1-hiera-tiny-onnx/sam2.1_hiera_tiny.encoder.onnx
+
       - name: Verify native libraries (arm64)
         shell: bash
         env:
@@ -241,9 +291,13 @@ jobs:
         shell: bash
         env:
           TILEVISION_OFFLINE_MODEL: "1"
+          TILEVISION_BUNDLE_SAM2: "auto"
+          MACOS_BUILD_ARCH: "arm64"
         run: bash scripts/macos_build_python.sh -m PyInstaller packaging/tilevision_mac.spec --clean --noconfirm
 
       - name: Verify frozen Mac app
+        env:
+          TILEVISION_BUNDLE_SAM2: "auto"
         run: bash scripts/verify_frozen_mac_app.sh dist/TileVisionAI.app arm64
 
       - name: Create macOS DMG
@@ -297,9 +351,21 @@ jobs:
         if: steps.model-cache.outputs.cache-hit != 'true'
         run: python scripts/download_dinov2_model.py
 
+      - name: Cache ONNX SAM2 Precise Crop weights
+        id: sam2-onnx-cache
+        uses: actions/cache@v4
+        with:
+          path: model_weights/sam2.1-hiera-tiny-onnx
+          key: sam2-onnx-tiny-v1-${{ hashFiles('scripts/download_sam2_onnx_model.py') }}
+
+      - name: Download ONNX SAM2 weights
+        if: steps.sam2-onnx-cache.outputs.cache-hit != 'true'
+        run: python scripts/download_sam2_onnx_model.py
+
       - name: Build with PyInstaller
         env:
           TILEVISION_OFFLINE_MODEL: "1"
+          TILEVISION_BUNDLE_SAM2: "auto"
         run: pyinstaller packaging/tilevision_linux.spec --clean --noconfirm
 
       - name: Create Linux tarball
