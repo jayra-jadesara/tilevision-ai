@@ -61,7 +61,11 @@ class FakeSearchUseCase:
     def get_index_health(self):
         from types import SimpleNamespace
 
-        return SimpleNamespace(is_compatible=True, stale_count=0, indexed_count=1)
+        return SimpleNamespace(
+            is_compatible=True,
+            stale_count=0,
+            indexed_count=getattr(self, "indexed_count", 1),
+        )
 
 
 def _make_result(score=90.0, path="/tmp/tile.jpg"):
@@ -257,3 +261,46 @@ def test_repeat_search_with_missing_file_emits_error(qapp, tmp_path):
     vm.repeat_search(str(tmp_path / "gone.jpg"))
     assert errors
     assert use_case.calls == []
+
+
+def test_empty_index_fails_fast_without_worker(qapp, tmp_path):
+    query_file = tmp_path / "query.jpg"
+    query_file.write_bytes(b"fake")
+
+    use_case = FakeSearchUseCase(results=[_make_result()])
+    use_case.indexed_count = 0
+    vm = SearchViewModel(use_case=use_case)
+
+    errors = []
+    statuses = []
+    vm.search_error.connect(errors.append)
+    vm.status_message.connect(statuses.append)
+
+    vm.search_by_image(str(query_file))
+
+    assert vm.state == SearchState.NO_RESULTS
+    assert use_case.calls == []
+    assert errors and "indexed" in errors[0].lower()
+    assert any("indexed" in s.lower() for s in statuses)
+
+
+def test_search_timeout_stops_endless_searching(qapp, tmp_path):
+    query_file = tmp_path / "query.jpg"
+    query_file.write_bytes(b"fake")
+
+    # Long-running worker; we invoke the timeout handler directly.
+    use_case = FakeSearchUseCase(results=[_make_result()], delay=30.0)
+    vm = SearchViewModel(use_case=use_case, search_timeout_ms=60_000)
+
+    errors = []
+    vm.search_error.connect(errors.append)
+
+    vm.search_by_image(str(query_file))
+    assert vm.state == SearchState.SEARCHING
+    vm._on_search_timeout()
+    assert vm.state == SearchState.ERROR
+    assert errors and "too long" in errors[0].lower()
+    # Bump generation so a late worker completion is ignored, then drop the
+    # reference without forcing QThread teardown mid-run.
+    vm._search_generation += 1
+    vm._worker = None
