@@ -291,7 +291,7 @@ def test_mac_update_dialog(mac_platform, qapp):
         release_notes="Mac bug fixes",
         download_url="https://example.com/TileVisionAI-macOS.dmg",
     )
-    dialog = UpdateAvailableDialog(info, theme="dark")
+    dialog = UpdateAvailableDialog(info, theme="dark", auto_start_download=False)
     assert dialog.isModal()
     dialog.close()
 

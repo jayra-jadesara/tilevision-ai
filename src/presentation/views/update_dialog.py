@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QUrl, Qt
+from PySide6.QtCore import QTimer, QUrl, Qt
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QDialog,
@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 
 from src.presentation.workers.update_download_worker import UpdateDownloadWorker
 from src.utils.update_check import UpdateInfo, platform_download_label
-from src.utils.update_downloader import format_bytes, format_speed
+from src.utils.update_downloader import DEFAULT_CONNECTIONS, format_bytes, format_speed
 
 logger = logging.getLogger("tilevision.presentation.views.update_dialog")
 
@@ -37,6 +37,7 @@ class UpdateAvailableDialog(QDialog):
         *,
         theme: str = "light",
         parent=None,
+        auto_start_download: bool = True,
     ) -> None:
         super().__init__(parent)
         self._info = info
@@ -59,10 +60,9 @@ class UpdateAvailableDialog(QDialog):
         layout.addWidget(headline)
 
         hint = QLabel(
-            f"Download the update for your computer only: "
-            f"<b>{platform_download_label()}</b>. "
-            "TileVision downloads the installer in the app using a fast "
-            "multi-connection transfer, then you run it. "
+            f"Downloading <b>{platform_download_label()}</b> inside TileVision "
+            f"with a fast multi-connection transfer (not the browser). "
+            "When it finishes, open the installer. "
             "Your license key and tile catalogue stay on this computer."
         )
         hint.setWordWrap(True)
@@ -76,15 +76,13 @@ class UpdateAvailableDialog(QDialog):
             notes.setMaximumHeight(120)
             layout.addWidget(notes)
 
-        self._status = QLabel("")
+        self._status = QLabel("Preparing in-app download…")
         self._status.setWordWrap(True)
-        self._status.hide()
         layout.addWidget(self._status)
 
         self._progress = QProgressBar()
         self._progress.setRange(0, 1000)
         self._progress.setValue(0)
-        self._progress.hide()
         layout.addWidget(self._progress)
 
         buttons = QHBoxLayout()
@@ -98,14 +96,6 @@ class UpdateAvailableDialog(QDialog):
         self._skip_btn.clicked.connect(self._on_skip)
         buttons.addWidget(self._skip_btn)
 
-        self._browser_btn = QPushButton("Open in Browser")
-        self._browser_btn.setToolTip(
-            "Fallback: open the installer link in your browser "
-            "(may be slower on GitHub Releases)."
-        )
-        self._browser_btn.clicked.connect(self._on_open_browser)
-        buttons.addWidget(self._browser_btn)
-
         self._cancel_btn = QPushButton("Cancel Download")
         self._cancel_btn.hide()
         self._cancel_btn.clicked.connect(self._on_cancel_download)
@@ -113,15 +103,28 @@ class UpdateAvailableDialog(QDialog):
 
         self._open_btn = QPushButton("Open Installer")
         self._open_btn.hide()
+        self._open_btn.setDefault(True)
         self._open_btn.clicked.connect(self._on_open_installer)
         buttons.addWidget(self._open_btn)
 
-        self._download_btn = QPushButton(f"Download {platform_download_label()}")
+        self._download_btn = QPushButton("Download in App")
         self._download_btn.setDefault(True)
         self._download_btn.clicked.connect(self._on_download)
         buttons.addWidget(self._download_btn)
 
         layout.addLayout(buttons)
+
+        # Browser is a last-resort fallback only — not the primary path.
+        self._browser_btn = QPushButton("Slow browser download…")
+        self._browser_btn.setFlat(True)
+        self._browser_btn.setToolTip(
+            "Fallback only. Browser downloads from GitHub are often much slower."
+        )
+        self._browser_btn.clicked.connect(self._on_open_browser)
+        layout.addWidget(self._browser_btn)
+
+        if auto_start_download:
+            QTimer.singleShot(0, self._on_download)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if self._worker is not None and self._worker.isRunning():
@@ -135,8 +138,11 @@ class UpdateAvailableDialog(QDialog):
 
         self._downloaded_path = None
         self._status.show()
-        self._status.setText("Starting fast multi-connection download…")
+        self._status.setText(
+            f"Downloading in app ({DEFAULT_CONNECTIONS} parallel connections)…"
+        )
         self._progress.show()
+        self._progress.setRange(0, 1000)
         self._progress.setValue(0)
         self._download_btn.setEnabled(False)
         self._later_btn.setEnabled(False)
@@ -145,7 +151,11 @@ class UpdateAvailableDialog(QDialog):
         self._cancel_btn.show()
         self._open_btn.hide()
 
-        self._worker = UpdateDownloadWorker(self._info.download_url, parent=self)
+        self._worker = UpdateDownloadWorker(
+            self._info.download_url,
+            connections=DEFAULT_CONNECTIONS,
+            parent=self,
+        )
         self._worker.progress.connect(self._on_progress)
         self._worker.finished_ok.connect(self._on_download_ok)
         self._worker.finished_error.connect(self._on_download_error)
@@ -177,7 +187,7 @@ class UpdateAvailableDialog(QDialog):
         self._cancel_btn.hide()
         self._open_btn.show()
         self._download_btn.setEnabled(True)
-        self._download_btn.setText("Download Again")
+        self._download_btn.setText("Download in App")
         self._later_btn.setEnabled(True)
         self._skip_btn.setEnabled(True)
         self._browser_btn.setEnabled(True)

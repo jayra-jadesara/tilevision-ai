@@ -94,7 +94,7 @@ def test_mac_intel_update_dialog_shows_intel_installer(mac_intel_platform, qapp)
         release_notes="Intel Mac fixes",
         download_url="https://example.com/TileVisionAI-macOS-Intel-1.0.11.dmg",
     )
-    dialog = UpdateAvailableDialog(info, theme="light")
+    dialog = UpdateAvailableDialog(info, theme="light", auto_start_download=False)
     assert "Mac Intel" in platform_download_label()
     dialog.close()
 
