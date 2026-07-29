@@ -31,11 +31,11 @@ from src.version import APP_VERSION
 
 logger = logging.getLogger("tilevision.update_downloader")
 
-DEFAULT_CONNECTIONS = 8
-READ_BUFFER_BYTES = 1024 * 1024  # 1 MiB
+DEFAULT_CONNECTIONS = 12
+READ_BUFFER_BYTES = 2 * 1024 * 1024  # 2 MiB
 CONNECT_TIMEOUT_S = 30.0
-READ_TIMEOUT_S = 120.0
-MIN_PARALLEL_FILE_BYTES = 4 * 1024 * 1024  # below this, single stream is fine
+READ_TIMEOUT_S = 180.0
+MIN_PARALLEL_FILE_BYTES = 2 * 1024 * 1024  # parallel for anything multi-MB
 USER_AGENT = f"TileVisionAI/{APP_VERSION} (update-downloader)"
 
 ProgressCallback = Callable[[int, int, float], None]  # received, total, bytes_per_sec

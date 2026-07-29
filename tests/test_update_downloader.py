@@ -107,3 +107,8 @@ def test_cancel_download(range_server, tmp_path):
 def test_format_helpers():
     assert "MB" in ud.format_bytes(5 * 1024 * 1024)
     assert "/s" in ud.format_speed(1500)
+
+
+def test_default_connections_are_aggressive():
+    assert ud.DEFAULT_CONNECTIONS >= 8
+    assert ud.READ_BUFFER_BYTES >= 1024 * 1024

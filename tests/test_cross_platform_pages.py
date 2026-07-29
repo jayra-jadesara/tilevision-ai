@@ -250,7 +250,7 @@ def test_update_dialog_constructs(qapp, platform_name):
         release_notes="Test release",
         download_url=f"https://example.com/{platform_name}",
     )
-    dialog = UpdateAvailableDialog(info, theme="dark")
+    dialog = UpdateAvailableDialog(info, theme="dark", auto_start_download=False)
     assert "9.9.9" in dialog.windowTitle() or dialog.isModal()
     dialog.close()
 

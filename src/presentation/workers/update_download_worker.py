@@ -10,6 +10,7 @@ from typing import Optional
 from PySide6.QtCore import QThread, Signal
 
 from src.utils.update_downloader import (
+    DEFAULT_CONNECTIONS,
     DownloadCancelled,
     download_update_file,
 )
@@ -30,7 +31,7 @@ class UpdateDownloadWorker(QThread):
         url: str,
         *,
         dest_dir: Optional[Path] = None,
-        connections: int = 8,
+        connections: int = DEFAULT_CONNECTIONS,
         parent=None,
     ) -> None:
         super().__init__(parent)
