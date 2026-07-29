@@ -1,11 +1,12 @@
 """
 Precise tile isolation for room photos (experimental).
 
-Works on **Windows, Mac Intel, and Mac Apple Silicon**:
+Works on **Windows, Mac Intel, and Mac Apple Silicon** with the same path:
 
   1. Fast OpenCV proposes a seed box
-  2. SAM 2 refines when enabled AND platform-supported (not Mac Intel)
-  3. Otherwise OpenCV GrabCut refines the seed (universal CPU path)
+  2. SAM 2 refines when ``TILEVISION_ENABLE_SAM2=1`` and the local stack can load it
+     (Windows / Mac Intel / Mac Silicon — no OS blacklist)
+  3. Otherwise OpenCV GrabCut refines the seed (universal CPU fallback)
   4. Fast seed crop is the last resort — never fails the button
 
 Default search / Auto Crop paths do NOT call this module.
@@ -64,7 +65,7 @@ def precise_isolate_tile(image: Image.Image) -> PreciseCropResult:
     seed = isolate_tile_region(rgb)
     seed_box = seed.box
 
-    # Optional SAM2 — skipped automatically on Mac Intel / missing deps.
+    # Optional SAM2 — Windows / Mac Intel / Mac Silicon when stack allows.
     try:
         from src.ai.preprocess import sam2_backend
 
@@ -129,7 +130,7 @@ def _grabcut_detail() -> str:
     from src.utils.platform_info import is_mac_intel, is_macos, is_windows
 
     if is_mac_intel():
-        return "GrabCut on Mac Intel (universal CPU path)"
+        return "GrabCut on Mac Intel (SAM2 not loaded — install experimental stack to enable)"
     if is_macos():
         return "GrabCut on Mac Apple Silicon (SAM2 not active)"
     if is_windows():

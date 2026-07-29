@@ -1,12 +1,14 @@
 """
 Optional SAM 2 backend for precise tile segmentation (experimental).
 
-Not used by default search. Requires newer transformers with Sam2Model
-(typically transformers 5.x + recent torch).
+Not used by default search. Same enable path on:
+  - Windows
+  - Mac Intel
+  - Mac Apple Silicon
+  - Linux
 
-Cross-platform policy:
-  - Mac Intel → never use SAM2 (torch/transformers pins; keep CPU GrabCut)
-  - Windows / Mac Apple Silicon / Linux → SAM2 allowed when flag + deps exist
+Requires transformers with Sam2Model (typically 5.x) + capable torch.
+If SAM2 cannot load on a machine, Precise Crop falls back to GrabCut.
 """
 
 from __future__ import annotations
@@ -61,17 +63,21 @@ def _torch_version_tuple() -> tuple[int, int, int]:
 
 def sam2_platform_supported() -> bool:
     """
-    Return True only on platforms where SAM2 is a sensible optional backend.
+    Return True when this machine's Python stack can load SAM2.
 
-    Mac Intel always False — production stack cannot ship SAM2 there, and
-    Precise Crop must stay on GrabCut for universal Windows/Intel/Silicon UX.
+    No OS blacklist — Windows, Mac Intel, and Mac Silicon all qualify when
+    Sam2Model exists and torch is new enough (or TILEVISION_SAM2_FORCE=1).
+    Older stacks simply report False and Precise Crop uses GrabCut.
     """
-    from src.utils.platform_info import is_mac_intel
-
-    if is_mac_intel():
-        return False
     if not sam2_api_available():
         return False
+    if os.environ.get("TILEVISION_SAM2_FORCE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return True
     return _torch_version_tuple() >= _MIN_TORCH
 
 
@@ -115,31 +121,48 @@ def resolve_sam2_model_source() -> tuple[str, bool]:
     return DEFAULT_SAM2_MODEL_ID, False
 
 
-def sam2_status() -> str:
+def _platform_label() -> str:
     from src.utils.platform_info import is_mac_intel, is_macos, is_windows
 
+    if is_windows():
+        return "Windows"
     if is_mac_intel():
-        return "Skipped on Mac Intel — Precise Crop uses GrabCut (works offline/CPU)"
+        return "Mac Intel"
+    if is_macos():
+        return "Mac Apple Silicon"
+    return "Linux"
+
+
+def sam2_status() -> str:
     if not sam2_enabled_by_env():
-        return "Disabled (set TILEVISION_ENABLE_SAM2=1 to experiment)"
+        return (
+            f"Disabled on {_platform_label()} "
+            "(set TILEVISION_ENABLE_SAM2=1 to experiment)"
+        )
     if not sam2_api_available():
         return (
-            "Unavailable (needs transformers with Sam2Model — "
-            "see requirements-sam2-experimental.txt)"
+            f"Unavailable on {_platform_label()} "
+            "(needs transformers with Sam2Model — see requirements-sam2-experimental.txt); "
+            "Precise Crop uses GrabCut"
         )
-    if _torch_version_tuple() < _MIN_TORCH:
-        return "Unavailable (needs torch>=2.5.1 for SAM2)"
+    if _torch_version_tuple() < _MIN_TORCH and not os.environ.get(
+        "TILEVISION_SAM2_FORCE", ""
+    ).strip():
+        return (
+            f"Unavailable on {_platform_label()} "
+            "(needs torch>=2.5.1 for SAM2, or TILEVISION_SAM2_FORCE=1); "
+            "Precise Crop uses GrabCut"
+        )
     if _load_error:
-        return f"Load failed: {_load_error}"
+        return f"Load failed on {_platform_label()}: {_load_error}"
     if _model is not None:
-        platform = "Windows" if is_windows() else ("macOS" if is_macos() else "Linux")
-        return f"Ready (loaded on {platform})"
+        return f"Ready (loaded on {_platform_label()})"
     try:
         source, local_only = resolve_sam2_model_source()
     except FileNotFoundError as exc:
-        return f"Missing weights: {exc}"
+        return f"Missing weights on {_platform_label()}: {exc}"
     mode = "local" if local_only else "hub"
-    return f"Enabled ({mode}: {source})"
+    return f"Enabled on {_platform_label()} ({mode}: {source})"
 
 
 def _resolve_device():
@@ -160,22 +183,22 @@ def load_sam2_model() -> tuple[Any, Any]:
         raise RuntimeError("SAM2 is disabled. Set TILEVISION_ENABLE_SAM2=1.")
     if not sam2_platform_supported():
         raise RuntimeError(
-            "SAM2 is not supported on this platform/stack. "
+            f"SAM2 is not available on {_platform_label()} with this Python stack. "
             "Precise Crop will use GrabCut instead."
         )
     if _model is not None and _processor is not None:
         return _model, _processor
 
-    import torch
     from transformers import Sam2Model, Sam2Processor
 
     source, local_only = resolve_sam2_model_source()
     device = _resolve_device()
     logger.info(
-        "Loading experimental SAM2 from %s (local_only=%s) on %s",
+        "Loading experimental SAM2 from %s (local_only=%s) on %s (%s)",
         source,
         local_only,
         device,
+        _platform_label(),
     )
 
     try:
