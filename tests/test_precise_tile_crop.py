@@ -31,12 +31,23 @@ def _make_room_like_photo(path: Path) -> None:
 
 def test_sam2_disabled_by_default(monkeypatch):
     monkeypatch.delenv("TILEVISION_ENABLE_SAM2", raising=False)
-    assert sam2_backend.sam2_enabled_by_env() is False
+    sam2_backend.configure_sam2_from_settings(False)
+    assert sam2_backend.sam2_enabled() is False
+
+
+def test_sam2_enabled_via_settings_toggle(monkeypatch):
+    monkeypatch.delenv("TILEVISION_ENABLE_SAM2", raising=False)
+    sam2_backend.configure_sam2_from_settings(True)
+    assert sam2_backend.sam2_enabled_by_settings() is True
+    assert sam2_backend.sam2_enabled() is True
+    sam2_backend.configure_sam2_from_settings(False)
+    assert sam2_backend.sam2_enabled() is False
 
 
 def test_mac_intel_can_enable_sam2_when_stack_allows(monkeypatch):
     simulate_platform(monkeypatch, "darwin", machine="x86_64")
-    monkeypatch.setenv("TILEVISION_ENABLE_SAM2", "1")
+    monkeypatch.delenv("TILEVISION_ENABLE_SAM2", raising=False)
+    sam2_backend.configure_sam2_from_settings(True)
     monkeypatch.setattr(sam2_backend, "sam2_api_available", lambda: True)
     monkeypatch.setattr(sam2_backend, "_torch_version_tuple", lambda: (2, 5, 1))
 
@@ -88,6 +99,9 @@ def test_windows_can_enable_sam2(monkeypatch):
 def test_precise_crop_works_on_all_major_platforms(tmp_path, monkeypatch, platform, machine):
     simulate_platform(monkeypatch, platform, machine=machine)
     monkeypatch.delenv("TILEVISION_ENABLE_SAM2", raising=False)
+    sam2_backend.configure_sam2_from_settings(False)
+    # Force GrabCut path for this cross-platform smoke test.
+    monkeypatch.setattr(sam2_backend, "sam2_should_run", lambda: False)
 
     path = tmp_path / f"room_{platform}_{machine or 'na'}.jpg"
     _make_room_like_photo(path)
@@ -134,7 +148,8 @@ def test_save_precise_tile_crop_writes_jpeg(tmp_path, monkeypatch):
     assert result.method in {"grabcut", "fast_fallback", "sam2"}
 
 
-def test_load_sam2_requires_flag(monkeypatch):
+def test_load_sam2_requires_enable(monkeypatch):
     monkeypatch.delenv("TILEVISION_ENABLE_SAM2", raising=False)
+    sam2_backend.configure_sam2_from_settings(False)
     with pytest.raises(RuntimeError, match="disabled"):
         sam2_backend.load_sam2_model()

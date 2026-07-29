@@ -401,7 +401,47 @@ class SettingsView(QWidget):
         self._language_combo.setToolTip("Additional languages coming in a future release.")
         form.addRow(self._form_label("Language"), self._language_combo)
 
+        self._sam2_checkbox = QCheckBox(
+            "Experimental: use SAM 2 for Precise Crop (Windows / Mac Intel / Silicon)"
+        )
+        self._sam2_checkbox.setChecked(bool(self._settings.enable_sam2_precise_crop))
+        self._sam2_checkbox.setToolTip(
+            "When on, Precise Crop & Search tries SAM 2 first, then GrabCut. "
+            "Requires experimental deps on some machines. Default search stays fast."
+        )
+        self._sam2_checkbox.toggled.connect(self._on_sam2_toggled)
+        form.addRow(self._form_label("Precise Crop"), self._sam2_checkbox)
+
+        self._sam2_status_label = QLabel()
+        self._sam2_status_label.setObjectName("SectionNote")
+        self._sam2_status_label.setWordWrap(True)
+        self._refresh_sam2_status()
+        form.addRow("", self._sam2_status_label)
+
         return box
+
+    def _refresh_sam2_status(self) -> None:
+        try:
+            from src.ai.preprocess import sam2_backend
+            from src.ai.preprocess.precise_tile_crop import expected_precise_backend
+
+            status = sam2_backend.sam2_status()
+            backend = expected_precise_backend()
+            self._sam2_status_label.setText(
+                f"Status: {status}\nActive Precise Crop backend: {backend}"
+            )
+        except Exception as exc:
+            self._sam2_status_label.setText(f"Status unavailable: {exc}")
+
+    def _on_sam2_toggled(self, enabled: bool) -> None:
+        self._settings.enable_sam2_precise_crop = enabled
+        try:
+            from src.ai.preprocess.sam2_backend import configure_sam2_from_settings
+
+            configure_sam2_from_settings(enabled)
+        except Exception as exc:
+            logger.warning("Could not apply SAM2 setting: %s", exc)
+        self._refresh_sam2_status()
 
     def _build_maintenance_section(self) -> QGroupBox:
         box = self._section_box("Maintenance")

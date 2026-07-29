@@ -16,11 +16,15 @@ Default search / Auto Crop stay on fast OpenCV (no SAM, no slowdown).
 
 ## Enable SAM 2 (all platforms)
 
+### In the app (preferred)
+Settings → Preferences → **Experimental: use SAM 2 for Precise Crop** → ON
+
+Then Search → **Precise Crop & Search**.
+
+### Or via environment (lab / CI)
 ```bash
 pip install -r requirements-sam2-experimental.txt
 export TILEVISION_ENABLE_SAM2=1
-# optional local weights:
-# export TILEVISION_SAM2_MODEL_DIR=/path/to/sam2.1-hiera-tiny
 python main.py
 ```
 

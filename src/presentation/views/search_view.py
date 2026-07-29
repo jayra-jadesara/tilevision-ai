@@ -371,7 +371,7 @@ class SearchView(QWidget):
         self._precise_crop_button.setObjectName("SecondaryButton")
         self._precise_crop_button.setToolTip(
             "Precise tile crop for Windows, Mac Intel, and Mac Apple Silicon. "
-            "Uses SAM 2 when TILEVISION_ENABLE_SAM2=1 and deps are installed; "
+            "Uses SAM 2 when enabled in Settings → Experimental (or TILEVISION_ENABLE_SAM2=1); "
             "otherwise GrabCut. Not used by default search."
         )
         self._precise_crop_button.clicked.connect(self._on_precise_crop_clicked)

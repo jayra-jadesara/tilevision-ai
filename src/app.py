@@ -113,6 +113,10 @@ def build_application() -> int:
     settings = AppSettings()
     logger.info(f"Configuration loaded. Data directory: {Path(settings.database_path).parent}")
 
+    from src.ai.preprocess.sam2_backend import configure_sam2_from_settings
+
+    configure_sam2_from_settings(settings.enable_sam2_precise_crop)
+
     # ── 3. Create QApplication (must happen before any QWidget is created) ────
     app = QApplication(sys.argv)
     app.setApplicationName("TileVision AI")

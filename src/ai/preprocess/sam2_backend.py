@@ -31,12 +31,31 @@ _MIN_TORCH = (2, 5, 0)
 _model: Any = None
 _processor: Any = None
 _load_error: str | None = None
+# Set from AppSettings so the UI toggle works without restarting env vars.
+_settings_enabled: bool = False
+
+
+def configure_sam2_from_settings(enabled: bool) -> None:
+    """Apply the Settings → Experimental SAM2 checkbox at runtime."""
+    global _settings_enabled
+    _settings_enabled = bool(enabled)
+    logger.info("SAM2 precise-crop setting %s", "ON" if _settings_enabled else "OFF")
 
 
 def sam2_enabled_by_env() -> bool:
-    """Feature flag — off unless explicitly enabled for experimental use."""
+    """Feature flag from environment (lab / CI)."""
     value = os.environ.get("TILEVISION_ENABLE_SAM2", "").strip().lower()
     return value in {"1", "true", "yes", "on"}
+
+
+def sam2_enabled_by_settings() -> bool:
+    """Feature flag from persisted AppSettings."""
+    return bool(_settings_enabled)
+
+
+def sam2_enabled() -> bool:
+    """True when either Settings or env enables experimental SAM2."""
+    return sam2_enabled_by_settings() or sam2_enabled_by_env()
 
 
 def sam2_api_available() -> bool:
@@ -82,8 +101,8 @@ def sam2_platform_supported() -> bool:
 
 
 def sam2_should_run() -> bool:
-    """True when the operator enabled SAM2 and this machine can run it."""
-    return sam2_enabled_by_env() and sam2_platform_supported()
+    """True when Settings/env enabled SAM2 and this machine can run it."""
+    return sam2_enabled() and sam2_platform_supported()
 
 
 def resolve_sam2_model_source() -> tuple[str, bool]:
@@ -134,10 +153,10 @@ def _platform_label() -> str:
 
 
 def sam2_status() -> str:
-    if not sam2_enabled_by_env():
+    if not sam2_enabled():
         return (
             f"Disabled on {_platform_label()} "
-            "(set TILEVISION_ENABLE_SAM2=1 to experiment)"
+            "(enable in Settings → Experimental, or set TILEVISION_ENABLE_SAM2=1)"
         )
     if not sam2_api_available():
         return (
@@ -179,8 +198,11 @@ def load_sam2_model() -> tuple[Any, Any]:
     """Lazy-load SAM2. Raises if unavailable or disabled on this platform."""
     global _model, _processor, _load_error
 
-    if not sam2_enabled_by_env():
-        raise RuntimeError("SAM2 is disabled. Set TILEVISION_ENABLE_SAM2=1.")
+    if not sam2_enabled():
+        raise RuntimeError(
+            "SAM2 is disabled. Enable it in Settings → Experimental "
+            "or set TILEVISION_ENABLE_SAM2=1."
+        )
     if not sam2_platform_supported():
         raise RuntimeError(
             f"SAM2 is not available on {_platform_label()} with this Python stack. "
