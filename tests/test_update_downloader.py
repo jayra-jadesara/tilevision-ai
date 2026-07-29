@@ -109,6 +109,16 @@ def test_format_helpers():
     assert "/s" in ud.format_speed(1500)
 
 
+def test_eta_helpers_show_remaining_time():
+    assert ud.eta_seconds(50, 100, 0) is None
+    assert ud.eta_seconds(100, 100, 10.0) == 0.0
+    assert ud.eta_seconds(25, 100, 25.0) == 3.0
+    assert ud.format_eta(None) == "calculating…"
+    assert ud.format_eta(12) == "~12s left"
+    assert ud.format_eta(125) == "~2m 05s left"
+    assert ud.format_eta(3725) == "~1h 02m left"
+
+
 def test_default_connections_are_aggressive():
     assert ud.DEFAULT_CONNECTIONS >= 8
     assert ud.READ_BUFFER_BYTES >= 1024 * 1024

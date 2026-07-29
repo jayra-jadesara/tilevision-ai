@@ -407,9 +407,9 @@ class ImagePreprocessor:
         Does not change the indexing pipeline or feature_version — only
         applied at query time to improve room-photo searches.
 
-        Room photos prefer ONNX SAM2 Precise Crop when available (offline),
-        else fast OpenCV isolation, then optional perspective straighten.
-        Clean catalogue tiles skip that path entirely.
+        Room photos use fast OpenCV tile-region isolation (no SAM on drop),
+        then optional perspective straighten. Clean catalogue tiles skip that
+        path. Use Precise Crop & Search for ONNX SAM2 on hard room photos.
         """
         path = Path(image_path)
         image = cls.load(path)
@@ -452,6 +452,8 @@ class ImagePreprocessor:
 
         Primary view matches ``preprocess_for_query``. Extra views come from
         alternate OpenCV tile candidates when the photo looks like a room scene.
+        On Mac (Intel + Silicon) and Windows CPU, cap extras so DINOv2 query
+        latency stays reasonable and search does not feel stuck.
         """
         path = Path(image_path)
         primary = cls.preprocess_for_query(path)
@@ -459,6 +461,11 @@ class ImagePreprocessor:
 
         if "tilevision_crops" in path.as_posix().lower():
             return views
+
+        try:
+            max_views = cls._capped_query_max_views(int(max_views))
+        except Exception:
+            max_views = min(int(max_views), 2)
 
         image = cls.load(path)
         image = cls.to_rgb(image)
@@ -483,26 +490,39 @@ class ImagePreprocessor:
         return views
 
     @classmethod
+    def _capped_query_max_views(cls, requested: int) -> int:
+        """
+        Limit multi-crop DINOv2 work when query inference is effectively CPU.
+
+        - Mac Intel: always CPU
+        - Mac Silicon: query path forces CPU to avoid MPS hangs
+        - Windows without CUDA: CPU showroom PCs
+        CUDA Windows keeps the full requested view count.
+        """
+        requested = max(1, int(requested))
+        from src.utils.platform_info import is_macos, is_windows
+
+        if is_macos():
+            return min(requested, 2)
+        if is_windows():
+            try:
+                from src.ai.gpu_info import detect_gpu_runtime
+
+                if detect_gpu_runtime(preference="auto").active_device == "cuda":
+                    return requested
+            except Exception:
+                pass
+            return min(requested, 2)
+        return min(requested, 2)
+
+    @classmethod
     def _isolate_query_tile(cls, image: Image.Image) -> Image.Image:
-        """Prefer offline SAM2 Precise Crop; fall back to fast OpenCV."""
-        # 1) ONNX SAM2 / GrabCut precise path when enabled & bundled.
-        try:
-            from src.ai.preprocess.precise_tile_crop import precise_isolate_tile
-            from src.ai.preprocess import sam2_onnx_backend
+        """
+        Fast OpenCV isolation for default drop-search (all platforms).
 
-            if sam2_onnx_backend.sam2_onnx_should_run():
-                result = precise_isolate_tile(image)
-                logger.info(
-                    "Query scene precise crop: method=%s conf=%.2f size=%dx%d",
-                    result.method,
-                    result.confidence,
-                    result.image.size[0],
-                    result.image.size[1],
-                )
-                return result.image
-        except Exception as exc:
-            logger.info("Query precise crop unavailable — using OpenCV. (%s)", exc)
-
+        SAM2 Precise Crop stays on the explicit Precise Crop & Search button
+        so Windows / Mac Intel / Mac Silicon drop-search stays responsive.
+        """
         from src.ai.preprocess.fast_tile_crop import isolate_tile_region
 
         crop = isolate_tile_region(image)

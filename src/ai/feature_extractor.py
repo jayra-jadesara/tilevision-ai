@@ -303,17 +303,8 @@ class FeatureExtractor:
             dinov2_elapsed += time.perf_counter() - t1
             embeddings.append(emb)
 
-        if len(embeddings) == 1:
-            features = self.extract_from_preprocessed(views[0], for_query=True)
-            # Reuse timings from extract_from_preprocessed but keep preprocess.
-            self._last_timings = ExtractTimings(
-                preprocessing=preprocess_elapsed,
-                dinov2=self._last_timings.dinov2,
-                descriptors=self._last_timings.descriptors,
-                total=time.perf_counter() - total_start,
-            )
-            return features, embeddings
-
+        # Always fuse from the already-computed DINOv2 vectors (even for one
+        # view) so Mac Intel never pays for a second full DINOv2 pass.
         features = self._fuse_query_embeddings(views[0], embeddings, dinov2_elapsed)
         self._last_timings = ExtractTimings(
             preprocessing=preprocess_elapsed,

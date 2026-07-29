@@ -22,7 +22,13 @@ logger = logging.getLogger("tilevision.presentation.viewmodels.search_viewmodel"
 
 # Hard stop so the UI never sits on "Searching..." forever (DINOv2/MPS/lock hangs).
 # Must be longer than the inference lock wait so a yielded search can finish.
-_SEARCH_TIMEOUT_MS = 90_000
+# Desktop clients (Windows / Mac Intel / Mac Silicon) use a longer default because
+# room-photo multi-crop + CPU query embeds need headroom on showroom PCs.
+_SEARCH_TIMEOUT_MS = 120_000
+
+
+def _default_search_timeout_ms() -> int:
+    return _SEARCH_TIMEOUT_MS
 
 
 class SearchState:
@@ -62,7 +68,7 @@ class SearchViewModel(QObject):
         default_top_k: int = 20,
         search_history_repository: Optional[ISearchHistoryRepository] = None,
         activity_log_repository: Optional[IActivityLogRepository] = None,
-        search_timeout_ms: int = _SEARCH_TIMEOUT_MS,
+        search_timeout_ms: Optional[int] = None,
         on_search_busy_changed: Optional[Callable[[bool], None]] = None,
     ) -> None:
         super().__init__()
@@ -77,7 +83,12 @@ class SearchViewModel(QObject):
         self._history_repo = search_history_repository
         self._activity_repo = activity_log_repository
         self._search_generation = 0
-        self._search_timeout_ms = max(100, int(search_timeout_ms))
+        timeout = (
+            _default_search_timeout_ms()
+            if search_timeout_ms is None
+            else int(search_timeout_ms)
+        )
+        self._search_timeout_ms = max(100, timeout)
         self._timeout_timer = QTimer(self)
         self._timeout_timer.setSingleShot(True)
         self._timeout_timer.timeout.connect(self._on_search_timeout)
