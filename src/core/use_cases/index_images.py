@@ -18,6 +18,7 @@ from src.config.indexing_performance import IndexingPerformanceConfig
 from src.core.models import TileImage, ScanResult, IndexedFolderState
 from src.data.repository_interface import IImageRepository, IIndexedFolderRepository
 from src.ai.feature_extractor import FeatureExtractor
+from src.ai.inference_guard import wait_while_search_priority
 from src.ai.vector_index import FaissIndexManager
 from src.utils.pipeline_timing import PipelineTimer
 from src.utils.image_utils import (
@@ -233,6 +234,7 @@ class IndexImagesUseCase:
             ValueError: If the file is not a valid image.
             RuntimeError: If embedding extraction or FAISS storage fails.
         """
+        wait_while_search_priority()
         resolved_path = file_path.resolve()
         timer = PipelineTimer("INDEX TIMING")
 
@@ -387,6 +389,7 @@ class IndexImagesUseCase:
         if not items:
             return
 
+        wait_while_search_priority()
         timer = PipelineTimer("INDEX BATCH TIMING")
         path_strings = [str(item.path) for item in items]
         tiles: List[TileImage] = []
@@ -569,6 +572,9 @@ class IndexImagesUseCase:
                 pending_batch.clear()
 
         for file_path in all_files:
+            # 0. Yield to drop-image Search so results can return.
+            wait_while_search_priority()
+
             # 1. Cooperative Pause check
             if pause_event and pause_event.is_set():
                 logger.info("Indexing worker paused. Waiting for resume...")

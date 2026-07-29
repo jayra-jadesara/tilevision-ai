@@ -8,10 +8,11 @@ exposing results/status to the SearchView through Qt signals.
 
 import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
+from src.ai.inference_guard import begin_search_priority, end_search_priority
 from src.core.models import SearchResult, SearchHistoryEntry
 from src.core.use_cases.search_tiles import SearchTilesUseCase
 from src.data.repository_interface import ISearchHistoryRepository, IActivityLogRepository
@@ -20,6 +21,7 @@ from src.presentation.workers.search_worker import SearchWorker
 logger = logging.getLogger("tilevision.presentation.viewmodels.search_viewmodel")
 
 # Hard stop so the UI never sits on "Searching..." forever (DINOv2/MPS/lock hangs).
+# Must be longer than the inference lock wait so a yielded search can finish.
 _SEARCH_TIMEOUT_MS = 90_000
 
 
@@ -61,6 +63,7 @@ class SearchViewModel(QObject):
         search_history_repository: Optional[ISearchHistoryRepository] = None,
         activity_log_repository: Optional[IActivityLogRepository] = None,
         search_timeout_ms: int = _SEARCH_TIMEOUT_MS,
+        on_search_busy_changed: Optional[Callable[[bool], None]] = None,
     ) -> None:
         super().__init__()
         self._use_case = use_case
@@ -78,6 +81,8 @@ class SearchViewModel(QObject):
         self._timeout_timer = QTimer(self)
         self._timeout_timer.setSingleShot(True)
         self._timeout_timer.timeout.connect(self._on_search_timeout)
+        self._on_search_busy_changed = on_search_busy_changed
+        self._search_priority_held = False
 
     @property
     def state(self) -> str:
@@ -153,6 +158,16 @@ class SearchViewModel(QObject):
                 )
                 self.status_message.emit("Search blocked: index is outdated.")
                 return
+            searchable = self._use_case.get_searchable_count()
+            if searchable <= 0:
+                self._set_state(SearchState.ERROR)
+                self.search_error.emit(
+                    "Catalog metadata is present but the searchable vector index is empty.\n\n"
+                    "Go to Settings → Rebuild FAISS Index, wait until it finishes, "
+                    "then drop your image again."
+                )
+                self.status_message.emit("Search blocked: vector index is empty.")
+                return
         except Exception as exc:
             logger.warning("Could not verify feature index health: %s", exc)
 
@@ -169,6 +184,7 @@ class SearchViewModel(QObject):
         self._search_generation += 1
         generation = self._search_generation
 
+        self._claim_search_priority()
         self._set_state(SearchState.SEARCHING)
         self.status_message.emit(f"Searching for tiles similar to '{path.name}'...")
 
@@ -188,6 +204,7 @@ class SearchViewModel(QObject):
     def clear_results(self) -> None:
         self._timeout_timer.stop()
         self._search_generation += 1
+        self._release_search_priority()
         self._last_results = []
         self._last_query_path = None
         self._set_state(SearchState.IDLE)
@@ -199,11 +216,34 @@ class SearchViewModel(QObject):
             self._state = new_state
             self.state_changed.emit(new_state)
 
+    def _claim_search_priority(self) -> None:
+        if self._search_priority_held:
+            return
+        begin_search_priority()
+        self._search_priority_held = True
+        if self._on_search_busy_changed is not None:
+            try:
+                self._on_search_busy_changed(True)
+            except Exception as exc:
+                logger.warning("on_search_busy_changed(True) failed: %s", exc)
+
+    def _release_search_priority(self) -> None:
+        if not self._search_priority_held:
+            return
+        end_search_priority()
+        self._search_priority_held = False
+        if self._on_search_busy_changed is not None:
+            try:
+                self._on_search_busy_changed(False)
+            except Exception as exc:
+                logger.warning("on_search_busy_changed(False) failed: %s", exc)
+
     def _on_search_completed(self, results: List[SearchResult], generation: int = 0) -> None:
         if generation and generation != self._search_generation:
             logger.info("Ignoring stale search completion (generation %s)", generation)
             return
         self._timeout_timer.stop()
+        self._release_search_priority()
         self._last_results = results
         self._worker = None
 
@@ -243,6 +283,7 @@ class SearchViewModel(QObject):
             logger.info("Ignoring stale search failure (generation %s)", generation)
             return
         self._timeout_timer.stop()
+        self._release_search_priority()
         self._worker = None
         self._set_state(SearchState.ERROR)
         self.status_message.emit(f"Search failed: {message}")
@@ -265,14 +306,15 @@ class SearchViewModel(QObject):
                 worker.requestInterruption()
             except Exception:
                 pass
+        self._release_search_priority()
         self._set_state(SearchState.ERROR)
         message = (
             "Search is taking too long and was stopped.\n\n"
-            "Common fixes:\n"
-            "• Wait for Indexing to finish, then try again\n"
-            "• Use Auto Crop & Search on room photos\n"
-            "• On Mac, restart the app if search stays stuck\n"
-            "• Confirm tiles appear under Index before searching"
+            "Pause or finish Indexing first, then drop the image again.\n\n"
+            "Also try:\n"
+            "• Auto Crop & Search on room photos\n"
+            "• Restart the app\n"
+            "• Settings → Rebuild FAISS Index if Index shows tiles but search stays empty"
         )
         self.status_message.emit("Search timed out.")
         self.search_error.emit(message)

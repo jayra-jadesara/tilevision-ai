@@ -67,6 +67,9 @@ class FakeSearchUseCase:
             indexed_count=getattr(self, "indexed_count", 1),
         )
 
+    def get_searchable_count(self):
+        return int(getattr(self, "searchable_count", getattr(self, "indexed_count", 1)))
+
 
 def _make_result(score=90.0, path="/tmp/tile.jpg"):
     tile = TileImage(file_path=path, file_name="tile.jpg", file_size=1, dimensions="1x1")
@@ -284,23 +287,52 @@ def test_empty_index_fails_fast_without_worker(qapp, tmp_path):
     assert any("indexed" in s.lower() for s in statuses)
 
 
-def test_search_timeout_stops_endless_searching(qapp, tmp_path):
+def test_empty_faiss_with_indexed_tiles_fails_fast(qapp, tmp_path):
     query_file = tmp_path / "query.jpg"
     query_file.write_bytes(b"fake")
 
-    # Long-running worker; we invoke the timeout handler directly.
-    use_case = FakeSearchUseCase(results=[_make_result()], delay=30.0)
-    vm = SearchViewModel(use_case=use_case, search_timeout_ms=60_000)
+    use_case = FakeSearchUseCase(results=[_make_result()])
+    use_case.indexed_count = 300
+    use_case.searchable_count = 0
+    vm = SearchViewModel(use_case=use_case)
 
     errors = []
     vm.search_error.connect(errors.append)
 
     vm.search_by_image(str(query_file))
-    assert vm.state == SearchState.SEARCHING
+
+    assert vm.state == SearchState.ERROR
+    assert use_case.calls == []
+    assert errors and "rebuild" in errors[0].lower()
+
+
+def test_search_notifies_busy_callback(qapp, tmp_path):
+    query_file = tmp_path / "query.jpg"
+    query_file.write_bytes(b"fake")
+
+    busy_events = []
+    use_case = FakeSearchUseCase(results=[_make_result()])
+    vm = SearchViewModel(
+        use_case=use_case,
+        on_search_busy_changed=busy_events.append,
+    )
+
+    vm.search_by_image(str(query_file))
+    assert busy_events == [True]
+    assert _pump_until(lambda: vm.state == SearchState.RESULTS)
+    assert busy_events == [True, False]
+
+
+def test_search_timeout_stops_endless_searching(qapp, tmp_path):
+    # Do not start a real QThread — destroying a still-running worker aborts.
+    use_case = FakeSearchUseCase(results=[_make_result()])
+    vm = SearchViewModel(use_case=use_case, search_timeout_ms=45_000)
+
+    errors = []
+    vm.search_error.connect(errors.append)
+
+    vm._last_query_path = str(tmp_path / "query.jpg")
+    vm._set_state(SearchState.SEARCHING)
     vm._on_search_timeout()
     assert vm.state == SearchState.ERROR
     assert errors and "too long" in errors[0].lower()
-    # Bump generation so a late worker completion is ignored, then drop the
-    # reference without forcing QThread teardown mid-run.
-    vm._search_generation += 1
-    vm._worker = None

@@ -86,6 +86,7 @@ class IndexingViewModel(QObject):
         super().__init__(parent)
         self._use_case = use_case
         self._worker: Optional[IndexingWorker] = None
+        self._paused_for_search = False
         self._state: str = IndexingState.IDLE
         self._selected_folder: Optional[Path] = None
         self._total_count: int = 0
@@ -248,11 +249,38 @@ class IndexingViewModel(QObject):
         else:
             logger.warning(f"Pause called in invalid state: {self._state}")
 
+    def pause_for_search(self) -> bool:
+        """
+        Pause running indexing so a drop-image search can return results.
+
+        Returns True if indexing was paused for search (caller must resume).
+        """
+        if self._worker and self._state == IndexingState.RUNNING:
+            logger.info("Pausing indexing so Search can run.")
+            self._paused_for_search = True
+            self._worker.pause()
+            self._set_state(IndexingState.PAUSED)
+            self.status_message.emit("Indexing paused for search...")
+            return True
+        return False
+
+    def resume_after_search(self) -> None:
+        """Resume indexing only if it was paused automatically for search."""
+        if not self._paused_for_search:
+            return
+        self._paused_for_search = False
+        if self._worker and self._state == IndexingState.PAUSED:
+            logger.info("Resuming indexing after Search.")
+            self._worker.resume()
+            self._set_state(IndexingState.RUNNING)
+            self.status_message.emit("Indexing resumed...")
+
     @Slot()
     def resume_indexing(self) -> None:
         """
         Resume a previously paused indexing worker.
         """
+        self._paused_for_search = False
         if self._worker and self._state == IndexingState.PAUSED:
             logger.info("Resuming indexing worker.")
             self._worker.resume()
@@ -277,6 +305,7 @@ class IndexingViewModel(QObject):
         """
         if self._worker and self._state in (IndexingState.RUNNING, IndexingState.PAUSED):
             logger.warning("Cancelling indexing worker by user request.")
+            self._paused_for_search = False
             self._worker.cancel()
             self._set_state(IndexingState.CANCELLING)
             self.status_message.emit("Cancelling indexing... Please wait.")

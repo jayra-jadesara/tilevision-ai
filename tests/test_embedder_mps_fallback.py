@@ -73,7 +73,7 @@ def test_extract_batch_falls_back_to_cpu_on_mps_unimplemented_op(monkeypatch):
             summary_for_log=lambda: "cpu",
         ),
     )
-    monkeypatch.setattr(embedder_module, "synchronized_inference", lambda: _NullCtx())
+    monkeypatch.setattr(embedder_module, "synchronized_inference", lambda **_kwargs: _NullCtx())
 
     result = embedder._extract_batch(images)
 
@@ -97,7 +97,7 @@ def test_extract_batch_does_not_treat_mps_op_error_as_oom(monkeypatch):
     monkeypatch.setattr(embedder, "_forward_batch", _forward)
     # Force "already fell back" so we exercise the OOM branch path vs raise.
     embedder._mps_cpu_fallback_done = True
-    monkeypatch.setattr(embedder_module, "synchronized_inference", lambda: _NullCtx())
+    monkeypatch.setattr(embedder_module, "synchronized_inference", lambda **_kwargs: _NullCtx())
 
     with pytest.raises(RuntimeError, match="upsample_bicubic2d"):
         embedder._extract_batch(images)

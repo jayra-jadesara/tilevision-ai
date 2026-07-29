@@ -26,7 +26,12 @@ import torch
 from transformers import AutoImageProcessor, AutoModel
 
 from src.ai.models import PreprocessedImage
-from src.ai.inference_guard import synchronized_inference
+from src.ai.inference_guard import (
+    DEFAULT_INDEX_LOCK_TIMEOUT_S,
+    DEFAULT_SEARCH_LOCK_TIMEOUT_S,
+    synchronized_inference,
+    wait_while_search_priority,
+)
 from src.ai.gpu_info import (
     DevicePreference,
     configure_mps_fallback,
@@ -222,7 +227,12 @@ class DINOv2Embedder:
 
         return views
 
-    def _extract_batch(self, images: List[Image.Image]) -> np.ndarray:
+    def _extract_batch(
+        self,
+        images: List[Image.Image],
+        *,
+        for_query: bool = False,
+    ) -> np.ndarray:
         """
         Run DINOv2 on a list of PIL images in one batched forward pass.
 
@@ -232,7 +242,16 @@ class DINOv2Embedder:
         if self._model is None:
             self.load_model()
 
-        with synchronized_inference():
+        # Search must not wait hours behind indexing / a stuck MPS forward.
+        lock_timeout = (
+            DEFAULT_SEARCH_LOCK_TIMEOUT_S if for_query else DEFAULT_INDEX_LOCK_TIMEOUT_S
+        )
+
+        # Query embeds on Apple Silicon: use CPU to avoid silent MPS hangs.
+        if for_query and self._device.type == "mps" and not self._mps_cpu_fallback_done:
+            self._fallback_mps_to_cpu("query search prefers CPU (avoid MPS hang)")
+
+        with synchronized_inference(timeout=lock_timeout, purpose="DINOv2 embed"):
             try:
                 return self._forward_batch(images)
             except RuntimeError as exc:
@@ -246,10 +265,14 @@ class DINOv2Embedder:
                     and not self._mps_cpu_fallback_done
                 ):
                     self._fallback_mps_to_cpu(message)
-                    return self._extract_batch(images)
+                    return self._extract_batch(images, for_query=for_query)
 
                 is_oom = _is_device_oom_error(self._device.type, message_l)
-                if not is_oom or self._device.type not in ("cuda", "mps") or len(images) <= 1:
+                if (
+                    not is_oom
+                    or self._device.type not in ("cuda", "mps")
+                    or len(images) <= 1
+                ):
                     raise
 
                 logger.warning(
@@ -260,8 +283,8 @@ class DINOv2Embedder:
                 if self._device.type == "cuda":
                     torch.cuda.empty_cache()
                 mid = len(images) // 2
-                left = self._extract_batch(images[:mid])
-                right = self._extract_batch(images[mid:])
+                left = self._extract_batch(images[:mid], for_query=for_query)
+                right = self._extract_batch(images[mid:], for_query=for_query)
                 return np.vstack([left, right])
 
     @staticmethod
@@ -283,6 +306,8 @@ class DINOv2Embedder:
     def extract_from_preprocessed(
         self,
         processed: PreprocessedImage,
+        *,
+        for_query: bool = False,
     ) -> np.ndarray:
         """
         Extract a multi-scale DINOv2 embedding from an already-preprocessed image.
@@ -290,13 +315,14 @@ class DINOv2Embedder:
         This is the primary entry point — avoids reloading/resizing the image.
         """
         views = self._generate_views(processed.pil)
-        view_embeddings = self._extract_batch(views)
+        view_embeddings = self._extract_batch(views, for_query=for_query)
         final_embedding = self._fuse_embeddings(view_embeddings)
 
         logger.debug(
-            "Multi-scale DINOv2 embedding: views=%d dimension=%d",
+            "Multi-scale DINOv2 embedding: views=%d dimension=%d for_query=%s",
             len(views),
             final_embedding.shape[0],
+            for_query,
         )
         return final_embedding
 
@@ -307,37 +333,40 @@ class DINOv2Embedder:
         """
         Extract embeddings for multiple preprocessed images.
 
-        All views across the batch are run in a single DINOv2 forward pass
-        for better throughput during folder indexing.
+        Processes images in small chunks and releases the inference lock
+        between chunks so Search can run while a large folder is indexing.
         """
         if not processed_images:
             return []
 
-        all_views: List[Image.Image] = []
-        view_counts: List[int] = []
-
-        for processed in processed_images:
-            views = self._generate_views(processed.pil)
-            view_counts.append(len(views))
-            all_views.extend(views)
-
-        view_embeddings = self._extract_batch(all_views)
-
         results: List[np.ndarray] = []
-        offset = 0
-        for count in view_counts:
-            chunk = view_embeddings[offset : offset + count]
-            results.append(self._fuse_embeddings(chunk))
-            offset += count
+        # One image at a time: release the lock between tiles and yield to Search.
+        chunk_size = 1
+        for start in range(0, len(processed_images), chunk_size):
+            wait_while_search_priority()
+            chunk = processed_images[start : start + chunk_size]
+            all_views: List[Image.Image] = []
+            view_counts: List[int] = []
+            for processed in chunk:
+                views = self._generate_views(processed.pil)
+                view_counts.append(len(views))
+                all_views.extend(views)
+
+            view_embeddings = self._extract_batch(all_views, for_query=False)
+
+            offset = 0
+            for count in view_counts:
+                piece = view_embeddings[offset : offset + count]
+                results.append(self._fuse_embeddings(piece))
+                offset += count
 
         logger.debug(
-            "Batched DINOv2 embeddings: images=%d views=%d",
+            "Batched DINOv2 embeddings: images=%d (chunked)",
             len(processed_images),
-            len(all_views),
         )
         return results
 
-    def extract(self, image_path: str) -> np.ndarray:
+    def extract(self, image_path: str, *, for_query: bool = False) -> np.ndarray:
         """
         Extract embedding from a file path (loads + preprocesses once).
 
@@ -345,7 +374,7 @@ class DINOv2Embedder:
         a PreprocessedImage to avoid duplicate I/O.
         """
         processed = ImagePreprocessor.preprocess(image_path)
-        return self.extract_from_preprocessed(processed)
+        return self.extract_from_preprocessed(processed, for_query=for_query)
 
     def get_embedding(self, image_path: str) -> np.ndarray:
         """Backward-compatible alias for extract()."""

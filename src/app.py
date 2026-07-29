@@ -365,11 +365,20 @@ def build_application() -> int:
     indexing_viewmodel = IndexingViewModel(
         use_case=index_images_use_case, activity_log_repository=activity_log_repository
     )
+
+    def _on_search_busy_changed(busy: bool) -> None:
+        # Drop-image search takes priority over background indexing.
+        if busy:
+            indexing_viewmodel.pause_for_search()
+        else:
+            indexing_viewmodel.resume_after_search()
+
     search_viewmodel = SearchViewModel(
         use_case=search_tiles_use_case,
         default_top_k=settings.top_k,
         search_history_repository=search_history_repository,
         activity_log_repository=activity_log_repository,
+        on_search_busy_changed=_on_search_busy_changed,
     )
 
     # ── 10. Launch Main Window ────────────────────────────────────────────────
