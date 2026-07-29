@@ -277,6 +277,52 @@ class FeatureExtractor:
 
         return features
 
+    def extract_for_search(
+        self,
+        image_path: str,
+    ) -> tuple[TileFeatures, list[np.ndarray]]:
+        """
+        Query-only: return fused TileFeatures plus per-crop DINOv2 vectors.
+
+        Search uses each crop vector in FAISS (max-score merge) for better
+        room-photo recall, then hybrid-reranks with the fused features.
+        """
+        total_start = time.perf_counter()
+        t0 = time.perf_counter()
+        views = ImagePreprocessor.prepare_query_views(image_path, max_views=3)
+        preprocess_elapsed = time.perf_counter() - t0
+
+        embeddings: list[np.ndarray] = []
+        dinov2_elapsed = 0.0
+        for view in views:
+            t1 = time.perf_counter()
+            emb = np.asarray(
+                self._embedder.extract_from_preprocessed(view, for_query=True),
+                dtype=np.float32,
+            )
+            dinov2_elapsed += time.perf_counter() - t1
+            embeddings.append(emb)
+
+        if len(embeddings) == 1:
+            features = self.extract_from_preprocessed(views[0], for_query=True)
+            # Reuse timings from extract_from_preprocessed but keep preprocess.
+            self._last_timings = ExtractTimings(
+                preprocessing=preprocess_elapsed,
+                dinov2=self._last_timings.dinov2,
+                descriptors=self._last_timings.descriptors,
+                total=time.perf_counter() - total_start,
+            )
+            return features, embeddings
+
+        features = self._fuse_query_embeddings(views[0], embeddings, dinov2_elapsed)
+        self._last_timings = ExtractTimings(
+            preprocessing=preprocess_elapsed,
+            dinov2=self._last_timings.dinov2,
+            descriptors=self._last_timings.descriptors,
+            total=time.perf_counter() - total_start,
+        )
+        return features, embeddings
+
     def _extract_multi_view_query(
         self,
         views: List[PreprocessedImage],
@@ -287,7 +333,6 @@ class FeatureExtractor:
         Descriptors come from the primary (best) crop. Query-only — does not
         change indexed catalog vectors.
         """
-        total_start = time.perf_counter()
         embeddings: list[np.ndarray] = []
         dinov2_elapsed = 0.0
 
@@ -300,12 +345,20 @@ class FeatureExtractor:
             dinov2_elapsed += time.perf_counter() - t1
             embeddings.append(emb)
 
+        return self._fuse_query_embeddings(views[0], embeddings, dinov2_elapsed)
+
+    def _fuse_query_embeddings(
+        self,
+        primary: PreprocessedImage,
+        embeddings: list[np.ndarray],
+        dinov2_elapsed: float,
+    ) -> TileFeatures:
+        total_start = time.perf_counter()
         stacked = np.vstack(embeddings)
         fused = stacked.mean(axis=0)
         fused = fused / (np.linalg.norm(fused) + 1e-8)
         fused = fused.astype(np.float32)
 
-        primary = views[0]
         t2 = time.perf_counter()
         (
             color_hist,
@@ -320,12 +373,12 @@ class FeatureExtractor:
             preprocessing=0.0,
             dinov2=dinov2_elapsed,
             descriptors=descriptors_elapsed,
-            total=time.perf_counter() - total_start,
+            total=time.perf_counter() - total_start + dinov2_elapsed,
         )
 
         logger.info(
             "Query multi-crop DINOv2 fuse: views=%d dim=%d",
-            len(views),
+            len(embeddings),
             fused.shape[0],
         )
 
