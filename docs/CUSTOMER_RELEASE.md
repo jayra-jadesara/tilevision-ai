@@ -136,7 +136,7 @@ Before each release:
 
 Packaged apps (Windows `.exe` installer, Mac `.app`) check for updates on startup
 when the PC has internet — **once per day**. Customers see a dialog with a
-**Download Update** button that opens the correct installer for their platform.
+**Download Update** button that downloads the correct installer in the app.
 
 ### How it works
 
