@@ -60,7 +60,7 @@ class AppSettings:
             "setup_wizard_version": 0,
             "machine_id_welcome_shown": False,
             "check_for_updates": True,
-            "enable_sam2_precise_crop": False,
+            "enable_sam2_precise_crop": True,
             "update_manifest_url": "",
             "skipped_update_version": "",
             "last_update_check_at": "",
@@ -325,7 +325,7 @@ class AppSettings:
     @property
     def enable_sam2_precise_crop(self) -> bool:
         """Experimental: allow SAM2 on Precise Crop (Windows / Mac Intel / Silicon)."""
-        return bool(self._settings.get("enable_sam2_precise_crop", False))
+        return bool(self._settings.get("enable_sam2_precise_crop", True))
 
     @enable_sam2_precise_crop.setter
     def enable_sam2_precise_crop(self, value: bool) -> None:

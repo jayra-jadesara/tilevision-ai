@@ -402,12 +402,13 @@ class SettingsView(QWidget):
         form.addRow(self._form_label("Language"), self._language_combo)
 
         self._sam2_checkbox = QCheckBox(
-            "Experimental: use SAM 2 for Precise Crop (Windows / Mac Intel / Silicon)"
+            "Use SAM 2 for Precise Crop (Windows / Mac Intel / Silicon) — default ON"
         )
         self._sam2_checkbox.setChecked(bool(self._settings.enable_sam2_precise_crop))
         self._sam2_checkbox.setToolTip(
-            "When on, Precise Crop & Search tries SAM 2 first, then GrabCut. "
-            "Requires experimental deps on some machines. Default search stays fast."
+            "Default ON. Precise Crop & Search tries SAM 2 first, then GrabCut. "
+            "Requires experimental deps / local weights on some machines. "
+            "Default drop-to-search stays on fast OpenCV."
         )
         self._sam2_checkbox.toggled.connect(self._on_sam2_toggled)
         form.addRow(self._form_label("Precise Crop"), self._sam2_checkbox)

@@ -16,10 +16,15 @@ Default search / Auto Crop stay on fast OpenCV (no SAM, no slowdown).
 
 ## Enable SAM 2 (all platforms)
 
-### In the app (preferred)
-Settings → Preferences → **Experimental: use SAM 2 for Precise Crop** → ON
+### In the app (preferred — default ON)
+Settings → Preferences → **Use SAM 2 for Precise Crop** (defaults to ON)
 
 Then Search → **Precise Crop & Search**.
+
+### Download local weights (optional, faster offline)
+```bash
+python scripts/download_sam2_model.py
+```
 
 ### Or via environment (lab / CI)
 ```bash
@@ -57,7 +62,8 @@ Windows and Apple Silicon can use the experimental requirements file normally.
 
 - [x] Same code path for Windows / Mac Intel / Mac Silicon
 - [x] GrabCut fallback never fails the button
-- [ ] Settings toggle instead of env flag
-- [ ] Bundle optional SAM2 tiny weights
+- [x] Settings toggle for experimental SAM2 (default **ON**)
+- [x] Download helper: `scripts/download_sam2_model.py`
+- [ ] Bundle optional SAM2 tiny weights into installers (decide per-platform)
 - [ ] Intel ONNX path (if full SAM2 cannot ship on x86_64 Mac)
 - [ ] Then version bump + release
