@@ -615,11 +615,10 @@ class SearchView(QWidget):
 
         suggest_crop, crop_reason = should_suggest_crop(image_path)
         if suggest_crop:
-            # Non-blocking: pipeline auto-crops room photos with fast OpenCV.
-            # Buttons remain for explicit Auto Crop or manual Crop.
+            # Non-blocking: drop-search isolates the tile (SAM2/OpenCV),
+            # straightens perspective, and multi-crop FAISS searches.
             self._status_label.setText(
-                f"{crop_reason} Searching with auto tile focus. "
-                "Use Auto Crop & Search or Crop & Search for more control."
+                f"{crop_reason} Isolating tile region for a better match…"
             )
         self._viewmodel.search_by_image(image_path)
 

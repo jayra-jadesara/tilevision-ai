@@ -122,6 +122,11 @@ class HybridReRanker:
             and embedding < 0.42
         ):
             final *= 0.82
+        elif embedding < 0.36:
+            # Room-photo false friends (walls, furniture, similar tone).
+            final *= 0.78
+        elif embedding < 0.42:
+            final *= 0.90
 
         return SearchScore(
             embedding=embedding,

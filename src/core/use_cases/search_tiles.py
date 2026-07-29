@@ -114,6 +114,40 @@ class SearchTilesUseCase:
             total_vectors,
         )
 
+    def _search_faiss_multi_crop(
+        self,
+        embeddings: list,
+        search_k: int,
+    ) -> List[int]:
+        """
+        Run FAISS for each query crop and merge by best similarity per tile id.
+
+        Improves room-photo recall when one crop is cleaner than another.
+        """
+        if not embeddings:
+            return []
+
+        best_score: dict[int, float] = {}
+        for emb in embeddings:
+            if hasattr(emb, "tolist"):
+                vector = emb.tolist()
+            else:
+                vector = list(emb)
+            ids, scores = self._index.search_vectors(vector, search_k)
+            for tile_id, score in zip(ids, scores):
+                prev = best_score.get(tile_id)
+                if prev is None or float(score) > prev:
+                    best_score[tile_id] = float(score)
+
+        ordered = sorted(best_score.items(), key=lambda item: item[1], reverse=True)
+        matching_ids = [tile_id for tile_id, _score in ordered]
+        logger.info(
+            "Multi-crop FAISS merge: crops=%d unique_ids=%d",
+            len(embeddings),
+            len(matching_ids),
+        )
+        return matching_ids
+
     def get_index_health(self):
         """Return feature-version compatibility status for the indexed catalog."""
         return self._repo.get_feature_version_status()
@@ -183,6 +217,7 @@ class SearchTilesUseCase:
                 query_dhash = compute_dhash(query_path)
 
             query_features: TileFeatures | None = None
+            query_embeddings: list = []
             cached_tile = self._repo.get_by_path(str(query_path.resolve()))
             if (
                 cached_tile
@@ -191,6 +226,7 @@ class SearchTilesUseCase:
                 and cached_tile.sha256_hash == query_sha256
             ):
                 query_features = cached_tile.features
+                query_embeddings = [query_features.embedding]
                 logger.info(
                     "Reusing indexed features for catalog query: %s",
                     query_path.name,
@@ -199,10 +235,19 @@ class SearchTilesUseCase:
             if query_features is None:
                 logger.info("Computing embedding for query image...")
                 with timer.measure("feature_extract"):
-                    query_features = self._feature_extractor.extract(
-                        str(query_path),
-                        for_query=True,
+                    extract_for_search = getattr(
+                        self._feature_extractor, "extract_for_search", None
                     )
+                    if extract_for_search is not None:
+                        query_features, query_embeddings = extract_for_search(
+                            str(query_path)
+                        )
+                    else:
+                        query_features = self._feature_extractor.extract(
+                            str(query_path),
+                            for_query=True,
+                        )
+                        query_embeddings = [query_features.embedding]
                 extract_timings = self._feature_extractor.last_timings
                 timer.timings.record("preprocessing", extract_timings.preprocessing)
                 timer.timings.record("dinov2", extract_timings.dinov2)
@@ -268,10 +313,14 @@ class SearchTilesUseCase:
                         total_vectors,
                     )
 
-                logger.info(f"Querying FAISS vector index (search_k={search_k})...")
+                logger.info(
+                    "Querying FAISS vector index (search_k=%s, query_crops=%s)...",
+                    search_k,
+                    len(query_embeddings) or 1,
+                )
                 with timer.measure("faiss"):
-                    matching_ids, _ = self._index.search_vectors(
-                        query_features.embedding.tolist(),
+                    matching_ids = self._search_faiss_multi_crop(
+                        query_embeddings or [query_features.embedding],
                         search_k,
                     )
 
