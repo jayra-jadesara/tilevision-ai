@@ -44,24 +44,33 @@ def test_sam2_enabled_via_settings_toggle(monkeypatch):
     assert sam2_backend.sam2_enabled() is False
 
 
-def test_mac_intel_can_enable_sam2_when_stack_allows(monkeypatch):
+def test_mac_intel_onnx_is_primary_shared_path(monkeypatch):
     simulate_platform(monkeypatch, "darwin", machine="x86_64")
-    monkeypatch.delenv("TILEVISION_ENABLE_SAM2", raising=False)
+    monkeypatch.setenv("TILEVISION_ENABLE_SAM2", "1")
     sam2_backend.configure_sam2_from_settings(True)
-    monkeypatch.setattr(sam2_backend, "sam2_api_available", lambda: True)
-    monkeypatch.setattr(sam2_backend, "_torch_version_tuple", lambda: (2, 5, 1))
-
-    assert sam2_backend.sam2_platform_supported() is True
-    assert sam2_backend.sam2_should_run() is True
+    monkeypatch.setattr(
+        "src.ai.preprocess.sam2_onnx_backend.sam2_onnx_should_run",
+        lambda: True,
+    )
     assert expected_precise_backend() == "sam2"
-    assert "Mac Intel" in sam2_backend.sam2_status()
 
 
-def test_mac_intel_falls_back_when_sam2_api_missing(monkeypatch):
+def test_windows_and_mac_silicon_share_same_onnx_primary(monkeypatch):
+    monkeypatch.setenv("TILEVISION_ENABLE_SAM2", "1")
+    sam2_backend.configure_sam2_from_settings(True)
+    monkeypatch.setattr(
+        "src.ai.preprocess.sam2_onnx_backend.sam2_onnx_should_run",
+        lambda: True,
+    )
+    for platform, machine in (("win32", None), ("darwin", "arm64"), ("darwin", "x86_64")):
+        simulate_platform(monkeypatch, platform, machine=machine)
+        assert expected_precise_backend() == "sam2"
+
+
+def test_mac_intel_falls_back_when_all_sam2_unavailable(monkeypatch):
     simulate_platform(monkeypatch, "darwin", machine="x86_64")
     monkeypatch.setenv("TILEVISION_ENABLE_SAM2", "1")
     monkeypatch.setattr(sam2_backend, "sam2_api_available", lambda: False)
-    # Without ONNX either → GrabCut
     monkeypatch.setattr(
         "src.ai.preprocess.sam2_onnx_backend.sam2_onnx_should_run",
         lambda: False,
@@ -71,58 +80,17 @@ def test_mac_intel_falls_back_when_sam2_api_missing(monkeypatch):
     assert expected_precise_backend() == "grabcut"
 
 
-def test_mac_intel_prefers_onnx_when_transformers_unavailable(monkeypatch):
-    simulate_platform(monkeypatch, "darwin", machine="x86_64")
-    monkeypatch.setenv("TILEVISION_ENABLE_SAM2", "1")
-    sam2_backend.configure_sam2_from_settings(True)
-    monkeypatch.setattr(sam2_backend, "sam2_should_run", lambda: False)
-    monkeypatch.setattr(
-        "src.ai.preprocess.sam2_onnx_backend.sam2_onnx_should_run",
-        lambda: True,
-    )
-    monkeypatch.setattr(
-        "src.ai.preprocess.sam2_onnx_backend.resolve_sam2_onnx_dir",
-        lambda: Path("/tmp/fake-onnx"),
-    )
-    assert expected_precise_backend() == "sam2_onnx"
-
-
-def test_windows_prefers_onnx_when_transformers_unavailable(monkeypatch):
+def test_transformers_is_secondary_when_onnx_off(monkeypatch):
     simulate_platform(monkeypatch, "win32")
     monkeypatch.setenv("TILEVISION_ENABLE_SAM2", "1")
     sam2_backend.configure_sam2_from_settings(True)
-    monkeypatch.setattr(sam2_backend, "sam2_should_run", lambda: False)
     monkeypatch.setattr(
         "src.ai.preprocess.sam2_onnx_backend.sam2_onnx_should_run",
-        lambda: True,
+        lambda: False,
     )
-    monkeypatch.setattr(
-        "src.ai.preprocess.sam2_onnx_backend.resolve_sam2_onnx_dir",
-        lambda: Path("/tmp/fake-onnx"),
-    )
-    assert expected_precise_backend() == "sam2_onnx"
-
-
-def test_apple_silicon_can_enable_sam2(monkeypatch):
-    simulate_platform(monkeypatch, "darwin", machine="arm64")
-    monkeypatch.setenv("TILEVISION_ENABLE_SAM2", "1")
     monkeypatch.setattr(sam2_backend, "sam2_api_available", lambda: True)
     monkeypatch.setattr(sam2_backend, "_torch_version_tuple", lambda: (2, 5, 1))
-
-    assert sam2_backend.sam2_platform_supported() is True
-    assert sam2_backend.sam2_should_run() is True
-    assert expected_precise_backend() == "sam2"
-
-
-def test_windows_can_enable_sam2(monkeypatch):
-    simulate_platform(monkeypatch, "win32")
-    monkeypatch.setenv("TILEVISION_ENABLE_SAM2", "1")
-    monkeypatch.setattr(sam2_backend, "sam2_api_available", lambda: True)
-    monkeypatch.setattr(sam2_backend, "_torch_version_tuple", lambda: (2, 5, 1))
-
-    assert sam2_backend.sam2_platform_supported() is True
-    assert sam2_backend.sam2_should_run() is True
-    assert expected_precise_backend() == "sam2"
+    assert expected_precise_backend() == "sam2_transformers"
 
 
 @pytest.mark.parametrize(
@@ -152,11 +120,10 @@ def test_precise_crop_works_on_all_major_platforms(tmp_path, monkeypatch, platfo
     assert result.method in {"grabcut", "fast_fallback"}
     assert result.image.size[0] > 0
     assert result.image.size[1] > 0
-    # Must shrink vs full room frame for useful search.
     assert result.image.size[0] * result.image.size[1] < 900 * 420
 
 
-def test_precise_isolate_uses_sam2_on_windows_and_mac_intel(tmp_path, monkeypatch):
+def test_precise_isolate_uses_onnx_sam2_on_windows_and_mac(tmp_path, monkeypatch):
     path = tmp_path / "room_sam.jpg"
     _make_room_like_photo(path)
 
@@ -169,24 +136,37 @@ def test_precise_isolate_uses_sam2_on_windows_and_mac_intel(tmp_path, monkeypatc
     for platform, machine in (("win32", None), ("darwin", "x86_64"), ("darwin", "arm64")):
         simulate_platform(monkeypatch, platform, machine=machine)
         monkeypatch.setenv("TILEVISION_ENABLE_SAM2", "1")
-        monkeypatch.setattr(sam2_backend, "sam2_api_available", lambda: True)
-        monkeypatch.setattr(sam2_backend, "_torch_version_tuple", lambda: (2, 5, 1))
-        monkeypatch.setattr(sam2_backend, "segment_tile_mask", _fake_mask)
-        monkeypatch.setattr(sam2_backend, "sam2_status", lambda: "Ready (mocked)")
+        monkeypatch.setattr(
+            "src.ai.preprocess.sam2_onnx_backend.sam2_onnx_should_run",
+            lambda: True,
+        )
+        monkeypatch.setattr(
+            "src.ai.preprocess.sam2_onnx_backend.segment_tile_mask_onnx",
+            _fake_mask,
+        )
+        monkeypatch.setattr(
+            "src.ai.preprocess.sam2_onnx_backend.sam2_onnx_status",
+            lambda: "ONNX SAM2 ready (mocked)",
+        )
 
         with Image.open(path) as img:
             result = precise_isolate_tile(img.convert("RGB"))
         assert result.method == "sam2", platform
+        assert "ONNX" in result.detail
 
 
 def test_save_precise_tile_crop_writes_jpeg(tmp_path, monkeypatch):
     monkeypatch.delenv("TILEVISION_ENABLE_SAM2", raising=False)
+    monkeypatch.setattr(
+        "src.ai.preprocess.sam2_onnx_backend.sam2_onnx_should_run",
+        lambda: False,
+    )
     path = tmp_path / "room_save.jpg"
     _make_room_like_photo(path)
     out_path, result = save_precise_tile_crop(path)
     assert out_path.exists()
     assert "tilevision_crops" in out_path.as_posix()
-    assert result.method in {"grabcut", "fast_fallback", "sam2"}
+    assert result.method in {"grabcut", "fast_fallback", "sam2", "sam2_transformers"}
 
 
 def test_load_sam2_requires_enable(monkeypatch):

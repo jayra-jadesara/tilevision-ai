@@ -41,15 +41,7 @@ if ($expectSam2) {
         Write-Error "TILEVISION_BUNDLE_SAM2=$bundleSam2 but ONNX SAM2 encoder not bundled"
         exit 1
     }
-    Write-Host "sam2 onnx: $($sam2Onnx.FullName)"
-    $sam2 = Get-ChildItem -Path $AppDir -Recurse -Filter "config.json" -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -match "sam2\.1-hiera-tiny[\\/]" } |
-        Select-Object -First 1
-    if ($sam2) {
-        Write-Host "sam2 transformers: $($sam2.FullName)"
-    } else {
-        Write-Host "sam2 transformers optional missing (ONNX still present)"
-    }
+    Write-Host "sam2 onnx bundled (shared Mac/Windows path): $($sam2Onnx.FullName)"
 } else {
     Write-Host "sam2 bundle skipped (TILEVISION_BUNDLE_SAM2=$bundleSam2)"
 }

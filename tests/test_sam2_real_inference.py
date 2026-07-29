@@ -103,7 +103,7 @@ def _label_as_platform(monkeypatch, platform: str, machine: str | None = None) -
     ],
 )
 def test_real_precise_crop_sam2_high_iou(tmp_path, monkeypatch, platform, machine):
-    """Real SAM2 inference must tightly crop the known tile on Win/Mac label paths."""
+    """Transformers SAM2 fallback still works when ONNX is forced off."""
     if not sam2_backend.sam2_api_available() or not sam2_backend.sam2_platform_supported():
         pytest.skip("SAM2 stack not available in this environment")
 
@@ -114,16 +114,18 @@ def test_real_precise_crop_sam2_high_iou(tmp_path, monkeypatch, platform, machin
     monkeypatch.setenv("TILEVISION_ENABLE_SAM2", "1")
     monkeypatch.setenv("TILEVISION_SAM2_MODEL_DIR", str(_WEIGHTS.parent))
     sam2_backend.configure_sam2_from_settings(True)
-    assert expected_precise_backend() == "sam2"
+    monkeypatch.setattr(
+        "src.ai.preprocess.sam2_onnx_backend.sam2_onnx_should_run",
+        lambda: False,
+    )
+    assert expected_precise_backend() == "sam2_transformers"
 
     with Image.open(path) as img:
         result = precise_isolate_tile(img.convert("RGB"))
 
-    assert result.method == "sam2", result.detail
+    assert result.method == "sam2_transformers", result.detail
     assert _iou(result.box, gt) >= 0.70
-    # Must be far tighter than the full room frame.
     assert result.image.size[0] * result.image.size[1] < 900 * 420 * 0.35
-    # Status / detail must name the simulated client OS.
     detail = (result.detail or "") + sam2_backend.sam2_status()
     if platform == "win32":
         assert "Windows" in detail
@@ -140,6 +142,10 @@ def test_real_grabcut_fallback_when_sam2_disabled(tmp_path, monkeypatch):
     monkeypatch.delenv("TILEVISION_ENABLE_SAM2", raising=False)
     sam2_backend.configure_sam2_from_settings(False)
     monkeypatch.setattr(sam2_backend, "sam2_should_run", lambda: False)
+    monkeypatch.setattr(
+        "src.ai.preprocess.sam2_onnx_backend.sam2_onnx_should_run",
+        lambda: False,
+    )
 
     for platform, machine in (("win32", None), ("darwin", "x86_64"), ("darwin", "arm64")):
         _label_as_platform(monkeypatch, platform, machine=machine)

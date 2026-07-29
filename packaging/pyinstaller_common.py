@@ -45,13 +45,12 @@ _SAM2_HIDDEN_IMPORTS = [
 
 def should_bundle_sam2(*, macos_arch: str | None = None) -> bool:
     """
-    Whether to include any SAM2 assets (Transformers and/or ONNX) in the installer.
+    Whether to include SAM2 ONNX assets in the installer.
 
     TILEVISION_BUNDLE_SAM2:
       0 / false / off  → never (default for production customer builds)
-      1 / true / on    → yes when folders exist
-      auto             → yes on Windows, Mac Intel, Mac Apple Silicon, Linux
-                         (Mac Intel gets ONNX; Transformers weights optional)
+      1 / true / on / auto → yes on Windows, Mac Intel, Mac Apple Silicon, Linux
+                             (identical ONNX package on every platform)
     """
     flag = os.environ.get("TILEVISION_BUNDLE_SAM2", "").strip().lower()
     if flag in {"0", "false", "no", "off", ""}:
@@ -62,17 +61,19 @@ def should_bundle_sam2(*, macos_arch: str | None = None) -> bool:
 
 
 def should_bundle_sam2_transformers(*, macos_arch: str | None = None) -> bool:
-    """Transformers safetensors — skip Mac Intel (cannot run Sam2Model on torch 2.2)."""
+    """
+    Optional Transformers safetensors — off by default so Mac/Windows match.
+
+    Enable only with TILEVISION_BUNDLE_SAM2_TRANSFORMERS=1 (lab).
+    """
     if not should_bundle_sam2(macos_arch=macos_arch):
         return False
-    arch = (macos_arch or os.environ.get("MACOS_BUILD_ARCH", "")).strip().lower()
-    if arch in {"x64", "x86_64", "intel"}:
-        return False
-    return True
+    flag = os.environ.get("TILEVISION_BUNDLE_SAM2_TRANSFORMERS", "").strip().lower()
+    return flag in {"1", "true", "yes", "on"}
 
 
 def should_bundle_sam2_onnx(*, macos_arch: str | None = None) -> bool:
-    """ONNX encoder/decoder — primary path for Mac Intel + Windows CPU."""
+    """ONNX encoder/decoder — primary Precise Crop path on every OS."""
     return should_bundle_sam2(macos_arch=macos_arch)
 
 

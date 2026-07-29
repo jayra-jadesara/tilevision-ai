@@ -1,4 +1,4 @@
-"""Real ONNX SAM2 inference — Mac Intel / Windows CPU path."""
+"""Real ONNX SAM2 — identical Precise Crop on Windows / Mac Intel / Mac Silicon."""
 
 from __future__ import annotations
 
@@ -84,12 +84,13 @@ def test_onnx_runtime_ready():
     [
         ("win32", None),
         ("darwin", "x86_64"),
+        ("darwin", "arm64"),
     ],
 )
-def test_mac_intel_and_windows_use_onnx_precise_crop(
+def test_same_onnx_precise_crop_on_windows_and_all_mac(
     tmp_path, monkeypatch, platform, machine
 ):
-    """Force Transformers SAM2 off — production Intel/Windows path is ONNX."""
+    """Windows / Mac Intel / Mac Silicon must all use ONNX SAM2 with matching crops."""
     path = tmp_path / "room.jpg"
     gt = _make_room(path)
 
@@ -97,19 +98,37 @@ def test_mac_intel_and_windows_use_onnx_precise_crop(
     monkeypatch.setenv("TILEVISION_ENABLE_SAM2", "1")
     monkeypatch.setenv("TILEVISION_SAM2_ONNX_DIR", str(_ONNX_DIR))
     sam2_backend.configure_sam2_from_settings(True)
-    # Simulate production stack without Sam2Model / torch>=2.5.
-    monkeypatch.setattr(sam2_backend, "sam2_should_run", lambda: False)
+    # Even if Transformers is available, ONNX must win so platforms match.
+    monkeypatch.setattr(sam2_backend, "sam2_should_run", lambda: True)
 
-    assert expected_precise_backend() == "sam2_onnx"
+    assert expected_precise_backend() == "sam2"
 
     with Image.open(path) as img:
         result = precise_isolate_tile(img.convert("RGB"))
 
-    assert result.method == "sam2_onnx", result.detail
+    assert result.method == "sam2", result.detail
+    assert "ONNX" in result.detail
     assert _iou(result.box, gt) >= 0.55
     assert result.image.size[0] * result.image.size[1] < 900 * 420 * 0.45
-    detail = result.detail + sam2_onnx_backend.sam2_onnx_status()
-    if platform == "win32":
-        assert "Windows" in detail
-    else:
-        assert "Mac Intel" in detail
+
+
+@_require_onnx
+def test_windows_mac_intel_silicon_produce_identical_boxes(tmp_path, monkeypatch):
+    """Bit-identical crop box across OS labels (same ONNX model + same image)."""
+    path = tmp_path / "room.jpg"
+    gt = _make_room(path)
+    monkeypatch.setenv("TILEVISION_ENABLE_SAM2", "1")
+    monkeypatch.setenv("TILEVISION_SAM2_ONNX_DIR", str(_ONNX_DIR))
+    sam2_backend.configure_sam2_from_settings(True)
+    monkeypatch.setattr(sam2_backend, "sam2_should_run", lambda: False)
+
+    boxes = {}
+    for platform, machine in (("win32", None), ("darwin", "x86_64"), ("darwin", "arm64")):
+        _label_as(monkeypatch, platform, machine)
+        with Image.open(path) as img:
+            result = precise_isolate_tile(img.convert("RGB"))
+        assert result.method == "sam2"
+        assert _iou(result.box, gt) >= 0.55
+        boxes[(platform, machine)] = result.box
+
+    assert boxes[("win32", None)] == boxes[("darwin", "x86_64")] == boxes[("darwin", "arm64")]
