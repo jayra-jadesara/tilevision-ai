@@ -12,7 +12,12 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.ai.preprocess import sam2_backend
-from src.ai.preprocess.precise_tile_crop import precise_isolate_tile, save_precise_tile_crop
+from src.ai.preprocess.precise_tile_crop import (
+    expected_precise_backend,
+    precise_isolate_tile,
+    save_precise_tile_crop,
+)
+from tests.conftest import simulate_platform
 
 
 def _make_room_like_photo(path: Path) -> None:
@@ -27,23 +32,68 @@ def _make_room_like_photo(path: Path) -> None:
 def test_sam2_disabled_by_default(monkeypatch):
     monkeypatch.delenv("TILEVISION_ENABLE_SAM2", raising=False)
     assert sam2_backend.sam2_enabled_by_env() is False
-    assert "Disabled" in sam2_backend.sam2_status()
 
 
-def test_precise_isolate_uses_grabcut_or_fast_without_sam2(tmp_path, monkeypatch):
+def test_mac_intel_never_runs_sam2(monkeypatch):
+    simulate_platform(monkeypatch, "darwin", machine="x86_64")
+    monkeypatch.setenv("TILEVISION_ENABLE_SAM2", "1")
+    monkeypatch.setattr(sam2_backend, "sam2_api_available", lambda: True)
+    monkeypatch.setattr(sam2_backend, "_torch_version_tuple", lambda: (2, 5, 1))
+
+    assert sam2_backend.sam2_platform_supported() is False
+    assert sam2_backend.sam2_should_run() is False
+    assert expected_precise_backend() == "grabcut"
+    assert "Mac Intel" in sam2_backend.sam2_status()
+
+
+def test_apple_silicon_can_enable_sam2(monkeypatch):
+    simulate_platform(monkeypatch, "darwin", machine="arm64")
+    monkeypatch.setenv("TILEVISION_ENABLE_SAM2", "1")
+    monkeypatch.setattr(sam2_backend, "sam2_api_available", lambda: True)
+    monkeypatch.setattr(sam2_backend, "_torch_version_tuple", lambda: (2, 5, 1))
+
+    assert sam2_backend.sam2_platform_supported() is True
+    assert sam2_backend.sam2_should_run() is True
+    assert expected_precise_backend() == "sam2"
+
+
+def test_windows_can_enable_sam2(monkeypatch):
+    simulate_platform(monkeypatch, "win32")
+    monkeypatch.setenv("TILEVISION_ENABLE_SAM2", "1")
+    monkeypatch.setattr(sam2_backend, "sam2_api_available", lambda: True)
+    monkeypatch.setattr(sam2_backend, "_torch_version_tuple", lambda: (2, 5, 1))
+
+    assert sam2_backend.sam2_platform_supported() is True
+    assert sam2_backend.sam2_should_run() is True
+    assert expected_precise_backend() == "sam2"
+
+
+@pytest.mark.parametrize(
+    "platform,machine",
+    [
+        ("win32", None),
+        ("darwin", "x86_64"),
+        ("darwin", "arm64"),
+    ],
+)
+def test_precise_crop_works_on_all_major_platforms(tmp_path, monkeypatch, platform, machine):
+    simulate_platform(monkeypatch, platform, machine=machine)
     monkeypatch.delenv("TILEVISION_ENABLE_SAM2", raising=False)
-    path = tmp_path / "room.jpg"
+
+    path = tmp_path / f"room_{platform}_{machine or 'na'}.jpg"
     _make_room_like_photo(path)
     with Image.open(path) as img:
         result = precise_isolate_tile(img.convert("RGB"))
 
     assert result.method in {"grabcut", "fast_fallback"}
     assert result.image.size[0] > 0
-    src_w, src_h = 900, 420
-    assert result.image.size[0] * result.image.size[1] <= src_w * src_h
+    assert result.image.size[1] > 0
+    # Must shrink vs full room frame for useful search.
+    assert result.image.size[0] * result.image.size[1] < 900 * 420
 
 
 def test_precise_isolate_uses_sam2_when_mocked(tmp_path, monkeypatch):
+    simulate_platform(monkeypatch, "darwin", machine="arm64")
     monkeypatch.setenv("TILEVISION_ENABLE_SAM2", "1")
     path = tmp_path / "room_sam.jpg"
     _make_room_like_photo(path)
@@ -51,12 +101,11 @@ def test_precise_isolate_uses_sam2_when_mocked(tmp_path, monkeypatch):
     def _fake_mask(image, box=None):
         width, height = image.size
         mask = np.zeros((height, width), dtype=bool)
-        # Central tile-ish rectangle
         mask[160:380, 340:560] = True
         return mask
 
     monkeypatch.setattr(sam2_backend, "sam2_api_available", lambda: True)
-    monkeypatch.setattr(sam2_backend, "sam2_enabled_by_env", lambda: True)
+    monkeypatch.setattr(sam2_backend, "_torch_version_tuple", lambda: (2, 5, 1))
     monkeypatch.setattr(sam2_backend, "segment_tile_mask", _fake_mask)
     monkeypatch.setattr(sam2_backend, "sam2_status", lambda: "Ready (mocked)")
 
@@ -65,7 +114,6 @@ def test_precise_isolate_uses_sam2_when_mocked(tmp_path, monkeypatch):
 
     assert result.method == "sam2"
     assert result.confidence >= 0.8
-    # Should be close to the synthetic tile patch size.
     assert 180 <= result.image.size[0] <= 260
     assert 180 <= result.image.size[1] <= 260
 

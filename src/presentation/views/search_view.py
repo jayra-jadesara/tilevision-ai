@@ -370,8 +370,9 @@ class SearchView(QWidget):
         self._precise_crop_button = QPushButton("Precise Crop & Search")
         self._precise_crop_button.setObjectName("SecondaryButton")
         self._precise_crop_button.setToolTip(
-            "Experimental: GrabCut refine, or SAM 2 when TILEVISION_ENABLE_SAM2=1. "
-            "Not used by default search. Not for production packaging yet."
+            "Works on Windows, Mac Intel, and Mac Apple Silicon. "
+            "Uses GrabCut on all platforms; SAM 2 only when enabled on "
+            "supported machines (not Mac Intel). Experimental — not default search."
         )
         self._precise_crop_button.clicked.connect(self._on_precise_crop_clicked)
         self._precise_crop_button.setEnabled(False)

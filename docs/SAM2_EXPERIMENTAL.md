@@ -1,52 +1,48 @@
-# SAM 2 — Experimental Precise Crop (not production)
+# SAM 2 — Experimental Precise Crop (cross-platform)
 
-Status: **feature branch / lab only**. Do **not** ship in customer DMG/EXE until
-Mac Intel compatibility and model packaging are decided.
+Status: **feature branch / lab only**. Do **not** ship in customer DMG/EXE yet.
 
 ## Goal
 
-Room photos → isolate tile surface more accurately than fast OpenCV → then DINOv2 search.
+**Precise Crop & Search** must work on:
 
-## What shipped in this branch
+| Platform | Precise Crop backend |
+|----------|----------------------|
+| **Windows** | GrabCut always; SAM2 optional if enabled + deps |
+| **Mac Intel** | **GrabCut only** (SAM2 intentionally skipped) |
+| **Mac Apple Silicon** | GrabCut always; SAM2 optional if enabled + deps |
 
-| Path | When | Backend |
-|------|------|---------|
-| Default search | Always | Fast OpenCV auto-focus (production v1.0.12) |
-| Auto Crop & Search | Button | Fast OpenCV |
-| Precise Crop & Search | Button | SAM 2 if enabled, else GrabCut |
-| Crop and Search | Button | Manual |
+Default search / Auto Crop stay on fast OpenCV (no SAM, no slowdown).
 
-Default search **never** loads SAM 2 (keeps Mac Intel snappy).
+## Why Mac Intel never uses SAM2
 
-## Enable SAM 2 (dev)
+Production Mac Intel builds pin `transformers<5` / torch 2.2.x. SAM2 needs a
+newer stack. Precise Crop still works there via **OpenCV GrabCut**.
+
+## Enable SAM 2 (Apple Silicon / Windows GPU lab)
 
 ```bash
 pip install -r requirements-sam2-experimental.txt
 export TILEVISION_ENABLE_SAM2=1
-# optional:
-# export TILEVISION_SAM2_MODEL_DIR=/path/to/local/sam2.1-hiera-tiny
 python main.py
 ```
 
-Then on Search: choose a room photo → **Precise Crop & Search**.
+On Mac Intel the flag is ignored for SAM2; GrabCut still runs.
 
-Without the flag, Precise Crop still works via **OpenCV GrabCut** (no SAM download).
+## Buttons
 
-## Why not production yet
+| Button | Backend |
+|--------|---------|
+| (default drop image) | Fast OpenCV scene focus |
+| Auto Crop & Search | Fast OpenCV |
+| Precise Crop & Search | SAM2 (if allowed) → else GrabCut → else fast |
+| Crop and Search | Manual |
 
-1. Production `requirements.txt` pins `transformers<5` for **Mac Intel** (torch 2.2.x).
-2. SAM 2 weights are large; not bundled in current installers.
-3. First load can be slow; must stay opt-in only.
-4. Need offline packaging plan before customer release.
+## Before production
 
-## Model
-
-Default hub id: `facebook/sam2.1-hiera-tiny` (smallest practical checkpoint).
-
-## Next before production
-
-- [ ] Decide Mac Intel strategy (CPU GrabCut only vs drop SAM on Intel builds)
-- [ ] Bundle tiny weights under `model_weights/sam2.1-hiera-tiny/`
-- [ ] Gate button behind Settings → Experimental
-- [ ] Measure Precise Crop latency on M-series and Intel
-- [ ] Then version bump + release (separate from normal search fixes)
+- [x] GrabCut path works on Windows / Mac Intel / Mac Silicon
+- [x] SAM2 gated off on Mac Intel
+- [ ] Settings toggle instead of env flag
+- [ ] Bundle optional SAM2 tiny weights for Silicon/Windows only
+- [ ] Separate installer flavor or optional download
+- [ ] Then version bump + release

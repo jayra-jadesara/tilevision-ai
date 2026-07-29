@@ -2,14 +2,18 @@
 Optional SAM 2 backend for precise tile segmentation (experimental).
 
 Not used by default search. Requires newer transformers with Sam2Model
-(typically transformers 5.x + recent torch). Mac Intel production pins
-stay on transformers 4.x — this backend simply reports unavailable there.
+(typically transformers 5.x + recent torch).
+
+Cross-platform policy:
+  - Mac Intel → never use SAM2 (torch/transformers pins; keep CPU GrabCut)
+  - Windows / Mac Apple Silicon / Linux → SAM2 allowed when flag + deps exist
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +24,7 @@ logger = logging.getLogger("tilevision.ai.sam2_backend")
 
 DEFAULT_SAM2_MODEL_ID = "facebook/sam2.1-hiera-tiny"
 _BUNDLED_DIRNAME = "sam2.1-hiera-tiny"
+_MIN_TORCH = (2, 5, 0)
 
 _model: Any = None
 _processor: Any = None
@@ -40,6 +45,39 @@ def sam2_api_available() -> bool:
         return True
     except Exception:
         return False
+
+
+def _torch_version_tuple() -> tuple[int, int, int]:
+    try:
+        import torch
+
+        match = re.match(r"(\d+)\.(\d+)\.(\d+)", torch.__version__.split("+")[0])
+        if not match:
+            return (0, 0, 0)
+        return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+    except Exception:
+        return (0, 0, 0)
+
+
+def sam2_platform_supported() -> bool:
+    """
+    Return True only on platforms where SAM2 is a sensible optional backend.
+
+    Mac Intel always False — production stack cannot ship SAM2 there, and
+    Precise Crop must stay on GrabCut for universal Windows/Intel/Silicon UX.
+    """
+    from src.utils.platform_info import is_mac_intel
+
+    if is_mac_intel():
+        return False
+    if not sam2_api_available():
+        return False
+    return _torch_version_tuple() >= _MIN_TORCH
+
+
+def sam2_should_run() -> bool:
+    """True when the operator enabled SAM2 and this machine can run it."""
+    return sam2_enabled_by_env() and sam2_platform_supported()
 
 
 def resolve_sam2_model_source() -> tuple[str, bool]:
@@ -78,14 +116,24 @@ def resolve_sam2_model_source() -> tuple[str, bool]:
 
 
 def sam2_status() -> str:
+    from src.utils.platform_info import is_mac_intel, is_macos, is_windows
+
+    if is_mac_intel():
+        return "Skipped on Mac Intel — Precise Crop uses GrabCut (works offline/CPU)"
     if not sam2_enabled_by_env():
         return "Disabled (set TILEVISION_ENABLE_SAM2=1 to experiment)"
     if not sam2_api_available():
-        return "Unavailable (needs transformers with Sam2Model — see requirements-sam2-experimental.txt)"
+        return (
+            "Unavailable (needs transformers with Sam2Model — "
+            "see requirements-sam2-experimental.txt)"
+        )
+    if _torch_version_tuple() < _MIN_TORCH:
+        return "Unavailable (needs torch>=2.5.1 for SAM2)"
     if _load_error:
         return f"Load failed: {_load_error}"
     if _model is not None:
-        return "Ready (loaded)"
+        platform = "Windows" if is_windows() else ("macOS" if is_macos() else "Linux")
+        return f"Ready (loaded on {platform})"
     try:
         source, local_only = resolve_sam2_model_source()
     except FileNotFoundError as exc:
@@ -101,20 +149,19 @@ def _resolve_device():
 
     configure_mps_fallback()
     info = detect_gpu_runtime(preference="auto")
-    # Prefer CUDA/MPS when present; CPU is fine for tiny but slower.
     return torch.device(info.active_device)
 
 
 def load_sam2_model() -> tuple[Any, Any]:
-    """Lazy-load SAM2. Raises if unavailable or disabled."""
+    """Lazy-load SAM2. Raises if unavailable or disabled on this platform."""
     global _model, _processor, _load_error
 
     if not sam2_enabled_by_env():
         raise RuntimeError("SAM2 is disabled. Set TILEVISION_ENABLE_SAM2=1.")
-    if not sam2_api_available():
+    if not sam2_platform_supported():
         raise RuntimeError(
-            "Sam2Model is not available in this transformers build. "
-            "Install requirements-sam2-experimental.txt on a supported machine."
+            "SAM2 is not supported on this platform/stack. "
+            "Precise Crop will use GrabCut instead."
         )
     if _model is not None and _processor is not None:
         return _model, _processor
@@ -124,7 +171,12 @@ def load_sam2_model() -> tuple[Any, Any]:
 
     source, local_only = resolve_sam2_model_source()
     device = _resolve_device()
-    logger.info("Loading experimental SAM2 from %s (local_only=%s) on %s", source, local_only, device)
+    logger.info(
+        "Loading experimental SAM2 from %s (local_only=%s) on %s",
+        source,
+        local_only,
+        device,
+    )
 
     try:
         _processor = Sam2Processor.from_pretrained(source, local_files_only=local_only)
