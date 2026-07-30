@@ -76,15 +76,23 @@ class DropZone(QFrame):
     onto it, or when the user clicks it and picks one via a file dialog.
     """
 
-    def __init__(self, on_image_selected, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        on_image_selected,
+        parent: Optional[QWidget] = None,
+        on_drop_rejected: Optional[Callable[[str], None]] = None,
+    ) -> None:
         """
         Args:
             on_image_selected: Callable[[str], None] invoked with the
                 absolute path of the chosen image.
             parent: Optional Qt parent widget.
+            on_drop_rejected: Optional Callable[[str], None] with a
+                user-visible reason when a drop is ignored.
         """
         super().__init__(parent)
         self._on_image_selected = on_image_selected
+        self._on_drop_rejected = on_drop_rejected
         self.setObjectName("DropZone")
         self.setAcceptDrops(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -164,12 +172,49 @@ class DropZone(QFrame):
         self.style().unpolish(self)
         self.style().polish(self)
 
+        if not event.mimeData().hasUrls():
+            reason = "Drop ignored — no file path found. Save the image locally, then drop the file."
+            logger.warning("[SEARCH] %s", reason)
+            if self._on_drop_rejected is not None:
+                self._on_drop_rejected(reason)
+            event.ignore()
+            return
+
         for url in event.mimeData().urls():
-            path = Path(url.toLocalFile())
-            if path.suffix.lower() in _QUERY_IMAGE_EXTENSIONS and path.is_file():
-                self._on_image_selected(str(path))
-                event.acceptProposedAction()
+            local = url.toLocalFile()
+            if not local:
+                continue
+            path = Path(local)
+            suffix = path.suffix.lower()
+            if suffix not in _QUERY_IMAGE_EXTENSIONS:
+                reason = (
+                    f"Unsupported image type '{suffix or '(none)'}'. "
+                    "Use JPG, JPEG, PNG, WEBP, BMP, or TIFF."
+                )
+                logger.warning("[SEARCH] Drop rejected: %s (%s)", reason, path)
+                if self._on_drop_rejected is not None:
+                    self._on_drop_rejected(reason)
+                event.ignore()
                 return
+            if not path.is_file():
+                reason = f"Dropped path is not a readable file: {path.name}"
+                logger.warning("[SEARCH] %s", reason)
+                if self._on_drop_rejected is not None:
+                    self._on_drop_rejected(reason)
+                event.ignore()
+                return
+            logger.info("[SEARCH] Drop accepted: %s", path)
+            self._on_image_selected(str(path))
+            event.acceptProposedAction()
+            return
+
+        reason = (
+            "Drop ignored — could not read a local image file. "
+            "If this came from a browser or cloud app, save it to disk first."
+        )
+        logger.warning("[SEARCH] %s", reason)
+        if self._on_drop_rejected is not None:
+            self._on_drop_rejected(reason)
         event.ignore()
 
     def mousePressEvent(self, event) -> None:
@@ -342,7 +387,10 @@ class SearchView(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        self._drop_zone = DropZone(on_image_selected=self._on_image_chosen)
+        self._drop_zone = DropZone(
+            on_image_selected=self._on_image_chosen,
+            on_drop_rejected=self._on_drop_rejected,
+        )
         layout.addWidget(self._drop_zone, stretch=1)
 
         button_col = QVBoxLayout()
@@ -625,6 +673,12 @@ class SearchView(QWidget):
             )
         self._viewmodel.search_by_image(image_path)
 
+    def _on_drop_rejected(self, reason: str) -> None:
+        self._status_label.setText(reason)
+        self._empty_state_label.setText(reason)
+        self._empty_state_widget.setVisible(True)
+        QMessageBox.information(self, "Cannot Search This File", reason)
+
     def _on_crop_clicked(self) -> None:
         if not self._current_query_image_path:
             return
@@ -797,12 +851,23 @@ class SearchView(QWidget):
                 self._empty_state_label.setText(
                     "Search failed.\nCheck the message, then try again or use Auto Crop & Search."
                 )
+            elif state == SearchState.RESULTS:
+                # Belt-and-suspenders: never leave "Searching…" visible after RESULTS.
+                if self._results_table.rowCount() > 0:
+                    self._empty_state_widget.setVisible(False)
+                    self._results_table.setVisible(True)
 
     @Slot(list)
     def _on_results_ready(self, results: List[SearchResult]) -> None:
         self._current_results = results
         self._populate_table(results)
         self._show_confidence_banner(results)
+        if results:
+            self._empty_state_widget.setVisible(False)
+            self._results_table.setVisible(True)
+            logger.info("[SEARCH] UI displaying %d result row(s)", len(results))
+        else:
+            logger.warning("[SEARCH] UI received empty result list")
 
     def _show_confidence_banner(self, results: List[SearchResult]) -> None:
         message = confidence_message(results)

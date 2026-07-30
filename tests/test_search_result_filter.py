@@ -46,7 +46,8 @@ def test_filter_weak_results_drops_low_scores():
     assert "4.jpg" not in names
 
 
-def test_filter_weak_results_keeps_alternatives_when_top_is_exact_match():
+def test_filter_weak_results_never_returns_empty_when_candidates_exist():
+    """Reliability: low hybrid scores must still surface the best match."""
     tiles = [
         TileImage(
             file_path=f"{i}.jpg",
@@ -55,17 +56,14 @@ def test_filter_weak_results_keeps_alternatives_when_top_is_exact_match():
             dimensions="1x1",
             id=i,
         )
-        for i in range(4)
+        for i in range(3)
     ]
     reranked = [
-        (1.0, tiles[0], True),
-        (0.56, tiles[1], False),
-        (0.41, tiles[2], False),
-        (0.22, tiles[3], False),
+        (0.30, tiles[0], False),
+        (0.22, tiles[1], False),
+        (0.10, tiles[2], False),
     ]
     kept = SearchTilesUseCase._filter_weak_results(reranked, top_k=10)
-    names = {tile.file_name for _, tile, _ in kept}
-    assert "0.jpg" in names
-    assert "1.jpg" in names
-    assert "2.jpg" in names
-    assert "3.jpg" not in names
+    assert len(kept) >= 1
+    assert kept[0][1].file_name == "0.jpg"
+

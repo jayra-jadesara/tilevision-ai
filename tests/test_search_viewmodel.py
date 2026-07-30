@@ -50,7 +50,7 @@ class FakeSearchUseCase:
         self._delay = delay
         self.calls = []
 
-    def execute(self, query_image_path, top_k=20, filters=None):
+    def execute(self, query_image_path, top_k=20, filters=None, on_stage=None):
         self.calls.append((query_image_path, top_k, filters))
         if self._delay:
             time.sleep(self._delay)
@@ -131,23 +131,24 @@ def test_missing_query_file_does_not_start_a_worker(qapp, tmp_path):
     assert use_case.calls == []  # never reached the use case
 
 
-def test_concurrent_search_request_is_ignored_while_searching(qapp, tmp_path):
+def test_concurrent_search_request_is_queued_while_searching(qapp, tmp_path):
     query_file = tmp_path / "query.jpg"
     query_file.write_bytes(b"fake")
+    second = tmp_path / "query2.jpg"
+    second.write_bytes(b"fake2")
 
     # Slow enough that the second call definitely arrives while still searching.
-    use_case = FakeSearchUseCase(results=[_make_result()], delay=0.3)
+    use_case = FakeSearchUseCase(results=[_make_result()], delay=0.25)
     vm = SearchViewModel(use_case=use_case)
 
     vm.search_by_image(str(query_file))
     assert vm.state == SearchState.SEARCHING
 
-    vm.search_by_image(str(query_file))  # should be ignored
+    vm.search_by_image(str(second))  # queued, not dropped
+    assert _pump_until(lambda: len(use_case.calls) >= 2, timeout=5.0)
     assert _pump_until(lambda: vm.state == SearchState.RESULTS, timeout=3.0)
-
-    # Only one call ever reached the use case, despite two search_by_image calls.
-    assert len(use_case.calls) == 1
-
+    assert use_case.calls[0][0] == str(query_file)
+    assert use_case.calls[1][0] == str(second)
 
 def test_clear_results_resets_to_idle(qapp, tmp_path):
     query_file = tmp_path / "query.jpg"

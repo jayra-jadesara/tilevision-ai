@@ -11,7 +11,8 @@ import logging
 
 logger = logging.getLogger("tilevision.image_formats")
 
-_BASE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp"})
+_BASE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".jfif", ".png", ".webp"})
+_QUERY_EXTRA_EXTENSIONS = frozenset({".bmp", ".gif", ".tiff", ".tif"})
 _HEIC_EXTENSIONS = frozenset({".heic", ".heif"})
 _heif_registered = False
 
@@ -42,7 +43,7 @@ def supported_image_extensions() -> frozenset[str]:
 def query_image_extensions() -> frozenset[str]:
     """Extensions accepted for visual search query images."""
     register_optional_image_formats()
-    extra = {".bmp", ".gif", ".tiff", ".tif"}
+    extra = set(_QUERY_EXTRA_EXTENSIONS)
     if _heif_registered:
         extra |= _HEIC_EXTENSIONS
     return _BASE_EXTENSIONS | extra

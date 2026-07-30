@@ -16,11 +16,13 @@ from typing import Optional
 from PySide6.QtCore import QThread, Signal
 
 from src.core.use_cases.search_tiles import SearchTilesUseCase
+from src.utils.search_stages import log_search_stage
 
 logger = logging.getLogger("tilevision.presentation.workers.search_worker")
 
 # Heartbeat interval while Search is running (stall detector uses this).
 _HEARTBEAT_INTERVAL_S = 5.0
+_CANCELLED_MESSAGE = "Search cancelled"
 
 
 class SearchWorker(QThread):
@@ -51,17 +53,33 @@ class SearchWorker(QThread):
         self._top_k = top_k
         self._filters = filters or {}
 
+    def _emit_cancelled(self, where: str) -> None:
+        """Always notify the UI when the worker exits due to interruption."""
+        logger.warning(
+            "Search QThread cancelled at %s for %s — emitting failure so UI cannot hang.",
+            where,
+            self._query_image_path,
+        )
+        self.search_failed.emit(_CANCELLED_MESSAGE)
+
     def run(self) -> None:
         """Execute the search in the background thread."""
         logger.info("Search QThread started for query image: %s", self._query_image_path)
         start_time = time.monotonic()
         stop_heartbeat = threading.Event()
+        # Capture the main-thread receiver affinity via Queued signal emits.
+        # Heartbeat runs on a helper thread; Qt queues delivery to the ViewModel.
+        worker_ref = self
 
         def _heartbeat_loop() -> None:
             while not stop_heartbeat.wait(_HEARTBEAT_INTERVAL_S):
-                if self.isInterruptionRequested():
+                if worker_ref.isInterruptionRequested():
                     return
-                self.search_heartbeat.emit()
+                try:
+                    worker_ref.search_heartbeat.emit()
+                except RuntimeError:
+                    # Worker may already be deleted — stop quietly.
+                    return
 
         heartbeat_thread = threading.Thread(
             target=_heartbeat_loop,
@@ -72,7 +90,7 @@ class SearchWorker(QThread):
 
         try:
             if self.isInterruptionRequested():
-                logger.info("Search QThread interrupted before execute.")
+                self._emit_cancelled("before_execute")
                 return
 
             from src.ai.inference_guard import (
@@ -89,22 +107,30 @@ class SearchWorker(QThread):
                     "Inference still busy after wait — Search will retry on lock."
                 )
             if self.isInterruptionRequested():
+                self._emit_cancelled("after_idle_wait")
                 return
 
             self.search_progress.emit("Running AI match (this may take a moment on CPU)…")
             self.search_heartbeat.emit()
 
+            def _on_stage(message: str) -> None:
+                if self.isInterruptionRequested():
+                    return
+                self.search_progress.emit(message)
+                self.search_heartbeat.emit()
+
             results = None
             last_error: Exception | None = None
             for attempt in (1, 2, 3):
                 if self.isInterruptionRequested():
-                    logger.info("Search QThread interrupted before attempt %s.", attempt)
+                    self._emit_cancelled(f"before_attempt_{attempt}")
                     return
                 try:
                     results = self._use_case.execute(
                         self._query_image_path,
                         top_k=self._top_k,
                         filters=self._filters,
+                        on_stage=_on_stage,
                     )
                     last_error = None
                     break
@@ -128,14 +154,16 @@ class SearchWorker(QThread):
 
             elapsed = time.monotonic() - start_time
             if self.isInterruptionRequested():
-                logger.info(
-                    "Search QThread interrupted after %.3fs — suppressing result emit.",
-                    elapsed,
-                )
+                self._emit_cancelled("after_execute")
                 return
 
             self.search_progress.emit("Building results…")
             self.search_heartbeat.emit()
+            log_search_stage(
+                logger,
+                "Worker emitting results",
+                detail=f"{len(results)} in {elapsed:.3f}s",
+            )
             logger.info(
                 "Search QThread finished in %.3fs. Results: %d",
                 elapsed,
@@ -145,11 +173,7 @@ class SearchWorker(QThread):
             self.search_completed.emit(results)
         except Exception as e:
             if self.isInterruptionRequested():
-                logger.info(
-                    "Search QThread interrupted during failure for '%s': %s",
-                    self._query_image_path,
-                    e,
-                )
+                self._emit_cancelled("during_failure")
                 return
             logger.error("Search worker failed for query '%s': %s", self._query_image_path, e)
             self.search_failed.emit(str(e))

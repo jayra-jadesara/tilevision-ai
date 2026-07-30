@@ -125,14 +125,14 @@ def test_filter_is_case_insensitive(env):
     assert len(results) == 1
 
 
-def test_no_matches_for_filter_returns_empty_list(env):
+def test_no_matches_for_filter_returns_clear_error(env):
     _add_tile(env, "a.jpg", (200, 0, 0), "Kajaria", "Floor", "Red")
 
     query_path = env["tmp_path"] / "query.jpg"
     Image.new("RGB", (16, 16), color=(200, 0, 0)).save(query_path)
 
-    results = env["use_case"].execute(str(query_path), top_k=20, filters={"brand": "NoSuchBrand"})
-    assert results == []
+    with pytest.raises(RuntimeError, match="active search filters"):
+        env["use_case"].execute(str(query_path), top_k=20, filters={"brand": "NoSuchBrand"})
 
 
 def test_unknown_filter_keys_are_ignored_not_errors(env):
@@ -155,17 +155,16 @@ def test_get_filter_options_excludes_unknown_values(env):
     assert options["brand"] == ["Kajaria"]
 
 
-def test_filter_with_no_matching_tiles_returns_empty(env):
+def test_filter_with_no_matching_tiles_returns_clear_error(env):
     _add_tile(env, "a.jpg", (200, 0, 0), "Kajaria", "Floor", "Red")
 
     query_path = env["tmp_path"] / "query.jpg"
     Image.new("RGB", (16, 16), color=(200, 0, 0)).save(query_path)
 
-    results = env["use_case"].execute(
-        str(query_path), top_k=20, filters={"brand": "Somany"}
-    )
-    assert results == []
-
+    with pytest.raises(RuntimeError, match="active search filters"):
+        env["use_case"].execute(
+            str(query_path), top_k=20, filters={"brand": "Somany"}
+        )
 
 def test_search_blocked_when_index_is_stale(env):
     """Phase 14: stale feature versions must block search until rebuild."""
