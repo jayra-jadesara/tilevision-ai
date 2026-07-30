@@ -3,14 +3,14 @@ Fast in-app update installer downloader.
 
 GitHub Releases host large TileVision installers on Azure Blob behind
 release-assets.githubusercontent.com. A single browser connection is often
-throttled to a few KB/s in some regions, while Google Drive (better CDN
-peering) is fast for the same file.
+throttled to a few KB/s in some regions (hours for a 1.6 GB Mac DMG).
 
 This module downloads with:
-  - HTTP Range multi-connection parallel streams (when the server allows it)
-  - Large read buffers (1 MiB)
-  - HTTP/1.1 keep-alive (urllib default)
-  - One redirect resolution for size, then ranged GETs on the original URL
+  - One redirect resolve to the Azure CDN signed URL, then Range GETs there
+  - Many parallel HTTP Range streams (default 16)
+  - Per-chunk retries
+  - Large read buffers (2 MiB)
+  - Instantaneous + average speed for ETA
   - Single-stream fallback when Range is unavailable
 """
 
@@ -31,11 +31,13 @@ from src.version import APP_VERSION
 
 logger = logging.getLogger("tilevision.update_downloader")
 
-DEFAULT_CONNECTIONS = 12
+DEFAULT_CONNECTIONS = 16
+MAX_CONNECTIONS = 24
 READ_BUFFER_BYTES = 2 * 1024 * 1024  # 2 MiB
 CONNECT_TIMEOUT_S = 30.0
 READ_TIMEOUT_S = 180.0
 MIN_PARALLEL_FILE_BYTES = 2 * 1024 * 1024  # parallel for anything multi-MB
+RANGE_RETRIES = 3
 USER_AGENT = f"TileVisionAI/{APP_VERSION} (update-downloader)"
 
 ProgressCallback = Callable[[int, int, float], None]  # received, total, bytes_per_sec
@@ -55,6 +57,8 @@ class RemoteFileInfo:
     size: Optional[int]
     accept_ranges: bool
     filename: str
+    # Final CDN URL after redirects (prefer this for parallel Range GETs).
+    resolved_url: str = ""
 
 
 def _ssl_context() -> ssl.SSLContext:
@@ -102,10 +106,11 @@ def default_download_dir() -> Path:
 
 def probe_remote_file(url: str) -> RemoteFileInfo:
     """
-    Discover Content-Length and Range support.
+    Discover Content-Length, Range support, and the final CDN URL.
 
-    Prefer a 1-byte Range GET (works through GitHub→Azure redirects). Fall back
-    to HEAD, then to a plain GET that we immediately close.
+    Prefer a 1-byte Range GET (works through GitHub→Azure redirects). Capture
+    ``geturl()`` so parallel workers hit Azure Blob directly instead of
+    re-walking the throttled GitHub redirect on every connection.
     """
     name = filename_from_url(url)
     try:
@@ -135,11 +140,13 @@ def probe_remote_file(url: str) -> RemoteFileInfo:
                 if length and length.isdigit() and response.status != 206:
                     size = int(length)
             response.read()  # drain the 1-byte body
+            resolved = response.geturl() or url
             return RemoteFileInfo(
                 url=url,
                 size=size,
                 accept_ranges=accept and size is not None and size > 0,
                 filename=name,
+                resolved_url=resolved,
             )
     except Exception as exc:
         logger.info("Range probe failed (%s) — trying HEAD", exc)
@@ -154,15 +161,23 @@ def probe_remote_file(url: str) -> RemoteFileInfo:
                 raw = disposition.split("filename=")[-1].strip().strip("\"'")
                 if raw:
                     name = Path(unquote(raw)).name
+            resolved = response.geturl() or url
             return RemoteFileInfo(
                 url=url,
                 size=size,
                 accept_ranges=accept and size is not None and size > 0,
                 filename=name,
+                resolved_url=resolved,
             )
     except Exception as exc:
         logger.warning("HEAD probe failed: %s", exc)
-        return RemoteFileInfo(url=url, size=None, accept_ranges=False, filename=name)
+        return RemoteFileInfo(
+            url=url,
+            size=None,
+            accept_ranges=False,
+            filename=name,
+            resolved_url=url,
+        )
 
 
 def _raise_if_cancelled(cancel_event: Optional[threading.Event]) -> None:
@@ -214,31 +229,78 @@ def _download_range_to_part(
 ) -> Path:
     headers = {"Range": f"bytes={start}-{end}"}
     expected = end - start + 1
-    written = 0
-    with _request(url, headers=headers, timeout=READ_TIMEOUT_S) as response:
-        if response.status not in (200, 206):
-            raise DownloadError(f"Range request failed with HTTP {response.status}.")
-        with part_path.open("wb") as handle:
-            while True:
-                _raise_if_cancelled(cancel_event)
-                chunk = response.read(READ_BUFFER_BYTES)
-                if not chunk:
-                    break
-                handle.write(chunk)
-                written += len(chunk)
+    last_error: BaseException | None = None
+
+    for attempt in range(1, RANGE_RETRIES + 1):
+        _raise_if_cancelled(cancel_event)
+        written = 0
+        try:
+            with _request(url, headers=headers, timeout=READ_TIMEOUT_S) as response:
+                if response.status not in (200, 206):
+                    raise DownloadError(
+                        f"Range request failed with HTTP {response.status}."
+                    )
+                with part_path.open("wb") as handle:
+                    while True:
+                        _raise_if_cancelled(cancel_event)
+                        chunk = response.read(READ_BUFFER_BYTES)
+                        if not chunk:
+                            break
+                        handle.write(chunk)
+                        written += len(chunk)
+                        with progress_state["lock"]:
+                            progress_state["received"] += len(chunk)
+                            # Rolling window for snappier speed / ETA display.
+                            now = time.monotonic()
+                            samples = progress_state["samples"]
+                            samples.append((now, progress_state["received"]))
+                            while len(samples) > 1 and now - samples[0][0] > 2.5:
+                                samples.pop(0)
+                            received = progress_state["received"]
+                            total = progress_state["total"]
+                            if len(samples) >= 2:
+                                dt = max(samples[-1][0] - samples[0][0], 1e-3)
+                                db = max(samples[-1][1] - samples[0][1], 0)
+                                speed = db / dt
+                            else:
+                                elapsed = max(now - progress_state["started"], 1e-3)
+                                speed = received / elapsed
+                        if progress is not None:
+                            progress(received, total, speed)
+            if written != expected:
+                raise DownloadError(
+                    f"Range {start}-{end} incomplete: got {written}, expected {expected}."
+                )
+            return part_path
+        except DownloadCancelled:
+            raise
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "Range %s-%s attempt %s/%s failed: %s",
+                start,
+                end,
+                attempt,
+                RANGE_RETRIES,
+                exc,
+            )
+            # Undo bytes counted from a partial failed attempt.
+            if written > 0:
                 with progress_state["lock"]:
-                    progress_state["received"] += len(chunk)
-                    received = progress_state["received"]
-                    total = progress_state["total"]
-                    started = progress_state["started"]
-                if progress is not None:
-                    elapsed = max(time.monotonic() - started, 1e-3)
-                    progress(received, total, received / elapsed)
-    if written != expected:
-        raise DownloadError(
-            f"Range {start}-{end} incomplete: got {written}, expected {expected}."
-        )
-    return part_path
+                    progress_state["received"] = max(
+                        0, progress_state["received"] - written
+                    )
+            try:
+                if part_path.exists():
+                    part_path.unlink()
+            except OSError:
+                pass
+            if attempt < RANGE_RETRIES:
+                time.sleep(0.4 * attempt)
+
+    raise DownloadError(
+        f"Range {start}-{end} failed after {RANGE_RETRIES} attempts: {last_error}"
+    )
 
 
 def download_update_file(
@@ -253,13 +315,14 @@ def download_update_file(
     """
     Download an update installer as fast as the network allows.
 
-    Uses parallel HTTP Range requests when the origin supports them (GitHub
-    Releases / Azure Blob do). Returns the final file path.
+    Resolves GitHub→Azure CDN once, then uses parallel HTTP Range requests on
+    the direct CDN URL. Returns the final file path.
     """
     if not url or not str(url).strip():
         raise DownloadError("Missing download URL.")
 
     info = probe_remote_file(url)
+    download_url = info.resolved_url or info.url or url
     out_dir = Path(dest_dir) if dest_dir is not None else default_download_dir()
     out_dir.mkdir(parents=True, exist_ok=True)
     out_name = filename or info.filename or filename_from_url(url)
@@ -275,12 +338,14 @@ def download_update_file(
         and max(1, int(connections)) > 1
     )
 
+    workers = max(2, min(int(connections), MAX_CONNECTIONS)) if use_parallel else 1
     logger.info(
-        "Downloading update: url=%s size=%s parallel=%s connections=%s dest=%s",
+        "Downloading update: url=%s cdn=%s size=%s parallel=%s connections=%s dest=%s",
         url,
+        download_url != url,
         info.size,
         use_parallel,
-        connections if use_parallel else 1,
+        workers,
         dest,
     )
 
@@ -288,7 +353,7 @@ def download_update_file(
     try:
         if not use_parallel:
             result = _download_single(
-                url,
+                download_url,
                 partial,
                 expected_size=info.size,
                 cancel_event=cancel_event,
@@ -298,7 +363,6 @@ def download_update_file(
             return dest
 
         assert info.size is not None
-        workers = max(2, min(int(connections), 16))
         chunk = info.size // workers
         ranges: list[tuple[int, int, Path]] = []
         for i in range(workers):
@@ -314,6 +378,7 @@ def download_update_file(
             "total": info.size,
             "started": time.monotonic(),
             "lock": threading.Lock(),
+            "samples": [],
         }
 
         errors: list[BaseException] = []
@@ -321,7 +386,7 @@ def download_update_file(
             futures = [
                 pool.submit(
                     _download_range_to_part,
-                    url,
+                    download_url,
                     part,
                     start,
                     end,

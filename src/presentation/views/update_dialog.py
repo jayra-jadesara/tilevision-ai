@@ -66,8 +66,9 @@ class UpdateAvailableDialog(QDialog):
         layout.addWidget(headline)
 
         hint = QLabel(
-            f"Downloading <b>{platform_download_label()}</b> inside TileVision "
-            f"with a fast multi-connection transfer (not the browser). "
+            f"Fast download of <b>{platform_download_label()}</b> "
+            f"uses {DEFAULT_CONNECTIONS} parallel connections inside TileVision "
+            "(not Chrome/Safari — those are often throttled to KB/s and can take hours). "
             "When it finishes, open the installer. "
             "Your license key and tile catalogue stay on this computer."
         )
@@ -121,10 +122,12 @@ class UpdateAvailableDialog(QDialog):
         layout.addLayout(buttons)
 
         # Browser is a last-resort fallback only — not the primary path.
-        self._browser_btn = QPushButton("Slow browser download…")
+        self._browser_btn = QPushButton("Very slow browser download (not recommended)…")
         self._browser_btn.setFlat(True)
         self._browser_btn.setToolTip(
-            "Fallback only. Browser downloads from GitHub are often much slower."
+            "Fallback only. A single browser connection from GitHub is often "
+            "throttled to ~100–200 KB/s (hours for a Mac installer). "
+            "Prefer Download in App."
         )
         self._browser_btn.clicked.connect(self._on_open_browser)
         layout.addWidget(self._browser_btn)
@@ -145,7 +148,7 @@ class UpdateAvailableDialog(QDialog):
         self._downloaded_path = None
         self._status.show()
         self._status.setText(
-            f"Downloading in app ({DEFAULT_CONNECTIONS} parallel connections)…"
+            f"Fast download ({DEFAULT_CONNECTIONS} parallel CDN connections)…"
         )
         self._progress.show()
         self._progress.setRange(0, 1000)
@@ -233,6 +236,19 @@ class UpdateAvailableDialog(QDialog):
             self._worker.cancel()
 
     def _on_open_browser(self) -> None:
+        reply = QMessageBox.warning(
+            self,
+            "Browser download is very slow",
+            "Chrome/Safari downloads from GitHub are often limited to "
+            "~100–200 KB/s.\n\n"
+            "A Mac installer (~1.6 GB) can take 2–3 hours that way.\n\n"
+            "Use Download in App instead (many parallel connections).\n\n"
+            "Open the slow browser link anyway?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
         QDesktopServices.openUrl(QUrl(self._info.download_url))
 
     def _on_open_installer(self) -> None:
