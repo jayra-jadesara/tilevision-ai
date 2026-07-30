@@ -1,14 +1,17 @@
 """
 DINOv2 embedder module for TileVision AI.
 
-Uses Meta DINOv2 with a batched multi-scale strategy:
+Uses Meta DINOv2 with a batched multi-scale strategy for catalogue indexing:
 
 1. Full tile image   (global context)
 2. Center crop       (large region, ~65%)
 3. Detail crop       (fine pattern region, ~40%)
 
-All views are embedded in a single forward pass, then fused with
-fixed weights into a 1024D L2-normalized vector compatible with FAISS.
+Query / drop-search uses a **single full-image view** so Mac Intel / Windows CPU
+clients return tile results quickly (multi-crop OpenCV already covers room photos).
+
+All index views are embedded then fused with fixed weights into a 1024D
+L2-normalized vector compatible with FAISS.
 
 DINOv2 Large: 1024 dimensions
 """
@@ -29,6 +32,7 @@ from src.ai.models import PreprocessedImage
 from src.ai.inference_guard import (
     DEFAULT_INDEX_LOCK_TIMEOUT_S,
     DEFAULT_SEARCH_LOCK_TIMEOUT_S,
+    search_priority_active,
     synchronized_inference,
     wait_while_search_priority,
 )
@@ -184,11 +188,21 @@ class DINOv2Embedder:
         return embeddings / norms
 
     @staticmethod
-    def _generate_views(image: Image.Image) -> List[Image.Image]:
+    def _generate_views(
+        image: Image.Image,
+        *,
+        for_query: bool = False,
+    ) -> List[Image.Image]:
         """
-        Build global + center + detail views from a preprocessed PIL image.
+        Build embedding views from a preprocessed PIL image.
+
+        Query/search: single full image only (fast path — critical on Mac CPU).
+        Indexing: global + center + detail multi-scale for catalogue quality.
         """
         image = image.convert("RGB")
+        if for_query:
+            return [image]
+
         width, height = image.size
         views: List[Image.Image] = [image]
 
@@ -251,6 +265,10 @@ class DINOv2Embedder:
         if for_query and self._device.type == "mps" and not self._mps_cpu_fallback_done:
             self._fallback_mps_to_cpu("query search prefers CPU (avoid MPS hang)")
 
+        # If Search is waiting, indexing must not start another long forward.
+        if not for_query and search_priority_active():
+            wait_while_search_priority(max_wait_s=180.0)
+
         with synchronized_inference(timeout=lock_timeout, purpose="DINOv2 embed"):
             try:
                 return self._forward_batch(images)
@@ -310,16 +328,27 @@ class DINOv2Embedder:
         for_query: bool = False,
     ) -> np.ndarray:
         """
-        Extract a multi-scale DINOv2 embedding from an already-preprocessed image.
+        Extract a DINOv2 embedding from an already-preprocessed image.
 
-        This is the primary entry point — avoids reloading/resizing the image.
+        Query: single-view (fast). Index: multi-scale fused, yielding between
+        views so drop-search can interrupt long catalogue indexing.
         """
-        views = self._generate_views(processed.pil)
-        view_embeddings = self._extract_batch(views, for_query=for_query)
-        final_embedding = self._fuse_embeddings(view_embeddings)
+        views = self._generate_views(processed.pil, for_query=for_query)
+
+        if for_query or len(views) == 1:
+            view_embeddings = self._extract_batch(views, for_query=for_query)
+            final_embedding = self._fuse_embeddings(view_embeddings)
+        else:
+            # Index path: one view at a time so Search can take the lock between.
+            pieces: List[np.ndarray] = []
+            for view in views:
+                wait_while_search_priority()
+                pieces.append(self._extract_batch([view], for_query=False)[0])
+            stacked = np.vstack(pieces)
+            final_embedding = self._fuse_embeddings(stacked)
 
         logger.debug(
-            "Multi-scale DINOv2 embedding: views=%d dimension=%d for_query=%s",
+            "DINOv2 embedding: views=%d dimension=%d for_query=%s",
             len(views),
             final_embedding.shape[0],
             for_query,
@@ -333,32 +362,16 @@ class DINOv2Embedder:
         """
         Extract embeddings for multiple preprocessed images.
 
-        Processes images in small chunks and releases the inference lock
-        between chunks so Search can run while a large folder is indexing.
+        One image at a time (with multi-scale yield points) so Search can run
+        while a large folder is indexing.
         """
         if not processed_images:
             return []
 
         results: List[np.ndarray] = []
-        # One image at a time: release the lock between tiles and yield to Search.
-        chunk_size = 1
-        for start in range(0, len(processed_images), chunk_size):
+        for processed in processed_images:
             wait_while_search_priority()
-            chunk = processed_images[start : start + chunk_size]
-            all_views: List[Image.Image] = []
-            view_counts: List[int] = []
-            for processed in chunk:
-                views = self._generate_views(processed.pil)
-                view_counts.append(len(views))
-                all_views.extend(views)
-
-            view_embeddings = self._extract_batch(all_views, for_query=False)
-
-            offset = 0
-            for count in view_counts:
-                piece = view_embeddings[offset : offset + count]
-                results.append(self._fuse_embeddings(piece))
-                offset += count
+            results.append(self.extract_from_preprocessed(processed, for_query=False))
 
         logger.debug(
             "Batched DINOv2 embeddings: images=%d (chunked)",

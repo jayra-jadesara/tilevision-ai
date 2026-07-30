@@ -70,9 +70,38 @@ class SearchWorker(QThread):
                 logger.info("Search QThread interrupted before execute.")
                 return
 
-            results = self._use_case.execute(
-                self._query_image_path, top_k=self._top_k, filters=self._filters
-            )
+            from src.ai.inference_guard import InferenceBusyError
+
+            results = None
+            last_error: Exception | None = None
+            # One automatic retry: indexing may still be finishing the current tile.
+            for attempt in (1, 2):
+                if self.isInterruptionRequested():
+                    logger.info("Search QThread interrupted before attempt %s.", attempt)
+                    return
+                try:
+                    results = self._use_case.execute(
+                        self._query_image_path,
+                        top_k=self._top_k,
+                        filters=self._filters,
+                    )
+                    last_error = None
+                    break
+                except InferenceBusyError as exc:
+                    last_error = exc
+                    logger.warning(
+                        "Search attempt %s blocked by busy AI engine — retrying once.",
+                        attempt,
+                    )
+                    if attempt == 1:
+                        time.sleep(0.75)
+                        continue
+                    raise
+
+            if last_error is not None:
+                raise last_error
+            assert results is not None
+
             elapsed = time.monotonic() - start_time
 
             # Timed-out UI already bumped generation; do not emit stale results.
