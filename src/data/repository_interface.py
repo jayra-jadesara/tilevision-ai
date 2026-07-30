@@ -70,6 +70,25 @@ class IImageRepository(ABC):
         """
         pass
 
+    def get_indexed_by_file_stem(self, stem: str) -> Optional[TileImage]:
+        """
+        Find an indexed catalog tile whose filename stem matches.
+
+        Default falls back to scanning get_all(); concrete repos should
+        override with an indexed SQL lookup for large catalogs.
+        """
+        target = (stem or "").strip().lower()
+        if not target:
+            return None
+        from pathlib import Path as _Path
+
+        for tile in self.get_all():
+            if not tile.is_indexed:
+                continue
+            if _Path(tile.file_name).stem.lower() == target:
+                return tile
+        return None
+
     @abstractmethod
     def get_all(self) -> List[TileImage]:
         """

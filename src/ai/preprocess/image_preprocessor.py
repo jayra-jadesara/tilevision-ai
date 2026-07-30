@@ -68,8 +68,9 @@ class ImagePreprocessor:
         """
         Load an image, applying early downscale for huge catalogue masters.
 
-        Decodes to at most ``max_decode_edge`` on the longest side before
-        border/crop/AI work — critical for 70–200 MB tile photography.
+        Opens the file once. Decodes to at most ``max_decode_edge`` on the
+        longest side before border/crop/AI work — critical for 70–200 MB
+        tile photography.
         """
         path = Path(path)
         if not path.exists():
@@ -78,31 +79,37 @@ class ImagePreprocessor:
         max_edge = max_decode_edge or cls._config.max_decode_edge
 
         try:
-            with Image.open(path) as probe:
-                probe = ImageOps.exif_transpose(probe)
-                width, height = probe.size
-
-            if max(width, height) <= max_edge:
-                with Image.open(path) as img:
-                    return ImageOps.exif_transpose(img).copy()
-
             with Image.open(path) as img:
-                if img.format in ("JPEG", "MPO", "WEBP") and hasattr(img, "draft"):
+                fmt = img.format
+                # Prefer draft() for JPEG/WebP so huge masters never fully
+                # decode at native resolution (still a single open).
+                if (
+                    fmt in ("JPEG", "MPO", "WEBP")
+                    and hasattr(img, "draft")
+                    and max(img.size) > max_edge
+                ):
                     img.draft("RGB", (max_edge, max_edge))
+
                 image = ImageOps.exif_transpose(img)
-                image.thumbnail(
-                    (max_edge, max_edge),
-                    Image.Resampling.BICUBIC,
-                )
-                logger.debug(
-                    "Early downscale %s: %dx%d -> %dx%d (max_edge=%d)",
-                    path.name,
-                    width,
-                    height,
-                    image.size[0],
-                    image.size[1],
-                    max_edge,
-                )
+                width, height = image.size
+
+                if max(width, height) > max_edge:
+                    image = image.copy()
+                    image.thumbnail(
+                        (max_edge, max_edge),
+                        Image.Resampling.BICUBIC,
+                    )
+                    logger.debug(
+                        "Early downscale %s: %dx%d -> %dx%d (max_edge=%d)",
+                        path.name,
+                        width,
+                        height,
+                        image.size[0],
+                        image.size[1],
+                        max_edge,
+                    )
+                    return image
+
                 return image.copy()
         except Exception as e:
             logger.exception("Failed to load image: %s", path)
@@ -456,17 +463,23 @@ class ImagePreprocessor:
         latency stays reasonable and search does not feel stuck.
         """
         path = Path(image_path)
-        primary = cls.preprocess_for_query(path)
-        views = [primary]
-
-        if "tilevision_crops" in path.as_posix().lower():
-            return views
-
         try:
             max_views = cls._capped_query_max_views(int(max_views))
         except Exception:
             max_views = min(int(max_views), 2)
 
+        primary = cls.preprocess_for_query(path)
+        views = [primary]
+
+        # Drop-search uses max_views=1 — never re-decode for unused extra crops.
+        if max_views <= 1:
+            return views
+
+        if "tilevision_crops" in path.as_posix().lower():
+            return views
+
+        # Extra views need an unletterboxed RGB working copy. Primary is
+        # already letterboxed, so reload once only when multi-crop is needed.
         image = cls.load(path)
         image = cls.to_rgb(image)
         image = cls.trim_uniform_borders(image)

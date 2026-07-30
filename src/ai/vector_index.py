@@ -60,6 +60,16 @@ class FaissIndexManager:
             logger.critical("faiss package is not installed! Cannot load index.")
             raise ImportError("faiss-cpu package is required for FaissIndexManager.")
 
+        # Parallelize FlatIP / HNSW distance scans for large catalogs (100k+).
+        try:
+            import os
+
+            threads = min(8, max(1, (os.cpu_count() or 4)))
+            faiss.omp_set_num_threads(threads)
+            logger.debug("FAISS omp threads set to %d", threads)
+        except Exception as exc:
+            logger.debug("Could not set FAISS omp threads: %s", exc)
+
         # Ensure parent folder exists
         self._index_path.parent.mkdir(parents=True, exist_ok=True)
 

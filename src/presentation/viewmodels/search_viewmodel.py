@@ -23,8 +23,11 @@ logger = logging.getLogger("tilevision.presentation.viewmodels.search_viewmodel"
 # Soft status reminder only — do NOT abort a working search on Mac CPU.
 # Hard abort caused false "Search took too long" errors while DINOv2 was still running.
 # Set search_timeout_ms > 0 only for tests that exercise the abort path.
-_SEARCH_TIMEOUT_MS = 0  # 0 = never auto-abort
+_SEARCH_TIMEOUT_MS = 0  # 0 = never auto-abort for wall-clock timeout
 _SEARCH_STATUS_HINT_MS = 45_000
+# Hang detector: only auto-cancel if the worker emits no progress for this long.
+# Progress stages reset the timer. User Cancel / app close still abort immediately.
+_SEARCH_HANG_MS = 600_000  # 10 minutes without progress = likely hung
 
 
 def _default_search_timeout_ms() -> int:
@@ -96,6 +99,10 @@ class SearchViewModel(QObject):
         self._status_hint_timer = QTimer(self)
         self._status_hint_timer.setSingleShot(True)
         self._status_hint_timer.timeout.connect(self._on_search_status_hint)
+        # Progress-based hang monitor (not an arbitrary search timeout).
+        self._hang_timer = QTimer(self)
+        self._hang_timer.setSingleShot(True)
+        self._hang_timer.timeout.connect(self._on_search_hang)
         self._on_search_busy_changed = on_search_busy_changed
         self._search_priority_held = False
 
@@ -216,12 +223,14 @@ class SearchViewModel(QObject):
         if self._search_timeout_ms > 0:
             self._timeout_timer.start(self._search_timeout_ms)
         self._status_hint_timer.start(_SEARCH_STATUS_HINT_MS)
+        self._hang_timer.start(_SEARCH_HANG_MS)
         self._worker.start()
 
     @Slot()
     def clear_results(self) -> None:
         self._timeout_timer.stop()
         self._status_hint_timer.stop()
+        self._hang_timer.stop()
         self._search_generation += 1
         worker = self._worker
         self._worker = None
@@ -270,6 +279,7 @@ class SearchViewModel(QObject):
             return
         self._timeout_timer.stop()
         self._status_hint_timer.stop()
+        self._hang_timer.stop()
         self._release_search_priority()
         self._last_results = results
         self._worker = None
@@ -311,6 +321,7 @@ class SearchViewModel(QObject):
             return
         self._timeout_timer.stop()
         self._status_hint_timer.stop()
+        self._hang_timer.stop()
         self._release_search_priority()
         self._worker = None
         self._set_state(SearchState.ERROR)
@@ -321,6 +332,8 @@ class SearchViewModel(QObject):
     def _on_search_progress(self, message: str) -> None:
         if self._state != SearchState.SEARCHING:
             return
+        # Any real stage progress resets the hang watchdog.
+        self._hang_timer.start(_SEARCH_HANG_MS)
         self.status_message.emit(message)
 
     @Slot()
@@ -332,6 +345,41 @@ class SearchViewModel(QObject):
             "Still searching… AI matching can take up to a minute on this computer. "
             "Please wait — results will appear here."
         )
+
+    @Slot()
+    def _on_search_hang(self) -> None:
+        """
+        Abort only when the worker appears hung (no progress for a long time).
+
+        This is NOT a search-duration timeout — a slow but progressing DINOv2
+        forward on Mac Intel must be allowed to finish.
+        """
+        if self._state != SearchState.SEARCHING:
+            return
+        logger.error(
+            "Search appears hung (no progress for %ss) for %s",
+            _SEARCH_HANG_MS / 1000.0,
+            self._last_query_path,
+        )
+        self._timeout_timer.stop()
+        self._status_hint_timer.stop()
+        self._search_generation += 1
+        worker = self._worker
+        self._worker = None
+        if worker is not None and worker.isRunning():
+            try:
+                worker.requestInterruption()
+            except Exception:
+                pass
+        self._release_search_priority()
+        self._set_state(SearchState.ERROR)
+        message = (
+            "Search stopped because the AI worker stopped responding.\n\n"
+            "Pause Indexing, restart the app, then try again.\n\n"
+            "Also try Auto Crop & Search on a smaller crop of the tile."
+        )
+        self.status_message.emit("Search stopped — worker unresponsive.")
+        self.search_error.emit(message)
 
     @Slot()
     def _on_search_timeout(self) -> None:
@@ -346,6 +394,7 @@ class SearchViewModel(QObject):
             self._last_query_path,
         )
         self._status_hint_timer.stop()
+        self._hang_timer.stop()
         self._search_generation += 1
         worker = self._worker
         self._worker = None

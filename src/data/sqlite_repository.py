@@ -8,6 +8,7 @@ and domain models.
 from datetime import datetime
 import logging
 import sqlite3
+from pathlib import Path
 from typing import Dict, List, Optional
 import numpy as np
 
@@ -432,6 +433,59 @@ class SQLiteImageRepository(IImageRepository):
                     return self._row_to_entity(row)
         except sqlite3.Error as e:
             logger.error(f"Failed to fetch tile by path {file_path}: {e}")
+        return None
+
+    def get_indexed_by_file_stem(self, stem: str) -> Optional[TileImage]:
+        """
+        Find an indexed tile whose file_name stem matches (O(1) SQL, not full scan).
+
+        Used by Crop & Search to link a temp crop back to its catalog source
+        without deserializing every tile's embeddings via get_all().
+        """
+        target = (stem or "").strip().lower()
+        if not target:
+            return None
+
+        # Match stem with common image extensions; case-insensitive.
+        # file_name is indexed (idx_tiles_file_name).
+        query = (
+            "SELECT * FROM tiles "
+            "WHERE is_indexed = 1 AND ("
+            "lower(file_name) = ? OR "
+            "lower(file_name) LIKE ? OR "
+            "lower(file_name) LIKE ? OR "
+            "lower(file_name) LIKE ? OR "
+            "lower(file_name) LIKE ?"
+            ") LIMIT 1;"
+        )
+        params = (
+            target,
+            f"{target}.jpg",
+            f"{target}.jpeg",
+            f"{target}.png",
+            f"{target}.webp",
+        )
+        try:
+            with self._db.session() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, params)
+                row = cursor.fetchone()
+                if row:
+                    return self._row_to_entity(row)
+
+                # Fallback: stem may include dots (product codes). Use LIKE
+                # with extension wildcard, then verify stem equality in Python.
+                cursor.execute(
+                    "SELECT * FROM tiles WHERE is_indexed = 1 "
+                    "AND lower(file_name) LIKE ? LIMIT 25;",
+                    (f"{target}.%",),
+                )
+                for row in cursor.fetchall():
+                    entity = self._row_to_entity(row)
+                    if Path(entity.file_name).stem.lower() == target:
+                        return entity
+        except sqlite3.Error as e:
+            logger.error("Failed to fetch tile by file stem %s: %s", target, e)
         return None
 
     def get_all(self) -> List[TileImage]:

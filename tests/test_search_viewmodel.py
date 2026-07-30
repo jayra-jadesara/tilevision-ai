@@ -349,3 +349,28 @@ def test_production_default_does_not_auto_abort_search(qapp):
     vm._on_search_timeout()  # no-op when timeout disabled
     assert vm.state == SearchState.SEARCHING
     assert errors == []
+
+
+def test_progress_resets_hang_watchdog(qapp):
+    use_case = FakeSearchUseCase(results=[_make_result()])
+    vm = SearchViewModel(use_case=use_case)
+    assert hasattr(vm, "_hang_timer")
+    vm._set_state(SearchState.SEARCHING)
+    vm._hang_timer.start(60_000)
+    remaining_before = vm._hang_timer.remainingTime()
+    vm._on_search_progress("Running AI match…")
+    # Progress must restart the hang timer (still active / rearmed).
+    assert vm._hang_timer.isActive()
+    assert vm._hang_timer.remainingTime() > 0
+
+
+def test_hang_abort_only_when_unresponsive(qapp, tmp_path):
+    use_case = FakeSearchUseCase(results=[_make_result()])
+    vm = SearchViewModel(use_case=use_case)
+    errors = []
+    vm.search_error.connect(errors.append)
+    vm._last_query_path = str(tmp_path / "query.jpg")
+    vm._set_state(SearchState.SEARCHING)
+    vm._on_search_hang()
+    assert vm.state == SearchState.ERROR
+    assert errors and "stopped responding" in errors[0].lower()

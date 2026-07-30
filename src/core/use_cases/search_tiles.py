@@ -5,13 +5,19 @@ Given a query image, extracts features, performs FAISS vector search, and merges
 matching items with SQLite database metadata and cached thumbnail paths.
 """
 
+from __future__ import annotations
+
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import numpy as np
+
 from src.ai.pattern_classifier import PatternClassifier
+from src.ai.query_cache import QUERY_EMBEDDING_CACHE
 from src.ai.similarity_score import calibrate_display_percent
 from src.ai.inference_guard import InferenceBusyError
+from src.ai.models import TileFeatures
 
 from src.core.models import TileImage, SearchResult
 from src.data.repository_interface import IImageRepository
@@ -208,55 +214,88 @@ class SearchTilesUseCase:
         try:
             timer = PipelineTimer("SEARCH TIMING")
 
-            with timer.measure("image_load"):
-                if not validate_image(query_path):
-                    raise ValueError(
-                        f"Selected file is not a valid, readable image: {query_path.name}"
-                    )
-                query_sha256 = compute_sha256(query_path)
-                query_dhash = compute_dhash(query_path)
-
+            # ── 1. Resolve query features (memory cache → catalog → embed) ──
             query_features: TileFeatures | None = None
             query_embeddings: list = []
-            cached_tile = self._repo.get_by_path(str(query_path.resolve()))
-            if (
-                cached_tile
-                and cached_tile.is_indexed
-                and cached_tile.features is not None
-                and cached_tile.sha256_hash == query_sha256
-            ):
-                query_features = cached_tile.features
-                query_embeddings = [query_features.embedding]
+            query_sha256 = ""
+            query_dhash = ""
+            cache_hit = False
+
+            cached_query = QUERY_EMBEDDING_CACHE.get(query_path)
+            if cached_query is not None:
+                query_features = cached_query.features
+                query_embeddings = [
+                    np.asarray(e, dtype=np.float32) for e in cached_query.embeddings
+                ]
+                cache_hit = True
+                timer.timings.record("image_load", 0.0)
+                timer.timings.record("crop", 0.0)
+                timer.timings.record("embedding", 0.0)
+                timer.timings.record("descriptors", 0.0)
                 logger.info(
-                    "Reusing indexed features for catalog query: %s",
+                    "Reusing cached query embedding: %s",
                     query_path.name,
                 )
 
             if query_features is None:
-                logger.info("Computing embedding for query image...")
-                with timer.measure("feature_extract"):
-                    extract_for_search = getattr(
-                        self._feature_extractor, "extract_for_search", None
-                    )
-                    if extract_for_search is not None:
-                        query_features, query_embeddings = extract_for_search(
-                            str(query_path)
+                with timer.measure("image_load"):
+                    if not validate_image(query_path):
+                        raise ValueError(
+                            f"Selected file is not a valid, readable image: {query_path.name}"
                         )
-                    else:
-                        query_features = self._feature_extractor.extract(
-                            str(query_path),
-                            for_query=True,
-                        )
-                        query_embeddings = [query_features.embedding]
-                extract_timings = self._feature_extractor.last_timings
-                timer.timings.record("preprocessing", extract_timings.preprocessing)
-                timer.timings.record("dinov2", extract_timings.dinov2)
-                timer.timings.record("descriptors", extract_timings.descriptors)
-            else:
-                timer.timings.record("preprocessing", 0.0)
-                timer.timings.record("dinov2", 0.0)
-                timer.timings.record("descriptors", 0.0)
+                    # SHA-256 is a cheap byte hash (no pixel decode). dHash
+                    # opens the image — defer until after embedding so DINOv2
+                    # gets CPU/GPU first.
+                    query_sha256 = compute_sha256(query_path)
 
+                cached_tile = self._repo.get_by_path(str(query_path.resolve()))
+                if (
+                    cached_tile
+                    and cached_tile.is_indexed
+                    and cached_tile.features is not None
+                    and cached_tile.sha256_hash == query_sha256
+                ):
+                    query_features = cached_tile.features
+                    query_embeddings = [query_features.embedding]
+                    timer.timings.record("crop", 0.0)
+                    timer.timings.record("embedding", 0.0)
+                    timer.timings.record("descriptors", 0.0)
+                    logger.info(
+                        "Reusing indexed features for catalog query: %s",
+                        query_path.name,
+                    )
+
+            if query_features is None:
+                logger.info("Computing embedding for query image...")
+                extract_for_search = getattr(
+                    self._feature_extractor, "extract_for_search", None
+                )
+                if extract_for_search is not None:
+                    query_features, query_embeddings = extract_for_search(
+                        str(query_path)
+                    )
+                else:
+                    query_features = self._feature_extractor.extract(
+                        str(query_path),
+                        for_query=True,
+                    )
+                    query_embeddings = [query_features.embedding]
+                extract_timings = self._feature_extractor.last_timings
+                # Map internal extract stages onto the required profile labels.
+                timer.timings.record("crop", extract_timings.preprocessing)
+                timer.timings.record("embedding", extract_timings.dinov2)
+                timer.timings.record("descriptors", extract_timings.descriptors)
+                QUERY_EMBEDDING_CACHE.put(
+                    query_path,
+                    query_features,
+                    query_embeddings,
+                )
+
+            # Exact-match hashes — only pay dHash decode cost once features ready.
+            with timer.measure("image_load"):
+                if not query_sha256:
+                    query_sha256 = compute_sha256(query_path)
+                query_dhash = compute_dhash(query_path)
 
             # ----------------------------------------
             # Detect query pattern type
@@ -270,7 +309,6 @@ class SearchTilesUseCase:
                 "Query pattern type detected: %s",
                 query_pattern_type.value,
             )
-
 
             # 2. Retrieve candidate tiles (FAISS or metadata-filtered full set).
             total_vectors = self._index.get_total_count()
@@ -298,7 +336,7 @@ class SearchTilesUseCase:
                     "Metadata filters active — reranking %d filtered catalog tile(s) directly.",
                     len(filtered_ids),
                 )
-                with timer.measure("database"):
+                with timer.measure("metadata"):
                     matched_tiles = self._repo.get_by_ids(list(filtered_ids))
                 candidates = [
                     tile for tile in matched_tiles if tile.features is not None
@@ -314,9 +352,10 @@ class SearchTilesUseCase:
                     )
 
                 logger.info(
-                    "Querying FAISS vector index (search_k=%s, query_crops=%s)...",
+                    "Querying FAISS vector index (search_k=%s, query_crops=%s, cache_hit=%s)...",
                     search_k,
                     len(query_embeddings) or 1,
+                    cache_hit,
                 )
                 with timer.measure("faiss"):
                     matching_ids = self._search_faiss_multi_crop(
@@ -332,7 +371,7 @@ class SearchTilesUseCase:
                     "Retrieving database metadata for matching IDs: %s",
                     matching_ids,
                 )
-                with timer.measure("database"):
+                with timer.measure("metadata"):
                     matched_tiles = self._repo.get_by_ids(matching_ids)
 
                 tile_map = {t.id: t for t in matched_tiles if t.id is not None}
@@ -359,7 +398,8 @@ class SearchTilesUseCase:
             catalog_source_tile: TileImage | None = None
             crop_stem = self._resolve_crop_source_stem(query_path)
             if crop_stem is not None:
-                catalog_source_tile = self._find_catalog_tile_by_stem(crop_stem)
+                with timer.measure("metadata"):
+                    catalog_source_tile = self._find_catalog_tile_by_stem(crop_stem)
                 if catalog_source_tile is not None:
                     logger.info(
                         "Crop search linked to catalog tile: %s",
@@ -432,31 +472,32 @@ class SearchTilesUseCase:
 
             results: List[SearchResult] = []
 
-            for score, tile, exact_match in reranked[:top_k]:
+            with timer.measure("thumbnail"):
+                for score, tile, exact_match in reranked[:top_k]:
 
-                thumbnail_path = get_thumbnail_path(
-                    Path(tile.file_path),
-                    self._thumbnail_dir,
-                )
-
-                thumb_str = (
-                    str(thumbnail_path)
-                    if thumbnail_path.exists()
-                    else tile.file_path
-                )
-
-                similarity_percentage = calibrate_display_percent(
-                    score,
-                    exact_match=exact_match,
-                )
-
-                results.append(
-                    SearchResult(
-                        tile=tile,
-                        similarity_score=similarity_percentage,
-                        thumbnail_path=thumb_str,
+                    thumbnail_path = get_thumbnail_path(
+                        Path(tile.file_path),
+                        self._thumbnail_dir,
                     )
-                )
+
+                    thumb_str = (
+                        str(thumbnail_path)
+                        if thumbnail_path.exists()
+                        else tile.file_path
+                    )
+
+                    similarity_percentage = calibrate_display_percent(
+                        score,
+                        exact_match=exact_match,
+                    )
+
+                    results.append(
+                        SearchResult(
+                            tile=tile,
+                            similarity_score=similarity_percentage,
+                            thumbnail_path=thumb_str,
+                        )
+                    )
 
             timer.log_summary(log=logger)
             return results
@@ -521,6 +562,10 @@ class SearchTilesUseCase:
         target = stem.strip().lower()
         if not target:
             return None
+
+        lookup = getattr(self._repo, "get_indexed_by_file_stem", None)
+        if callable(lookup):
+            return lookup(target)
 
         for tile in self._repo.get_all():
             if not tile.is_indexed:

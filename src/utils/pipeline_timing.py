@@ -48,15 +48,52 @@ class PipelineTimer:
         log: logging.Logger | None = None,
     ) -> None:
         log = log or logger
-        lines = [self._label, "-" * len(self._label)]
-        for stage, elapsed in self._timings.stages.items():
-            lines.append(f"{stage}={elapsed:.3f}s")
+        stages = dict(self._timings.stages)
         if extra_stages:
             for stage, elapsed in extra_stages.items():
-                lines.append(f"{stage}={elapsed:.3f}s")
+                stages[stage] = stages.get(stage, 0.0) + elapsed
+
+        # Stable, console-friendly profile block (milliseconds).
+        # Matches the required Search pipeline report layout.
+        display_order = [
+            ("image_load", "Image Load"),
+            ("crop", "Crop"),
+            ("preprocessing", "Crop"),  # alias when crop not split out
+            ("embedding", "Embedding"),
+            ("dinov2", "Embedding"),
+            ("descriptors", "Descriptors"),
+            ("feature_extract", "Feature Extract"),
+            ("faiss", "FAISS"),
+            ("metadata", "SQLite"),
+            ("database", "SQLite"),
+            ("rerank", "Rerank"),
+            ("reranking", "Rerank"),
+            ("thumbnail", "Thumbnail"),
+        ]
+        lines = [f"=== {self._label} ==="]
+        printed: set[str] = set()
+        seen_labels: set[str] = set()
+        for key, label in display_order:
+            if key not in stages:
+                continue
+            if label in seen_labels:
+                # Prefer the first matching key for a display label.
+                printed.add(key)
+                continue
+            ms = stages[key] * 1000.0
+            lines.append(f"{label:.<22}{ms:>8.1f} ms")
+            printed.add(key)
+            seen_labels.add(label)
+        for key, elapsed in stages.items():
+            if key in printed:
+                continue
+            lines.append(f"{key:.<22}{elapsed * 1000.0:>8.1f} ms")
         wall_total = time.perf_counter() - self._wall_start
-        lines.append(f"total={wall_total:.3f}s")
-        log.info("\n".join(lines))
+        lines.append(f"{'TOTAL':.<22}{wall_total * 1000.0:>8.1f} ms")
+        block = "\n".join(lines)
+        log.info("\n%s", block)
+        # Also print so vendors see profiling without digging logs.
+        print(block, flush=True)
 
 
 class _StageMeasure:
