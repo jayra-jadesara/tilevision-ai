@@ -3,8 +3,10 @@ Search worker module for TileVision AI.
 
 Implements a PySide6 QThread class to execute visual similarity search
 (embedding extraction + FAISS query + metadata hydration) in the background,
-keeping the UI thread fully responsive while the CLIP model runs inference.
+keeping the UI thread fully responsive while DINOv2 runs inference.
 """
+
+from __future__ import annotations
 
 import logging
 import time
@@ -21,21 +23,14 @@ class SearchWorker(QThread):
     """
     Background worker thread that executes a single visual similarity search.
 
-    Each search creates a fresh, single-shot worker instance (searches are
-    not pausable/cancellable/long-running like folder indexing), so there is
-    no shared mutable worker state to race on between instances.
+    Each search creates a fresh, single-shot worker instance.
     """
 
-    # Signal payload: (results) — a List[SearchResult], passed as a generic
-    # Python object since SearchResult is a plain dataclass, not a QObject.
     search_completed = Signal(list)
-
-    # Signal payload: (error_message)
     search_failed = Signal(str)
-
-    # Signal payload: (elapsed_seconds) — emitted alongside search_completed
-    # so the UI/logs can track against the <2s performance target.
     search_timed = Signal(float)
+    # Human-readable stage for the status line (never abort on its own).
+    search_progress = Signal(str)
 
     def __init__(
         self,
@@ -44,16 +39,6 @@ class SearchWorker(QThread):
         top_k: int,
         filters: Optional[dict] = None,
     ) -> None:
-        """
-        Initialize the search background worker.
-
-        Args:
-            use_case: Fully configured SearchTilesUseCase.
-            query_image_path: Absolute path to the query image file.
-            top_k: Maximum number of results to return.
-            filters: Optional dict of metadata field -> required value
-                (Feature 8), e.g. {"brand": "Kajaria"}.
-        """
         super().__init__()
         self._use_case = use_case
         self._query_image_path = query_image_path
@@ -62,7 +47,7 @@ class SearchWorker(QThread):
 
     def run(self) -> None:
         """Execute the search in the background thread."""
-        logger.info(f"Search QThread started for query image: {self._query_image_path}")
+        logger.info("Search QThread started for query image: %s", self._query_image_path)
         start_time = time.monotonic()
 
         try:
@@ -70,12 +55,26 @@ class SearchWorker(QThread):
                 logger.info("Search QThread interrupted before execute.")
                 return
 
-            from src.ai.inference_guard import InferenceBusyError
+            from src.ai.inference_guard import (
+                InferenceBusyError,
+                wait_until_inference_idle,
+            )
+
+            self.search_progress.emit("Pausing Indexing so Search can run…")
+            # Let any in-flight indexing forward finish / yield.
+            idle = wait_until_inference_idle(max_wait_s=90.0)
+            if not idle:
+                logger.warning(
+                    "Inference still busy after wait — Search will retry on lock."
+                )
+            if self.isInterruptionRequested():
+                return
+
+            self.search_progress.emit("Running AI match (this may take a moment on CPU)…")
 
             results = None
             last_error: Exception | None = None
-            # One automatic retry: indexing may still be finishing the current tile.
-            for attempt in (1, 2):
+            for attempt in (1, 2, 3):
                 if self.isInterruptionRequested():
                     logger.info("Search QThread interrupted before attempt %s.", attempt)
                     return
@@ -90,21 +89,21 @@ class SearchWorker(QThread):
                 except InferenceBusyError as exc:
                     last_error = exc
                     logger.warning(
-                        "Search attempt %s blocked by busy AI engine — retrying once.",
+                        "Search attempt %s blocked by busy AI engine — waiting…",
                         attempt,
                     )
-                    if attempt == 1:
-                        time.sleep(0.75)
-                        continue
-                    raise
+                    self.search_progress.emit(
+                        f"AI engine busy (attempt {attempt}/3) — waiting for Indexing…"
+                    )
+                    wait_until_inference_idle(max_wait_s=45.0)
+                    time.sleep(0.5)
+                    continue
 
             if last_error is not None:
                 raise last_error
             assert results is not None
 
             elapsed = time.monotonic() - start_time
-
-            # Timed-out UI already bumped generation; do not emit stale results.
             if self.isInterruptionRequested():
                 logger.info(
                     "Search QThread interrupted after %.3fs — suppressing result emit.",
@@ -112,13 +111,12 @@ class SearchWorker(QThread):
                 )
                 return
 
-            logger.info(f"Search QThread finished in {elapsed:.3f}s. Results: {len(results)}")
-            if elapsed > 2.0:
-                logger.warning(
-                    f"Search exceeded the 2-second performance target: {elapsed:.3f}s "
-                    f"for query '{self._query_image_path}'."
-                )
-
+            self.search_progress.emit("Building results…")
+            logger.info(
+                "Search QThread finished in %.3fs. Results: %d",
+                elapsed,
+                len(results),
+            )
             self.search_timed.emit(elapsed)
             self.search_completed.emit(results)
         except Exception as e:
@@ -129,5 +127,5 @@ class SearchWorker(QThread):
                     e,
                 )
                 return
-            logger.error(f"Search worker failed for query '{self._query_image_path}': {e}")
+            logger.error("Search worker failed for query '%s': %s", self._query_image_path, e)
             self.search_failed.emit(str(e))

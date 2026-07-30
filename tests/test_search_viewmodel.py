@@ -325,6 +325,7 @@ def test_search_notifies_busy_callback(qapp, tmp_path):
 
 def test_search_timeout_stops_endless_searching(qapp, tmp_path):
     # Do not start a real QThread — destroying a still-running worker aborts.
+    # Explicit timeout enables the optional abort path (disabled in production).
     use_case = FakeSearchUseCase(results=[_make_result()])
     vm = SearchViewModel(use_case=use_case, search_timeout_ms=45_000)
 
@@ -336,3 +337,15 @@ def test_search_timeout_stops_endless_searching(qapp, tmp_path):
     vm._on_search_timeout()
     assert vm.state == SearchState.ERROR
     assert errors and "too long" in errors[0].lower()
+
+
+def test_production_default_does_not_auto_abort_search(qapp):
+    use_case = FakeSearchUseCase(results=[_make_result()])
+    vm = SearchViewModel(use_case=use_case)
+    assert vm._search_timeout_ms == 0
+    errors = []
+    vm.search_error.connect(errors.append)
+    vm._set_state(SearchState.SEARCHING)
+    vm._on_search_timeout()  # no-op when timeout disabled
+    assert vm.state == SearchState.SEARCHING
+    assert errors == []

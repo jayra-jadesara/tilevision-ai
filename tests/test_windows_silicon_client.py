@@ -31,20 +31,20 @@ def qapp():
     yield app
 
 
-def test_mac_silicon_search_timeout_matches_desktop_default(mac_silicon_platform):
+def test_mac_silicon_search_timeout_disabled_by_default(mac_silicon_platform):
     assert platform_info.is_apple_silicon()
-    assert _default_search_timeout_ms() == 120_000
+    assert _default_search_timeout_ms() == 0
     use_case = MagicMock()
     vm = SearchViewModel(use_case=use_case)
-    assert vm._search_timeout_ms == 120_000
+    assert vm._search_timeout_ms == 0
 
 
-def test_windows_search_timeout_matches_desktop_default(windows_platform):
+def test_windows_search_timeout_disabled_by_default(windows_platform):
     assert platform_info.is_windows()
-    assert _default_search_timeout_ms() == 120_000
+    assert _default_search_timeout_ms() == 0
     use_case = MagicMock()
     vm = SearchViewModel(use_case=use_case)
-    assert vm._search_timeout_ms == 120_000
+    assert vm._search_timeout_ms == 0
 
 
 def test_mac_silicon_sam2_onnx_uses_cpu_provider_only(mac_silicon_platform, monkeypatch):

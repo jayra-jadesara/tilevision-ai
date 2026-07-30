@@ -57,6 +57,31 @@ def test_search_priority_blocks_indexing_until_cleared():
     wait_while_search_priority(max_wait_s=0.5)
 
 
+def test_wait_until_inference_idle_returns_when_free():
+    from src.ai.inference_guard import wait_until_inference_idle
+
+    assert wait_until_inference_idle(max_wait_s=0.5) is True
+
+
+def test_wait_until_inference_idle_times_out_while_held():
+    from src.ai.inference_guard import synchronized_inference, wait_until_inference_idle
+
+    held = threading.Event()
+    release = threading.Event()
+
+    def holder():
+        with synchronized_inference(timeout=5.0, purpose="holder"):
+            held.set()
+            release.wait(timeout=5.0)
+
+    thread = threading.Thread(target=holder, daemon=True)
+    thread.start()
+    assert held.wait(timeout=2.0)
+    assert wait_until_inference_idle(max_wait_s=0.25) is False
+    release.set()
+    thread.join(timeout=2.0)
+
+
 def test_indexing_yields_while_search_active_then_continues():
     begin_search_priority()
     resumed = threading.Event()
