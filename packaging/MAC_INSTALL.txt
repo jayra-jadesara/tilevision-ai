@@ -25,6 +25,15 @@ INSTALL STEPS
 5. Paste the license key they send you
 
 
+UPDATES (IMPORTANT — SPEED)
+---------------------------
+Do NOT download new versions from the GitHub website in Chrome/Safari.
+Those browser downloads are often very slow (KB/s, hours).
+
+Instead, open TileVision AI → Settings → Check for Updates.
+The app downloads with many parallel connections and shows time remaining.
+
+
 NOT SURE?
 ---------
 Send your vendor a screenshot of About This Mac.

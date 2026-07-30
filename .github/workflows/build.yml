@@ -505,7 +505,15 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           replace: true
-          body: |
+            body: |
+            ## Important — use in-app update (fast)
+
+            Do **not** download the large `.dmg` / `.exe` from this page in Chrome/Safari.
+            GitHub browser downloads are often throttled to ~100–200 KB/s (hours).
+
+            In TileVision AI: **Settings → Check for Updates** (or the update popup).
+            The app downloads with many parallel CDN connections and shows speed + time left.
+
             ## Mac customers — all models supported
 
             Download the **correct .dmg** for your Mac (each file is under GitHub's 2 GB limit):
