@@ -73,6 +73,7 @@ class SettingsView(QWidget):
         on_check_updates: Optional[Callable[[], None]] = None,
         feature_version_provider: Optional[Callable[[], FeatureVersionStatus]] = None,
         gpu_info_provider: Optional[Callable[[], GpuRuntimeInfo]] = None,
+        diagnostics_info_provider: Optional[Callable[[], dict]] = None,
         theme: str = "dark",
         parent: Optional[QWidget] = None,
     ) -> None:
@@ -111,6 +112,7 @@ class SettingsView(QWidget):
         self._on_check_updates = on_check_updates
         self._feature_version_provider = feature_version_provider
         self._gpu_info_provider = gpu_info_provider
+        self._diagnostics_info_provider = diagnostics_info_provider
         self._rebuild_worker: Optional[RebuildIndexWorker] = None
         self._rebuild_progress_dialog: Optional[QProgressDialog] = None
         self._setup_ui()
@@ -419,7 +421,62 @@ class SettingsView(QWidget):
         self._refresh_sam2_status()
         form.addRow("", self._sam2_status_label)
 
+        from src.ai.index_backends import IndexBackend, backend_display_name
+
+        self._index_backend_combo = QComboBox()
+        self._backend_values = [
+            IndexBackend.FLAT_IP.value,
+            IndexBackend.HNSW.value,
+            IndexBackend.IVF.value,
+            IndexBackend.IVF_PQ.value,
+        ]
+        for value in self._backend_values:
+            self._index_backend_combo.addItem(
+                backend_display_name(IndexBackend.parse(value)),
+                value,
+            )
+        current_backend = self._settings.index_backend
+        idx = self._index_backend_combo.findData(current_backend)
+        self._index_backend_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self._index_backend_combo.setToolTip(
+            "Production default is IndexFlatIP (exact). Approximate backends "
+            "(HNSW / IVF / IVF-PQ) are optional for 1M+ catalogs and require "
+            "Rebuild FAISS Index after changing."
+        )
+        self._index_backend_combo.currentIndexChanged.connect(self._on_index_backend_changed)
+        form.addRow(self._form_label("Index Backend"), self._index_backend_combo)
+
         return box
+
+    def _on_index_backend_changed(self, _index: int) -> None:
+        value = self._index_backend_combo.currentData()
+        if not value or value == self._settings.index_backend:
+            return
+        previous = self._settings.index_backend
+        reply = QMessageBox.question(
+            self,
+            "Change Index Backend",
+            "Changing the FAISS backend requires Rebuild FAISS Index before "
+            "search uses the new structure.\n\n"
+            f"Switch from {previous} → {value}?\n\n"
+            "IndexFlatIP remains the recommended production default for exact results.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            # Revert combo without re-entering this handler.
+            self._index_backend_combo.blockSignals(True)
+            idx = self._index_backend_combo.findData(previous)
+            self._index_backend_combo.setCurrentIndex(idx if idx >= 0 else 0)
+            self._index_backend_combo.blockSignals(False)
+            return
+        self._settings.index_backend = str(value)
+        QMessageBox.information(
+            self,
+            "Rebuild Required",
+            "Index backend saved. Use Rebuild FAISS Index now so the on-disk "
+            "index matches the new setting.",
+        )
 
     def _refresh_sam2_status(self) -> None:
         """
@@ -468,8 +525,8 @@ class SettingsView(QWidget):
         note = QLabel(
             "Rebuild FAISS Index re-analyzes every tile after a software update. "
             "Clear Cache removes thumbnails only (they regenerate automatically). "
-            "Backup Database and Export Logs are optional support tools — use them "
-            "before major changes or when contacting support."
+            "Backup Database, Export Logs, and Export Diagnostics are optional "
+            "support tools — use them before major changes or when contacting support."
         )
         note.setObjectName("SectionNote")
         note.setWordWrap(True)
@@ -498,11 +555,16 @@ class SettingsView(QWidget):
         self._clear_cache_button.setObjectName("SecondaryButton")
         self._clear_cache_button.clicked.connect(self._on_clear_cache)
 
+        self._export_diagnostics_button = QPushButton("Export Diagnostics")
+        self._export_diagnostics_button.setObjectName("SecondaryButton")
+        self._export_diagnostics_button.clicked.connect(self._on_export_diagnostics)
+
         for button in (
             self._backup_button,
             self._export_logs_button,
             self._rebuild_button,
             self._clear_cache_button,
+            self._export_diagnostics_button,
         ):
             button.setMinimumHeight(36)
 
@@ -510,13 +572,14 @@ class SettingsView(QWidget):
         grid.addWidget(self._export_logs_button, 0, 1)
         grid.addWidget(self._rebuild_button, 1, 0)
         grid.addWidget(self._clear_cache_button, 1, 1)
+        grid.addWidget(self._export_diagnostics_button, 2, 0, 1, 2)
 
         self._check_updates_button = QPushButton("Check for Updates")
         self._check_updates_button.setObjectName("SecondaryButton")
         self._check_updates_button.setMinimumHeight(36)
         self._check_updates_button.clicked.connect(self._on_check_updates_clicked)
         self._check_updates_button.setEnabled(self._on_check_updates is not None)
-        grid.addWidget(self._check_updates_button, 2, 0, 1, 2)
+        grid.addWidget(self._check_updates_button, 3, 0, 1, 2)
 
         self._auto_update_checkbox = QCheckBox("Notify me when a new version is available")
         self._auto_update_checkbox.setChecked(self._settings.check_for_updates)
@@ -636,6 +699,53 @@ class SettingsView(QWidget):
         except OSError as e:
             QMessageBox.critical(self, "Export Failed", f"Could not export logs:\n{e}")
             logger.error(f"Log export failed: {e}")
+
+    def _on_export_diagnostics(self) -> None:
+        dest_str, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Diagnostics",
+            str(Path.home() / "tilevision_diagnostics.json"),
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if not dest_str:
+            return
+        try:
+            from src.utils.diagnostics import export_diagnostics_json
+
+            info = {}
+            if self._diagnostics_info_provider is not None:
+                info = dict(self._diagnostics_info_provider() or {})
+            path = export_diagnostics_json(dest_str, info)
+            QMessageBox.information(
+                self,
+                "Diagnostics Exported",
+                f"Diagnostics report exported to:\n{path}",
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Export Failed", f"Could not export diagnostics:\n{e}"
+            )
+            logger.error("Diagnostics export failed: %s", e)
+
+    def offer_guided_rebuild(self, summary: str) -> None:
+        """Prompt the user to rebuild after an incompatible upgrade."""
+        if self._indexing_use_case is None or self._indexed_folders_provider is None:
+            QMessageBox.warning(
+                self,
+                "Rebuild Recommended",
+                f"{summary}\n\nOpen Settings when folders are configured, then "
+                "use Rebuild FAISS Index.",
+            )
+            return
+        reply = QMessageBox.question(
+            self,
+            "Guided Rebuild",
+            f"{summary}\n\nStart Rebuild FAISS Index now?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self._on_rebuild_faiss()
 
     def _on_clear_cache(self) -> None:
         thumb_dir = Path(self._settings.thumbnail_dir)

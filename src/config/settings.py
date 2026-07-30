@@ -66,6 +66,13 @@ class AppSettings:
             "last_update_check_at": "",
             "last_update_check_ok": True,
             "last_seen_update_version": "",
+            # Enterprise FAISS backends (v1.2+). Default flat_ip preserves exact search.
+            "index_backend": "flat_ip",
+            "hnsw_m": 32,
+            "hnsw_ef_search": 64,
+            "ivf_nlist": 0,
+            "ivf_nprobe": 16,
+            "ivf_pq_m": 16,
         }
         
         self._settings: Dict[str, Any] = self._defaults.copy()
@@ -375,4 +382,64 @@ class AppSettings:
     @last_seen_update_version.setter
     def last_seen_update_version(self, value: str) -> None:
         self._settings["last_seen_update_version"] = str(value)
+        self.save()
+
+    @property
+    def index_backend(self) -> str:
+        """FAISS backend: flat_ip (default), hnsw, ivf, ivf_pq."""
+        from src.ai.index_backends import IndexBackend
+
+        return IndexBackend.parse(str(self._settings.get("index_backend", "flat_ip"))).value
+
+    @index_backend.setter
+    def index_backend(self, value: str) -> None:
+        from src.ai.index_backends import IndexBackend
+
+        self._settings["index_backend"] = IndexBackend.parse(value).value
+        self.save()
+
+    @property
+    def hnsw_m(self) -> int:
+        return int(self._settings.get("hnsw_m", 32))
+
+    @hnsw_m.setter
+    def hnsw_m(self, value: int) -> None:
+        self._settings["hnsw_m"] = max(4, min(64, int(value)))
+        self.save()
+
+    @property
+    def hnsw_ef_search(self) -> int:
+        return int(self._settings.get("hnsw_ef_search", 64))
+
+    @hnsw_ef_search.setter
+    def hnsw_ef_search(self, value: int) -> None:
+        self._settings["hnsw_ef_search"] = max(8, min(512, int(value)))
+        self.save()
+
+    @property
+    def ivf_nlist(self) -> int:
+        """0 = auto at train time."""
+        return int(self._settings.get("ivf_nlist", 0))
+
+    @ivf_nlist.setter
+    def ivf_nlist(self, value: int) -> None:
+        self._settings["ivf_nlist"] = max(0, int(value))
+        self.save()
+
+    @property
+    def ivf_nprobe(self) -> int:
+        return int(self._settings.get("ivf_nprobe", 16))
+
+    @ivf_nprobe.setter
+    def ivf_nprobe(self, value: int) -> None:
+        self._settings["ivf_nprobe"] = max(1, min(256, int(value)))
+        self.save()
+
+    @property
+    def ivf_pq_m(self) -> int:
+        return int(self._settings.get("ivf_pq_m", 16))
+
+    @ivf_pq_m.setter
+    def ivf_pq_m(self, value: int) -> None:
+        self._settings["ivf_pq_m"] = max(1, int(value))
         self.save()

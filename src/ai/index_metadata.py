@@ -1,8 +1,8 @@
 """
 FAISS index metadata sidecar for TileVision AI.
 
-Stores embedding model / dimension / app version next to the binary index
-so incompatible indexes can be detected before a silent empty search.
+Stores embedding model / dimension / app version / backend next to the binary
+index so incompatible indexes can be detected before a silent empty search.
 """
 
 from __future__ import annotations
@@ -34,14 +34,18 @@ class FaissIndexMetadata:
     ntotal: int
     build_date: str
     catalog_version: int
+    index_backend: str = "flat_ip"
 
-    def is_compatible(self) -> bool:
-        return (
+    def is_compatible(self, *, expected_backend: str | None = None) -> bool:
+        ok = (
             self.embedding_model == CURRENT_EMBEDDING_MODEL
             and int(self.embedding_dimension) == CURRENT_EMBEDDING_DIMENSION
             and int(self.feature_version) == CURRENT_FEATURE_VERSION
             and int(self.catalog_version) == CURRENT_FEATURE_VERSION
         )
+        if expected_backend is not None and self.index_backend:
+            ok = ok and self.index_backend == expected_backend
+        return ok
 
 
 def metadata_path_for(index_path: str | Path) -> Path:
@@ -54,6 +58,7 @@ def write_index_metadata(
     *,
     faiss_type: str,
     ntotal: int,
+    index_backend: str = "flat_ip",
 ) -> Path:
     meta = FaissIndexMetadata(
         embedding_model=CURRENT_EMBEDDING_MODEL,
@@ -64,6 +69,7 @@ def write_index_metadata(
         ntotal=int(ntotal),
         build_date=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         catalog_version=CURRENT_FEATURE_VERSION,
+        index_backend=str(index_backend or "flat_ip"),
     )
     out = metadata_path_for(index_path)
     out.write_text(json.dumps(asdict(meta), indent=2), encoding="utf-8")
@@ -86,6 +92,7 @@ def read_index_metadata(index_path: str | Path) -> Optional[FaissIndexMetadata]:
             ntotal=int(data.get("ntotal", 0)),
             build_date=str(data.get("build_date", "")),
             catalog_version=int(data.get("catalog_version", 0)),
+            index_backend=str(data.get("index_backend", "flat_ip") or "flat_ip"),
         )
     except Exception as exc:
         logger.warning("Failed to read FAISS metadata sidecar: %s", exc)

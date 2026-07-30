@@ -236,9 +236,21 @@ def build_application() -> int:
         preprocess_workers=indexing_perf.preprocess_workers,
     )
 
+    from src.ai.index_backends import BackendParams, IndexBackend
+
+    backend = IndexBackend.parse(settings.index_backend)
+    backend_params = BackendParams(
+        hnsw_m=settings.hnsw_m,
+        hnsw_ef_search=settings.hnsw_ef_search,
+        ivf_nlist=settings.ivf_nlist,
+        ivf_nprobe=settings.ivf_nprobe,
+        ivf_pq_m=settings.ivf_pq_m,
+    )
     vector_index = FaissIndexManager(
         index_path=settings.index_path,
         dimension=1024,
+        backend=backend,
+        backend_params=backend_params,
     )
 
     # ── 8. Construct Use Cases ────────────────────────────────────────────────
@@ -267,9 +279,11 @@ def build_application() -> int:
     import time as _time
 
     from src.ai.feature_versions import CURRENT_EMBEDDING_DIMENSION, CURRENT_EMBEDDING_MODEL
+    from src.core.compatibility import run_compatibility_check
     from src.utils.diagnostics import log_startup_diagnostics
     from src.utils.pipeline_timing import profiling_enabled
 
+    compatibility_report = None
     try:
         logger.info("Warming up AI engine and FAISS index...")
         t0 = _time.perf_counter()
@@ -285,6 +299,13 @@ def build_application() -> int:
                 "Use Settings > Rebuild FAISS Index after re-scanning folders.",
                 version_status.message,
             )
+        compatibility_report = run_compatibility_check(
+            database_path=settings.database_path,
+            index_path=settings.index_path,
+            expected_backend=backend,
+            feature_status_provider=image_repository.get_feature_version_status,
+            catalog_size=vector_index.get_total_count(),
+        )
         logger.info(
             "AI engine warm-up complete (model=%.0f ms, faiss=%.0f ms).",
             model_ms,
@@ -314,6 +335,7 @@ def build_application() -> int:
                 "embedding_dim": CURRENT_EMBEDDING_DIMENSION,
                 "device": embedder.runtime_info.summary_for_ui(),
                 "faiss_type": vector_index.index_type_name(),
+                "index_backend": vector_index.active_backend().value,
                 "omp_threads": omp,
                 "catalog_size": vector_index.get_total_count(),
                 "database": settings.database_path,
@@ -322,6 +344,8 @@ def build_application() -> int:
                 "log_level": logging.getLevelName(root_logger.level),
                 "model_warmup_ms": round(model_ms, 1),
                 "faiss_warmup_ms": round(faiss_ms, 1),
+                "compatibility": compatibility_report.to_dict(),
+                "gpu": embedder.runtime_info.device_name or embedder.runtime_info.active_device,
             }
         )
     except Exception as e:
@@ -453,6 +477,49 @@ def build_application() -> int:
 
     update_controller = UpdateController(settings, theme=settings.theme)
 
+    def _diagnostics_info() -> dict:
+        from src.ai.feature_versions import (
+            CURRENT_EMBEDDING_DIMENSION,
+            CURRENT_EMBEDDING_MODEL,
+        )
+        from src.utils.pipeline_timing import profiling_enabled
+
+        try:
+            import faiss as _faiss
+
+            faiss_ver = getattr(_faiss, "__version__", "installed")
+            omp = int(_faiss.omp_get_max_threads())
+        except Exception:
+            faiss_ver = "unavailable"
+            omp = 0
+        try:
+            import torch as _torch
+
+            torch_ver = getattr(_torch, "__version__", "unknown")
+        except Exception:
+            torch_ver = "unavailable"
+        payload = {
+            "app_version": APP_VERSION,
+            "python": sys.version.split()[0],
+            "torch": torch_ver,
+            "faiss": faiss_ver,
+            "embedding_model": CURRENT_EMBEDDING_MODEL,
+            "embedding_dim": CURRENT_EMBEDDING_DIMENSION,
+            "device": embedder.runtime_info.summary_for_ui(),
+            "gpu": embedder.runtime_info.device_name or embedder.runtime_info.active_device,
+            "faiss_type": vector_index.index_type_name(),
+            "index_backend": vector_index.active_backend().value,
+            "omp_threads": omp,
+            "catalog_size": vector_index.get_total_count(),
+            "database": settings.database_path,
+            "index_path": settings.index_path,
+            "profile_enabled": profiling_enabled(),
+            "log_level": logging.getLevelName(root_logger.level),
+        }
+        if compatibility_report is not None:
+            payload["compatibility"] = compatibility_report.to_dict()
+        return payload
+
     main_window = MainWindow(
         indexing_viewmodel=indexing_viewmodel,
         search_viewmodel=search_viewmodel,
@@ -467,12 +534,21 @@ def build_application() -> int:
         indexed_folders_provider=lambda: [f.folder_path for f in indexed_folder_repository.get_all_folders()],
         feature_version_provider=image_repository.get_feature_version_status,
         gpu_info_provider=lambda: embedder.runtime_info,
+        diagnostics_info_provider=_diagnostics_info,
         on_watch_folders_changed=_restart_folder_monitor,
         on_check_updates=lambda: update_controller.check_now(main_window),
     )
     auto_index_notifier.catalog_updated.connect(main_window.handle_auto_index_event)
     main_window.show()
     update_controller.schedule_startup_check(main_window)
+
+    if compatibility_report is not None and compatibility_report.requires_rebuild:
+        summary = compatibility_report.summary_message()
+
+        def _offer_rebuild() -> None:
+            main_window.offer_compatibility_rebuild(summary)
+
+        QTimer.singleShot(750, _offer_rebuild)
 
     logger.info("TileVision AI is running.")
 
