@@ -8,6 +8,7 @@ and domain models.
 from datetime import datetime
 import logging
 import sqlite3
+from pathlib import Path
 from typing import Dict, List, Optional
 import numpy as np
 
@@ -74,6 +75,10 @@ class SQLiteImageRepository(IImageRepository):
             db_context: The shared DatabaseContext instance.
         """
         self._db = db_context
+        self._feature_status_cache: FeatureVersionStatus | None = None
+
+    def _invalidate_feature_status_cache(self) -> None:
+        self._feature_status_cache = None
 
     def _row_to_entity(self, row: sqlite3.Row) -> TileImage:
         """Helper to convert a sqlite3.Row to a TileImage model."""
@@ -356,6 +361,7 @@ class SQLiteImageRepository(IImageRepository):
                 )
                 row = cursor.fetchone()
                 conn.commit()
+                self._invalidate_feature_status_cache()
                 if row:
                     generated_id = row["id"]
                     logger.debug(f"Saved tile '{tile.file_name}' with ID: {generated_id}")
@@ -384,6 +390,8 @@ class SQLiteImageRepository(IImageRepository):
                 cursor.execute(query, (image_id,))
                 conn.commit()
                 success = cursor.rowcount > 0
+                if success:
+                    self._invalidate_feature_status_cache()
                 logger.info(f"Removed tile ID {image_id}: {success}")
                 return success
         except sqlite3.Error as e:
@@ -432,6 +440,60 @@ class SQLiteImageRepository(IImageRepository):
                     return self._row_to_entity(row)
         except sqlite3.Error as e:
             logger.error(f"Failed to fetch tile by path {file_path}: {e}")
+        return None
+
+    def get_indexed_by_file_stem(self, stem: str) -> Optional[TileImage]:
+        """
+        Find an indexed tile whose file_name stem matches via indexed lookup.
+
+        Avoids ``lower(file_name)`` (which forced a full table scan). Uses
+        equality / prefix ``LIKE`` on ``file_name`` so ``idx_tiles_file_name``
+        / ``idx_tiles_indexed_file_name`` can be used.
+        """
+        target = (stem or "").strip()
+        if not target:
+            return None
+
+        # Common extensions — equality hits the file_name index.
+        # SQLite LIKE is ASCII case-insensitive, so mixed-case catalogues match.
+        exact_names = (
+            f"{target}.jpg",
+            f"{target}.jpeg",
+            f"{target}.png",
+            f"{target}.webp",
+            f"{target}.JPG",
+            f"{target}.JPEG",
+            f"{target}.PNG",
+            f"{target}.WEBP",
+            target,
+        )
+        placeholders = ",".join("?" for _ in exact_names)
+        query = (
+            f"SELECT * FROM tiles WHERE is_indexed = 1 "
+            f"AND file_name IN ({placeholders}) LIMIT 1;"
+        )
+        try:
+            with self._db.session() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, exact_names)
+                row = cursor.fetchone()
+                if row:
+                    return self._row_to_entity(row)
+
+                # Prefix search for stems that already include dots / codes.
+                # file_name LIKE 'stem.%' can use idx_tiles_file_name.
+                cursor.execute(
+                    "SELECT * FROM tiles WHERE file_name LIKE ? "
+                    "AND is_indexed = 1 LIMIT 25;",
+                    (f"{target}.%",),
+                )
+                target_l = target.lower()
+                for row in cursor.fetchall():
+                    entity = self._row_to_entity(row)
+                    if Path(entity.file_name).stem.lower() == target_l:
+                        return entity
+        except sqlite3.Error as e:
+            logger.error("Failed to fetch tile by file stem %s: %s", target, e)
         return None
 
     def get_all(self) -> List[TileImage]:
@@ -652,7 +714,13 @@ class SQLiteImageRepository(IImageRepository):
     def get_feature_version_status(self) -> FeatureVersionStatus:
         """
         Check whether indexed tiles use the current feature pipeline versions.
+
+        Cached until the next write that changes indexed feature state —
+        avoids a full indexed-row scan on every Search.
         """
+        if self._feature_status_cache is not None:
+            return self._feature_status_cache
+
         query = """
         SELECT
             feature_version,
@@ -705,31 +773,33 @@ class SQLiteImageRepository(IImageRepository):
             )
 
         if indexed_count == 0:
-            return FeatureVersionStatus(
+            status = FeatureVersionStatus(
                 is_compatible=True,
                 indexed_count=0,
                 stale_count=0,
                 message="No indexed tiles yet.",
             )
-
-        is_compatible = stale_count == 0
-        if is_compatible:
-            message = (
-                f"All {indexed_count} indexed tile(s) use current "
-                f"feature version {CURRENT_FEATURE_VERSION}."
-            )
         else:
-            message = (
-                f"{stale_count} of {indexed_count} indexed tile(s) use "
-                f"stale features. A full re-index is required."
+            is_compatible = stale_count == 0
+            if is_compatible:
+                message = (
+                    f"All {indexed_count} indexed tile(s) use current "
+                    f"feature version {CURRENT_FEATURE_VERSION}."
+                )
+            else:
+                message = (
+                    f"{stale_count} of {indexed_count} indexed tile(s) use "
+                    f"stale features. A full re-index is required."
+                )
+            status = FeatureVersionStatus(
+                is_compatible=is_compatible,
+                indexed_count=indexed_count,
+                stale_count=stale_count,
+                message=message,
             )
 
-        return FeatureVersionStatus(
-            is_compatible=is_compatible,
-            indexed_count=indexed_count,
-            stale_count=stale_count,
-            message=message,
-        )
+        self._feature_status_cache = status
+        return status
 
     def mark_as_indexed(self, image_id: int, is_indexed: bool) -> bool:
         """
@@ -748,7 +818,10 @@ class SQLiteImageRepository(IImageRepository):
                 cursor = conn.cursor()
                 cursor.execute(query, (int(is_indexed), image_id))
                 conn.commit()
-                return cursor.rowcount > 0
+                updated = cursor.rowcount > 0
+            if updated:
+                self._invalidate_feature_status_cache()
+            return updated
         except sqlite3.Error as e:
             logger.error(f"Failed to update index status for ID {image_id}: {e}")
             return False
@@ -760,9 +833,16 @@ class SQLiteImageRepository(IImageRepository):
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM tiles;")
                 conn.commit()
-                # Run vacuum to reclaim space in SQLite file
-                cursor.execute("VACUUM;")
-                conn.commit()
+            self._invalidate_feature_status_cache()
+            # VACUUM needs exclusive access — close pooled connections first.
+            try:
+                self._db.close_all()
+                with self._db.session() as conn:
+                    conn.isolation_level = None  # autocommit for VACUUM
+                    conn.execute("VACUUM;")
+                    conn.isolation_level = ""
+            except sqlite3.Error as vac_exc:
+                logger.warning("VACUUM after clear skipped: %s", vac_exc)
             logger.info("Cleared all tiles records from SQLite database.")
         except sqlite3.Error as e:
             logger.error(f"Failed to clear tiles repository: {e}")

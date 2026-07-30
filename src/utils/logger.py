@@ -6,8 +6,27 @@ Provides rotating file logging and console logging configuration.
 
 import logging
 import os
+import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+
+
+def resolve_log_level(requested: int | None = None) -> int:
+    """
+    Resolve effective log level.
+
+    TILEVISION_LOG_LEVEL overrides everything (DEBUG/INFO/WARNING/ERROR).
+    Packaged Release builds (``sys.frozen``) default to WARNING so console
+    stays quiet; development defaults to INFO.
+    """
+    env = os.environ.get("TILEVISION_LOG_LEVEL", "").strip().upper()
+    if env:
+        return getattr(logging, env, logging.INFO)
+    if requested is not None:
+        return int(requested)
+    if getattr(sys, "frozen", False):
+        return logging.WARNING
+    return logging.INFO
 
 
 def get_log_file_path(log_file_name: str = "tilevision.log") -> Path:
@@ -17,14 +36,6 @@ def get_log_file_path(log_file_name: str = "tilevision.log") -> Path:
     Mirrors the location setup_logger() uses internally, without requiring
     a logger instance — used by the Settings page to locate the file to
     export/copy.
-
-    Args:
-        log_file_name: The log file name, matching setup_logger()'s default.
-
-    Returns:
-        The expected absolute path to the current log file. Not guaranteed
-        to exist (e.g. before the app has logged anything, or if the
-        AppData fallback path was used instead — callers should check).
     """
     return Path.home() / ".tilevision_ai" / "logs" / log_file_name
 
@@ -34,23 +45,14 @@ def setup_logger(
     log_file_name: str = "tilevision.log",
     max_bytes: int = 10 * 1024 * 1024,  # 10MB
     backup_count: int = 5,
-    log_level: int = logging.INFO,
+    log_level: int | None = None,
 ) -> logging.Logger:
     """
     Configure and return a logger instance with console and rotating file handlers.
-
-    Args:
-        name: The name of the logger.
-        log_file_name: The name of the log file to write to.
-        max_bytes: The maximum size of a single log file before rotation.
-        backup_count: The number of rotated backup log files to retain.
-        log_level: The logging level (e.g. logging.INFO, logging.DEBUG).
-
-    Returns:
-        A configured logging.Logger instance.
     """
+    resolved = resolve_log_level(log_level)
     logger = logging.getLogger(name)
-    logger.setLevel(log_level)
+    logger.setLevel(min(resolved, logging.INFO))
 
     # Avoid adding duplicate handlers if the logger is already configured
     if logger.handlers:
@@ -61,14 +63,14 @@ def setup_logger(
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # Console Handler
+    # Console Handler — Release: warnings+ only
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
-    console_handler.setLevel(log_level)
+    console_handler.setLevel(resolved)
     logger.addHandler(console_handler)
 
-    # File Handler - write logs relative to the user's local AppData or home directory
-    # For local scratch run, place in a folder "logs" inside the user's home profile
+    # File Handler keeps INFO even in Release so support can export logs.
+    file_level = logging.INFO if resolved > logging.INFO else resolved
     app_data_dir = Path.home() / ".tilevision_ai"
     logs_dir = app_data_dir / "logs"
 
@@ -82,7 +84,7 @@ def setup_logger(
             encoding="utf-8",
         )
         file_handler.setFormatter(formatter)
-        file_handler.setLevel(log_level)
+        file_handler.setLevel(file_level)
         logger.addHandler(file_handler)
     except OSError as e:
         # Fallback to current directory logs if AppData is not writeable
@@ -97,10 +99,9 @@ def setup_logger(
                 encoding="utf-8",
             )
             file_handler.setFormatter(formatter)
-            file_handler.setLevel(log_level)
+            file_handler.setLevel(file_level)
             logger.addHandler(file_handler)
         except OSError:
-            # If everything fails, write a warning to console
             print(f"Failed to initialize file logger due to exception: {e}")
 
     return logger

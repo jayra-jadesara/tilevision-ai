@@ -136,6 +136,7 @@ class MainWindow(QMainWindow):
         indexed_folders_provider: Optional[Callable[[], List[str]]] = None,
         feature_version_provider: Optional[Callable[[], FeatureVersionStatus]] = None,
         gpu_info_provider: Optional[Callable[[], GpuRuntimeInfo]] = None,
+        diagnostics_info_provider: Optional[Callable[[], dict]] = None,
         on_watch_folders_changed: Optional[Callable[[], None]] = None,
         on_check_updates: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
@@ -187,6 +188,7 @@ class MainWindow(QMainWindow):
         self._indexed_folders_provider = indexed_folders_provider
         self._feature_version_provider = feature_version_provider
         self._gpu_info_provider = gpu_info_provider
+        self._diagnostics_info_provider = diagnostics_info_provider
         self._on_watch_folders_changed = on_watch_folders_changed
         self._on_check_updates = on_check_updates
         self._current_theme = getattr(self._settings, "theme", "dark") if self._settings is not None else "dark"
@@ -318,6 +320,7 @@ class MainWindow(QMainWindow):
                 on_watch_folders_changed=self._on_watch_folders_changed,
                 feature_version_provider=self._feature_version_provider,
                 gpu_info_provider=self._gpu_info_provider,
+                diagnostics_info_provider=self._diagnostics_info_provider,
                 on_check_updates=self._on_check_updates,
                 theme=self._current_theme,
             )
@@ -573,6 +576,13 @@ class MainWindow(QMainWindow):
             "for accurate search results."
         )
         self._stale_banner.setVisible(True)
+
+    def offer_compatibility_rebuild(self, summary: str) -> None:
+        """Navigate to Settings and offer the guided rebuild dialog."""
+        self._navigate(3)
+        settings = getattr(self, "_settings_view", None)
+        if settings is not None and hasattr(settings, "offer_guided_rebuild"):
+            settings.offer_guided_rebuild(summary)
 
     # ── Navigation ────────────────────────────────────────────────────────────
 

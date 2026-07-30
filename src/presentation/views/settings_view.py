@@ -39,6 +39,10 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QLineEdit,
     QCheckBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QSizePolicy,
 )
 
 from src.ai.feature_versions import CURRENT_FEATURE_VERSION, FeatureVersionStatus
@@ -73,6 +77,7 @@ class SettingsView(QWidget):
         on_check_updates: Optional[Callable[[], None]] = None,
         feature_version_provider: Optional[Callable[[], FeatureVersionStatus]] = None,
         gpu_info_provider: Optional[Callable[[], GpuRuntimeInfo]] = None,
+        diagnostics_info_provider: Optional[Callable[[], dict]] = None,
         theme: str = "dark",
         parent: Optional[QWidget] = None,
     ) -> None:
@@ -111,6 +116,7 @@ class SettingsView(QWidget):
         self._on_check_updates = on_check_updates
         self._feature_version_provider = feature_version_provider
         self._gpu_info_provider = gpu_info_provider
+        self._diagnostics_info_provider = diagnostics_info_provider
         self._rebuild_worker: Optional[RebuildIndexWorker] = None
         self._rebuild_progress_dialog: Optional[QProgressDialog] = None
         self._setup_ui()
@@ -127,29 +133,27 @@ class SettingsView(QWidget):
 
         if self._feature_version_provider is None:
             self._feature_status_label.setText("—")
-            return
+        else:
+            try:
+                status = self._feature_version_provider()
+            except Exception as exc:
+                logger.warning("Failed to read feature version status: %s", exc)
+                self._feature_status_label.setText("Unknown")
+            else:
+                if status.indexed_count == 0:
+                    self._feature_status_label.setText("No tiles indexed yet")
+                elif status.is_compatible:
+                    self._feature_status_label.setText(
+                        f"Up to date (v{CURRENT_FEATURE_VERSION}, {status.indexed_count} tiles)"
+                    )
+                else:
+                    self._feature_status_label.setText(
+                        f"Outdated — {status.stale_count} of {status.indexed_count} tiles "
+                        f"need re-index (v{CURRENT_FEATURE_VERSION})"
+                    )
 
-        try:
-            status = self._feature_version_provider()
-        except Exception as exc:
-            logger.warning("Failed to read feature version status: %s", exc)
-            self._feature_status_label.setText("Unknown")
-            return
-
-        if status.indexed_count == 0:
-            self._feature_status_label.setText("No tiles indexed yet")
-            return
-
-        if status.is_compatible:
-            self._feature_status_label.setText(
-                f"Up to date (v{CURRENT_FEATURE_VERSION}, {status.indexed_count} tiles)"
-            )
-            return
-
-        self._feature_status_label.setText(
-            f"Outdated — {status.stale_count} of {status.indexed_count} tiles "
-            f"need re-index (v{CURRENT_FEATURE_VERSION})"
-        )
+        if hasattr(self, "_advisor_summary"):
+            self.refresh_index_advisor()
 
     def _gpu_summary_text(self) -> str:
         if self._gpu_info_provider is None:
@@ -195,6 +199,7 @@ class SettingsView(QWidget):
         columns.addWidget(self._build_preferences_section(), stretch=1)
         columns.addWidget(self._build_maintenance_section(), stretch=1)
         general_layout.addLayout(columns)
+        general_layout.addWidget(self._build_index_backend_section())
         general_layout.addStretch()
 
         general_scroll = QScrollArea()
@@ -421,6 +426,258 @@ class SettingsView(QWidget):
 
         return box
 
+    def _build_index_backend_section(self) -> QGroupBox:
+        """Index backend selector + Index Advisor (never auto-switches)."""
+        from src.ai.index_backends import IndexBackend, backend_display_name
+
+        box = self._section_box("Index Backend & Advisor")
+        layout = QVBoxLayout(box)
+        layout.setSpacing(12)
+
+        intro = QLabel(
+            "Production default is IndexFlatIP (exact). Approximate backends "
+            "(HNSW / IVF / IVF-PQ) are optional, require Rebuild FAISS Index, "
+            "and are never applied automatically."
+        )
+        intro.setObjectName("SectionNote")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self._index_backend_combo = QComboBox()
+        self._backend_values = [
+            IndexBackend.FLAT_IP.value,
+            IndexBackend.HNSW.value,
+            IndexBackend.IVF.value,
+            IndexBackend.IVF_PQ.value,
+        ]
+        for value in self._backend_values:
+            self._index_backend_combo.addItem(
+                backend_display_name(IndexBackend.parse(value)),
+                value,
+            )
+        current_backend = self._settings.index_backend
+        idx = self._index_backend_combo.findData(current_backend)
+        self._index_backend_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self._index_backend_combo.setToolTip(
+            "Changing backend only updates Settings. Search keeps using the "
+            "on-disk index until you rebuild. Confirmation is always required."
+        )
+        self._index_backend_combo.currentIndexChanged.connect(self._on_index_backend_changed)
+        row.addWidget(QLabel("Current setting:"))
+        row.addWidget(self._index_backend_combo, stretch=1)
+
+        self._refresh_advisor_button = QPushButton("Refresh Advisor")
+        self._refresh_advisor_button.setObjectName("SecondaryButton")
+        self._refresh_advisor_button.clicked.connect(self.refresh_index_advisor)
+        row.addWidget(self._refresh_advisor_button)
+
+        self._apply_advice_button = QPushButton("Apply Recommendation")
+        self._apply_advice_button.setObjectName("SecondaryButton")
+        self._apply_advice_button.clicked.connect(self._on_apply_index_advice)
+        row.addWidget(self._apply_advice_button)
+        layout.addLayout(row)
+
+        self._advisor_summary = QLabel()
+        self._advisor_summary.setObjectName("SectionNote")
+        self._advisor_summary.setWordWrap(True)
+        self._advisor_summary.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        layout.addWidget(self._advisor_summary)
+
+        self._advisor_warning = QLabel()
+        self._advisor_warning.setObjectName("SectionNote")
+        self._advisor_warning.setWordWrap(True)
+        self._advisor_warning.setStyleSheet("color: #b45309;")
+        layout.addWidget(self._advisor_warning)
+
+        self._advisor_table = QTableWidget(0, 6)
+        self._advisor_table.setObjectName("IndexAdvisorTable")
+        self._advisor_table.setHorizontalHeaderLabels(
+            ["Backend", "Exact?", "Recall", "Memory", "Speed", "Best Use Case"]
+        )
+        self._advisor_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self._advisor_table.horizontalHeader().setSectionResizeMode(
+            5, QHeaderView.ResizeMode.Stretch
+        )
+        self._advisor_table.verticalHeader().setVisible(False)
+        self._advisor_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._advisor_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self._advisor_table.setMinimumHeight(160)
+        self._advisor_table.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        layout.addWidget(self._advisor_table)
+
+        self._latest_advice = None
+        self.refresh_index_advisor()
+        return box
+
+    def refresh_index_advisor(self) -> None:
+        """Recompute Index Advisor from catalog size / RAM / CPU. Read-only."""
+        from src.ai.feature_versions import CURRENT_EMBEDDING_DIMENSION
+        from src.ai.index_advisor import advise_index_backend
+        from src.ai.index_backends import BackendParams, IndexBackend
+
+        try:
+            catalog_size = 0
+            if self._catalog_count_provider is not None:
+                catalog_size = int(self._catalog_count_provider() or 0)
+            advice = advise_index_backend(
+                catalog_size=catalog_size,
+                current_backend=self._settings.index_backend,
+                embedding_dimension=CURRENT_EMBEDDING_DIMENSION,
+                backend_params=BackendParams(
+                    hnsw_m=self._settings.hnsw_m,
+                    hnsw_ef_search=self._settings.hnsw_ef_search,
+                    ivf_nlist=self._settings.ivf_nlist,
+                    ivf_nprobe=self._settings.ivf_nprobe,
+                    ivf_pq_m=self._settings.ivf_pq_m,
+                ),
+            )
+            self._latest_advice = advice
+            rebuild = "Yes" if advice.rebuild_required else "No"
+            optional = ""
+            if advice.optional_backend is not None:
+                optional = (
+                    f"\nOptional: {advice.optional_backend.value} — {advice.optional_note}"
+                )
+            self._advisor_summary.setText(
+                "Recommended Backend: "
+                f"{advice.recommended_backend.value}\n"
+                f"Reason: {advice.reason}\n"
+                f"Estimated RAM: ~{advice.estimated_ram_mib:.0f} MiB"
+                f" (system ~{advice.available_ram_mib or '?'} MiB, "
+                f"{advice.cpu_cores} CPU cores, catalog {advice.catalog_size:,}, "
+                f"dim {advice.embedding_dimension})\n"
+                f"Expected Recall: {advice.expected_recall:.2f}\n"
+                f"Expected Search Time: ~{advice.expected_search_ms:.1f} ms\n"
+                f"Rebuild Required: {rebuild}"
+                f"{optional}"
+            )
+            if advice.recommended_backend is IndexBackend.FLAT_IP:
+                self._advisor_warning.setText(
+                    "HNSW, IVF, and IVF-PQ are approximate indexes and may reduce "
+                    "recall. They are listed for comparison only — FlatIP remains "
+                    "the production default."
+                )
+            else:
+                self._advisor_warning.setText(advice.approximate_warning)
+
+            self._advisor_table.setRowCount(len(advice.comparison))
+            for row_idx, row in enumerate(advice.comparison):
+                values = [
+                    row.backend,
+                    "Yes" if row.exact else "No",
+                    row.recall,
+                    row.memory,
+                    row.speed,
+                    row.best_use_case,
+                ]
+                for col, value in enumerate(values):
+                    item = QTableWidgetItem(value)
+                    self._advisor_table.setItem(row_idx, col, item)
+
+            same = advice.recommended_backend.value == self._settings.index_backend
+            self._apply_advice_button.setEnabled(not same)
+        except Exception as exc:
+            logger.warning("Index Advisor refresh failed: %s", exc)
+            self._advisor_summary.setText(f"Index Advisor unavailable: {exc}")
+            self._apply_advice_button.setEnabled(False)
+
+    def _on_apply_index_advice(self) -> None:
+        """Apply advisor recommendation only after explicit user confirmation."""
+        advice = getattr(self, "_latest_advice", None)
+        if advice is None:
+            self.refresh_index_advisor()
+            advice = getattr(self, "_latest_advice", None)
+        if advice is None:
+            return
+        recommended = advice.recommended_backend.value
+        if recommended == self._settings.index_backend:
+            QMessageBox.information(
+                self,
+                "Already Applied",
+                "Settings already use the recommended backend. No change made.",
+            )
+            return
+
+        approx_note = ""
+        if recommended != "flat_ip":
+            approx_note = (
+                "\n\nWarning: this backend is approximate and may reduce recall "
+                "versus IndexFlatIP."
+            )
+        reply = QMessageBox.question(
+            self,
+            "Apply Index Recommendation",
+            "Apply the Index Advisor recommendation?\n\n"
+            f"Current: {self._settings.index_backend}\n"
+            f"Recommended: {recommended}\n\n"
+            "This only updates Settings. Search will keep using the on-disk "
+            "index until you run Rebuild FAISS Index."
+            f"{approx_note}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self._index_backend_combo.blockSignals(True)
+        idx = self._index_backend_combo.findData(recommended)
+        if idx >= 0:
+            self._index_backend_combo.setCurrentIndex(idx)
+        self._index_backend_combo.blockSignals(False)
+        self._settings.index_backend = recommended
+        self.refresh_index_advisor()
+        QMessageBox.information(
+            self,
+            "Recommendation Saved",
+            "Index backend setting updated. Use Rebuild FAISS Index when you are "
+            "ready — nothing was migrated automatically.",
+        )
+
+    def _on_index_backend_changed(self, _index: int) -> None:
+        value = self._index_backend_combo.currentData()
+        if not value or value == self._settings.index_backend:
+            return
+        previous = self._settings.index_backend
+        approx_note = ""
+        if value != "flat_ip":
+            approx_note = (
+                "\n\nWarning: HNSW / IVF / IVF-PQ are approximate and may reduce recall."
+            )
+        reply = QMessageBox.question(
+            self,
+            "Change Index Backend",
+            "Changing the FAISS backend requires Rebuild FAISS Index before "
+            "search uses the new structure.\n\n"
+            f"Switch from {previous} → {value}?\n\n"
+            "IndexFlatIP remains the recommended production default for exact results."
+            " Nothing migrates automatically."
+            f"{approx_note}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            self._index_backend_combo.blockSignals(True)
+            idx = self._index_backend_combo.findData(previous)
+            self._index_backend_combo.setCurrentIndex(idx if idx >= 0 else 0)
+            self._index_backend_combo.blockSignals(False)
+            return
+        self._settings.index_backend = str(value)
+        self.refresh_index_advisor()
+        QMessageBox.information(
+            self,
+            "Rebuild Required",
+            "Index backend saved. Use Rebuild FAISS Index now so the on-disk "
+            "index matches the new setting.",
+        )
+
     def _refresh_sam2_status(self) -> None:
         """
         Show Precise Crop readiness without importing onnxruntime.
@@ -468,8 +725,8 @@ class SettingsView(QWidget):
         note = QLabel(
             "Rebuild FAISS Index re-analyzes every tile after a software update. "
             "Clear Cache removes thumbnails only (they regenerate automatically). "
-            "Backup Database and Export Logs are optional support tools — use them "
-            "before major changes or when contacting support."
+            "Backup Database, Export Logs, and Export Diagnostics are optional "
+            "support tools — use them before major changes or when contacting support."
         )
         note.setObjectName("SectionNote")
         note.setWordWrap(True)
@@ -498,11 +755,16 @@ class SettingsView(QWidget):
         self._clear_cache_button.setObjectName("SecondaryButton")
         self._clear_cache_button.clicked.connect(self._on_clear_cache)
 
+        self._export_diagnostics_button = QPushButton("Export Diagnostics")
+        self._export_diagnostics_button.setObjectName("SecondaryButton")
+        self._export_diagnostics_button.clicked.connect(self._on_export_diagnostics)
+
         for button in (
             self._backup_button,
             self._export_logs_button,
             self._rebuild_button,
             self._clear_cache_button,
+            self._export_diagnostics_button,
         ):
             button.setMinimumHeight(36)
 
@@ -510,13 +772,14 @@ class SettingsView(QWidget):
         grid.addWidget(self._export_logs_button, 0, 1)
         grid.addWidget(self._rebuild_button, 1, 0)
         grid.addWidget(self._clear_cache_button, 1, 1)
+        grid.addWidget(self._export_diagnostics_button, 2, 0, 1, 2)
 
         self._check_updates_button = QPushButton("Check for Updates")
         self._check_updates_button.setObjectName("SecondaryButton")
         self._check_updates_button.setMinimumHeight(36)
         self._check_updates_button.clicked.connect(self._on_check_updates_clicked)
         self._check_updates_button.setEnabled(self._on_check_updates is not None)
-        grid.addWidget(self._check_updates_button, 2, 0, 1, 2)
+        grid.addWidget(self._check_updates_button, 3, 0, 1, 2)
 
         self._auto_update_checkbox = QCheckBox("Notify me when a new version is available")
         self._auto_update_checkbox.setChecked(self._settings.check_for_updates)
@@ -636,6 +899,53 @@ class SettingsView(QWidget):
         except OSError as e:
             QMessageBox.critical(self, "Export Failed", f"Could not export logs:\n{e}")
             logger.error(f"Log export failed: {e}")
+
+    def _on_export_diagnostics(self) -> None:
+        dest_str, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Diagnostics",
+            str(Path.home() / "tilevision_diagnostics.json"),
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if not dest_str:
+            return
+        try:
+            from src.utils.diagnostics import export_diagnostics_json
+
+            info = {}
+            if self._diagnostics_info_provider is not None:
+                info = dict(self._diagnostics_info_provider() or {})
+            path = export_diagnostics_json(dest_str, info)
+            QMessageBox.information(
+                self,
+                "Diagnostics Exported",
+                f"Diagnostics report exported to:\n{path}",
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Export Failed", f"Could not export diagnostics:\n{e}"
+            )
+            logger.error("Diagnostics export failed: %s", e)
+
+    def offer_guided_rebuild(self, summary: str) -> None:
+        """Prompt the user to rebuild after an incompatible upgrade."""
+        if self._indexing_use_case is None or self._indexed_folders_provider is None:
+            QMessageBox.warning(
+                self,
+                "Rebuild Recommended",
+                f"{summary}\n\nOpen Settings when folders are configured, then "
+                "use Rebuild FAISS Index.",
+            )
+            return
+        reply = QMessageBox.question(
+            self,
+            "Guided Rebuild",
+            f"{summary}\n\nStart Rebuild FAISS Index now?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self._on_rebuild_faiss()
 
     def _on_clear_cache(self) -> None:
         thumb_dir = Path(self._settings.thumbnail_dir)

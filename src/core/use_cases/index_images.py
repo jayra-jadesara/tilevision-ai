@@ -313,7 +313,7 @@ class IndexImagesUseCase:
             with timer.measure("faiss"):
                 self._index.update_vectors(
                     [db_id],
-                    [features.embedding.tolist()],
+                    [features.embedding],
                     persist=persist,
                 )
 
@@ -460,7 +460,7 @@ class IndexImagesUseCase:
                 tile.id = db_id
                 tile.embedding_id = db_id
                 db_ids.append(db_id)
-                vectors.append(features.embedding.tolist())
+                vectors.append(features.embedding)
 
         for item in items:
             generate_thumbnail(item.path, self._thumbnail_dir)
