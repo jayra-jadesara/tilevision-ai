@@ -136,11 +136,7 @@ class SearchTilesUseCase:
 
         best_score: dict[int, float] = {}
         for emb in embeddings:
-            if hasattr(emb, "tolist"):
-                vector = emb.tolist()
-            else:
-                vector = list(emb)
-            ids, scores = self._index.search_vectors(vector, search_k)
+            ids, scores = self._index.search_vectors(emb, search_k)
             for tile_id, score in zip(ids, scores):
                 prev = best_score.get(tile_id)
                 if prev is None or float(score) > prev:

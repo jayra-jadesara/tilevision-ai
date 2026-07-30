@@ -6,6 +6,7 @@ Manages SQLite connection pooling/sessions, table initialization, and schema mig
 
 import logging
 import sqlite3
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Generator
@@ -14,11 +15,21 @@ from src.data.db_protection import prepare_working_database
 
 logger = logging.getLogger("tilevision.data.db_context")
 
+# Applied once per pooled connection. WAL improves concurrent Search + Indexing.
+_CONNECTION_PRAGMAS = (
+    "PRAGMA foreign_keys = ON;",
+    "PRAGMA journal_mode = WAL;",
+    "PRAGMA synchronous = NORMAL;",
+    "PRAGMA temp_store = MEMORY;",
+    "PRAGMA cache_size = -8000;",  # ~8 MiB page cache per connection
+    "PRAGMA busy_timeout = 30000;",
+)
+
 
 class DatabaseContext:
     """
     Manages connections and schema initialization for the local SQLite database.
-    
+
     Provides thread-safe access helper context managers for transactions.
     """
 
@@ -32,6 +43,9 @@ class DatabaseContext:
         self._db_path = Path(db_path)
         # Ensure parent directories exist
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._local = threading.local()
+        self._pool_lock = threading.Lock()
+        self._all_connections: list[sqlite3.Connection] = []
         prepare_working_database(self._db_path)
         self.initialize_schema()
 
@@ -214,33 +228,69 @@ class DatabaseContext:
 
         logger.info("Database schema is up to date.")
         
+    def _open_connection(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(
+            str(self._db_path),
+            timeout=30.0,
+            check_same_thread=True,
+        )
+        conn.row_factory = sqlite3.Row
+        for pragma in _CONNECTION_PRAGMAS:
+            try:
+                conn.execute(pragma)
+            except sqlite3.Error as exc:
+                logger.debug("PRAGMA skipped (%s): %s", pragma.strip(), exc)
+        with self._pool_lock:
+            self._all_connections.append(conn)
+        return conn
+
+    def _thread_connection(self) -> sqlite3.Connection:
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            try:
+                conn.execute("SELECT 1;")
+                return conn
+            except sqlite3.Error:
+                logger.debug(
+                    "Replacing dead SQLite connection on thread %s",
+                    threading.get_ident(),
+                )
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        conn = self._open_connection()
+        self._local.conn = conn
+        return conn
+
+    def close_all(self) -> None:
+        """Close every pooled connection (call on app shutdown)."""
+        with self._pool_lock:
+            for conn in self._all_connections:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            self._all_connections.clear()
+        self._local.conn = None
+
     @contextmanager
     def session(self) -> Generator[sqlite3.Connection, None, None]:
         """
-        Open a short-lived SQLite connection for one transactional unit of work.
+        Borrow the calling thread's pooled SQLite connection.
 
-        Connections are NEVER shared across threads:
-        - Each ``with session()`` call creates a fresh connection on the calling
-          thread and closes it on exit.
-        - ``check_same_thread=True`` enforces that this connection object is
-          only used on the thread that opened it.
-        Concurrent search/index workers therefore each hold independent
-        connections; SQLite file locking serializes writers.
+        Connections are NEVER shared across threads. The same thread reuses
+        one connection so SQLite can cache pages and statement plans between
+        Search / Index calls on that worker.
         """
-        conn = sqlite3.connect(
-            str(self._db_path),
-            timeout=30.0,  # 30-second timeout for busy locks
-            check_same_thread=True,
-        )
-        # Enable foreign keys and row factory for dict-like rows if desired
-        conn.execute("PRAGMA foreign_keys = ON;")
-        conn.row_factory = sqlite3.Row
-        
+        conn = self._thread_connection()
         try:
             yield conn
+            conn.commit()
         except Exception as e:
             logger.error(f"Database session error, rolling back: {e}")
-            conn.rollback()
+            try:
+                conn.rollback()
+            except Exception:
+                pass
             raise
-        finally:
-            conn.close()

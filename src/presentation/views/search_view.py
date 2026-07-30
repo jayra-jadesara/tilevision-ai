@@ -832,6 +832,13 @@ class SearchView(QWidget):
         if not results:
             self._results_table.setVisible(False)
             self._empty_state_widget.setVisible(True)
+            # Release cached icons when the results panel is cleared.
+            try:
+                from src.presentation.thumbnail_cache import THUMBNAIL_PIXMAP_CACHE
+
+                THUMBNAIL_PIXMAP_CACHE.clear()
+            except Exception:
+                pass
             return
 
         self._empty_state_widget.setVisible(False)
@@ -895,6 +902,8 @@ class SearchView(QWidget):
 
     def _load_result_thumbnails(self) -> None:
         """Lazy-load result icons after search returns (keeps UI responsive)."""
+        from src.presentation.thumbnail_cache import THUMBNAIL_PIXMAP_CACHE
+
         results = self._current_results
         for row, result in enumerate(results):
             if row >= self._results_table.rowCount():
@@ -902,9 +911,10 @@ class SearchView(QWidget):
             item = self._results_table.item(row, 0)
             if item is None:
                 continue
-            pixmap = QPixmap(result.thumbnail_path)
-            if pixmap.isNull():
-                pixmap = QPixmap(result.tile.file_path)
+            pixmap = THUMBNAIL_PIXMAP_CACHE.get(
+                result.thumbnail_path,
+                fallback=result.tile.file_path,
+            )
             if not pixmap.isNull():
                 item.setIcon(QIcon(pixmap))
             # Yield to the event loop every few icons.

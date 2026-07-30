@@ -21,6 +21,7 @@ from src.ai.inference_guard import (
     DEFAULT_SEARCH_LOCK_TIMEOUT_S,
     synchronized_inference,
 )
+from src.ai.index_metadata import read_index_metadata, write_index_metadata
 
 logger = logging.getLogger("tilevision.ai.vector_index")
 
@@ -78,6 +79,18 @@ class FaissIndexManager:
         with synchronized_inference(timeout=DEFAULT_INDEX_LOCK_TIMEOUT_S, purpose="FAISS"):
             if self._index_path.exists() and self._index_path.stat().st_size > 0:
                 logger.info(f"Loading existing FAISS index from: {self._index_path}")
+                meta = read_index_metadata(self._index_path)
+                if meta is not None and not meta.is_compatible():
+                    logger.warning(
+                        "FAISS metadata incompatible "
+                        "(model=%s dim=%s feature_v=%s app=%s). "
+                        "Index will load but Settings → Rebuild FAISS Index is required "
+                        "for correct results.",
+                        meta.embedding_model,
+                        meta.embedding_dimension,
+                        meta.feature_version,
+                        meta.app_version,
+                    )
                 try:
                     self._index = faiss.read_index(str(self._index_path))
                     logger.info(f"FAISS index loaded. Total vectors: {self._index.ntotal}")
@@ -127,13 +140,19 @@ class FaissIndexManager:
     def embedding_dimension(self) -> int:
         return int(self._dimension)
 
-    def add_vectors(self, ids: List[int], vectors: List[List[float]], persist: bool = True) -> None:
+    def add_vectors(
+        self,
+        ids: List[int],
+        vectors: List[List[float]] | List[np.ndarray] | np.ndarray,
+        persist: bool = True,
+    ) -> None:
         """
         Add normalized vectors to the index, mapped to database record IDs.
 
         Args:
             ids: List of database primary key IDs.
-            vectors: List of embedding vectors (list of floats).
+            vectors: Embedding vectors as list-of-lists, list of ndarrays,
+                or a 2D float32 array (preferred — no copy when contiguous).
             persist: If True (default), immediately writes the index to disk.
                 Callers doing many small additions in a loop (e.g. a folder
                 scan indexing hundreds/thousands of files) should pass False
@@ -144,36 +163,39 @@ class FaissIndexManager:
         if self._index is None:
             self.load_index()
 
-        if not ids or not vectors:
-            logger.warning("Empty ids or vectors provided to add_vectors. Skipping.")
+        if not ids:
+            logger.warning("Empty ids provided to add_vectors. Skipping.")
             return
-
-        if len(ids) != len(vectors):
-            raise ValueError("Size mismatch: The number of IDs must match the number of vectors.")
 
         try:
             with synchronized_inference(timeout=DEFAULT_INDEX_LOCK_TIMEOUT_S, purpose="FAISS add"):
-                ids_np = np.array(ids, dtype=np.int64)
-                vectors_np = np.array(vectors, dtype=np.float32)
+                ids_np = np.asarray(ids, dtype=np.int64)
+                vectors_np = np.ascontiguousarray(np.asarray(vectors, dtype=np.float32))
+                if vectors_np.ndim != 2:
+                    raise ValueError("vectors must be a 2D array of shape (n, dim)")
+                if vectors_np.shape[0] != len(ids):
+                    raise ValueError("Size mismatch: The number of IDs must match the number of vectors.")
 
-                # Assert correct vector dimensions
                 if vectors_np.shape[1] != self._dimension:
                     raise ValueError(
                         f"Vector dimension mismatch. Index dimension: {self._dimension}, "
                         f"Provided vector dimension: {vectors_np.shape[1]}"
                     )
 
-                # Add to index
                 self._index.add_with_ids(vectors_np, ids_np)
                 logger.info(f"Added {len(ids)} vectors to FAISS index. Total now: {self._index.ntotal}")
-            # Persist outside the add critical section so Search can interleave.
             if persist:
                 self.save_index()
         except Exception as e:
             logger.error(f"Failed to add vectors to FAISS index: {e}")
             raise RuntimeError(f"FAISS index write error: {e}") from e
 
-    def update_vectors(self, ids: List[int], vectors: List[List[float]], persist: bool = True) -> None:
+    def update_vectors(
+        self,
+        ids: List[int],
+        vectors: List[List[float]] | List[np.ndarray] | np.ndarray,
+        persist: bool = True,
+    ) -> None:
         """
         Replace vectors for ids that may already exist in the index.
 
@@ -254,12 +276,16 @@ class FaissIndexManager:
         ):
             return int(self._index.ntotal) if self._index is not None else 0
 
-    def search_vectors(self, query_vector: List[float], top_k: int) -> Tuple[List[int], List[float]]:
+    def search_vectors(
+        self,
+        query_vector: List[float] | np.ndarray,
+        top_k: int,
+    ) -> Tuple[List[int], List[float]]:
         """
         Search for the top_k closest vectors.
 
         Args:
-            query_vector: Normalized 1D float list representing the query embedding.
+            query_vector: Normalized 1D float list or ndarray (preferred).
             top_k: Number of results to retrieve.
 
         Returns:
@@ -276,9 +302,9 @@ class FaissIndexManager:
             with synchronized_inference(
                 timeout=DEFAULT_SEARCH_LOCK_TIMEOUT_S, purpose="FAISS search"
             ):
-                # Format query vector as 2D numpy array
+                # Prefer ndarray input — avoids list→array roundtrip on hot path.
                 query_np = np.ascontiguousarray(
-                    np.array([query_vector], dtype=np.float32)
+                    np.asarray(query_vector, dtype=np.float32).reshape(1, -1)
                 )
                 if query_np.shape[1] != self._index.d:
                     raise ValueError(
@@ -299,17 +325,15 @@ class FaissIndexManager:
                 )
                 scores, indices = self._index.search(query_np, safe_top_k)
 
-                # Flatten output and filter out empty indices (-1 represents no match)
-                indices_flat = indices[0].tolist()
-                scores_flat = scores[0].tolist()
+                indices_flat = indices[0]
+                scores_flat = scores[0]
 
-                matching_ids = []
-                similarity_scores = []
+                matching_ids: List[int] = []
+                similarity_scores: List[float] = []
 
-                for idx, score in zip(indices_flat, scores_flat):
+                for idx, score in zip(indices_flat.tolist(), scores_flat.tolist()):
                     if idx != -1:
                         matching_ids.append(int(idx))
-                        # Clamp cosine similarity value between -1.0 and 1.0 (sometimes slightly exceeds due to precision)
                         clamped_score = max(-1.0, min(1.0, float(score)))
                         similarity_scores.append(clamped_score)
 
@@ -329,6 +353,14 @@ class FaissIndexManager:
                 self._index_path.parent.mkdir(parents=True, exist_ok=True)
                 faiss.write_index(self._index, str(self._index_path))
                 logger.info(f"FAISS index successfully saved to: {self._index_path}")
+            try:
+                write_index_metadata(
+                    self._index_path,
+                    faiss_type=self.index_type_name(),
+                    ntotal=int(self._index.ntotal),
+                )
+            except Exception as meta_exc:
+                logger.warning("FAISS metadata sidecar write failed: %s", meta_exc)
         except Exception as e:
             logger.error(f"Failed to write FAISS index to {self._index_path}: {e}")
             raise OSError(f"FAISS index save failure: {e}") from e
