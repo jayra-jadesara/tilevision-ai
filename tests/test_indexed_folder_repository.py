@@ -56,6 +56,16 @@ def test_reindexing_a_folder_makes_it_most_recent_again(tmp_path):
     assert last.folder_path == "/tiles/A"
 
 
+def test_rapid_reindex_ordering_is_stable(tmp_path):
+    """Windows CI previously failed when timestamps tied within one clock tick."""
+    repo = _repo(tmp_path)
+    for _ in range(50):
+        repo.record_folder_indexed("/tiles/A")
+        repo.record_folder_indexed("/tiles/B")
+        repo.record_folder_indexed("/tiles/A")
+        assert repo.get_last_indexed_folder().folder_path == "/tiles/A"
+
+
 def test_recording_same_folder_twice_does_not_duplicate_rows(tmp_path):
     repo = _repo(tmp_path)
     repo.record_folder_indexed("/tiles/A")

@@ -34,10 +34,22 @@ logger = logging.getLogger("tilevision.data.sqlite_repository")
 
 
 def _utc_timestamp_now() -> str:
-    """UTC timestamp with microsecond resolution for stable folder ordering."""
+    """
+    UTC timestamp with nanosecond resolution for stable folder ordering.
+
+    Windows CI (and some hosts) can return identical microsecond timestamps
+    for successive calls within the same clock tick. When two folders then
+    tie on last_indexed_at, ORDER BY id DESC incorrectly prefers the newer
+    row id over a re-indexed older folder. Nanoseconds from time.time_ns()
+    are strictly increasing across rapid successive calls.
+    """
+    import time
     from datetime import datetime, timezone
 
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
+    ns = time.time_ns()
+    sec, nsec = divmod(ns, 1_000_000_000)
+    dt = datetime.fromtimestamp(sec, timezone.utc)
+    return f"{dt.strftime('%Y-%m-%d %H:%M:%S')}.{nsec:09d}"
 
 
 def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
@@ -49,19 +61,33 @@ def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
     """
     if not value:
         return None
-    try:
-        return datetime.fromisoformat(value)
-    except ValueError:
-        pass
-    try:
-        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S.%f")
-    except ValueError:
-        pass
-    try:
-        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
-    except ValueError:
-        logger.warning(f"Could not parse timestamp value: {value}")
+    text = str(value).strip()
+    if not text:
         return None
+    # Normalize trailing Z
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        pass
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S.%f",
+        "%Y-%m-%d %H:%M:%S",
+    ):
+        try:
+            return datetime.strptime(text[:26] if fmt.endswith("%f") else text, fmt)
+        except ValueError:
+            continue
+    # Nanosecond strings: keep first 6 fractional digits for datetime.
+    if "." in text:
+        head, frac = text.split(".", 1)
+        frac = "".join(ch for ch in frac if ch.isdigit())[:6].ljust(6, "0")
+        try:
+            return datetime.strptime(f"{head}.{frac}", "%Y-%m-%d %H:%M:%S.%f")
+        except ValueError:
+            pass
+    return None
 
 
 class SQLiteImageRepository(IImageRepository):
