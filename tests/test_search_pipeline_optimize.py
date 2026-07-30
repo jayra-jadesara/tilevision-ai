@@ -101,12 +101,19 @@ def test_prepare_query_views_multi_may_reload(tmp_path, monkeypatch):
         "_looks_like_scene_photo",
         classmethod(lambda cls, image: True),
     )
+    monkeypatch.setattr(
+        ImagePreprocessor,
+        "_isolate_query_tile",
+        classmethod(lambda cls, image: image),
+    )
 
     from src.ai.preprocess import fast_tile_crop
 
     class FakeCrop:
         def __init__(self, image):
             self.image = image
+            self.method = "test"
+            self.confidence = 1.0
 
     monkeypatch.setattr(
         fast_tile_crop,
