@@ -155,3 +155,4 @@ class SearchWorker(QThread):
             self.search_failed.emit(str(e))
         finally:
             stop_heartbeat.set()
+            heartbeat_thread.join(timeout=1.0)

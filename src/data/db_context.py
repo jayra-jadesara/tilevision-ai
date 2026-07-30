@@ -142,6 +142,8 @@ class DatabaseContext:
             );
             """,
             "CREATE INDEX IF NOT EXISTS idx_tiles_file_name ON tiles(file_name);",
+            "CREATE INDEX IF NOT EXISTS idx_tiles_is_indexed ON tiles(is_indexed);",
+            "CREATE INDEX IF NOT EXISTS idx_tiles_indexed_file_name ON tiles(is_indexed, file_name);",
             "CREATE INDEX IF NOT EXISTS idx_search_history_searched_at ON search_history(searched_at);",
             "CREATE INDEX IF NOT EXISTS idx_activity_log_created_at ON activity_log(created_at);",
             "CREATE INDEX IF NOT EXISTS idx_catalogue_profiles_customer ON catalogue_profiles(license_customer_name);",

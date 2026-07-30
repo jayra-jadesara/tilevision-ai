@@ -151,8 +151,13 @@ def test_find_catalog_tile_by_stem_uses_sql_helper():
     repo.get_all.assert_not_called()
 
 
-def test_pipeline_timer_prints_required_labels(capsys):
-    timer = PipelineTimer("SEARCH TIMING")
+def test_pipeline_timer_prints_required_labels(monkeypatch, capsys):
+    monkeypatch.setenv("TILEVISION_PROFILE", "1")
+    from importlib import reload
+    import src.utils.pipeline_timing as pt
+
+    reload(pt)
+    timer = pt.PipelineTimer("SEARCH TIMING")
     timer.set_meta(
         cache="miss",
         catalog_size=100000,
@@ -179,6 +184,21 @@ def test_pipeline_timer_prints_required_labels(capsys):
     assert "Embedding Dim" in out
     assert "Thread ID" in out
     assert "TOTAL" in out
+
+
+def test_pipeline_timer_respects_profile_env(monkeypatch, capsys):
+    monkeypatch.setenv("TILEVISION_PROFILE", "0")
+    from importlib import reload
+    import src.utils.pipeline_timing as pt
+
+    reload(pt)
+    assert pt.profiling_enabled() is False
+    timer = pt.PipelineTimer("SEARCH TIMING")
+    with timer.measure("faiss"):
+        pass
+    timer.log_summary()
+    assert capsys.readouterr().out == ""
+    assert timer.timings.stages == {}
 
 
 def test_faiss_index_type_is_flat_ip(tmp_path):

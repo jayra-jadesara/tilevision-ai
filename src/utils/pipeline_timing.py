@@ -8,12 +8,29 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict
 
 logger = logging.getLogger("tilevision.timing")
+
+
+def profiling_enabled() -> bool:
+    """
+    Whether pipeline stage timing should be recorded / printed.
+
+    Override with TILEVISION_PROFILE=0|1.
+    Packaged Release builds (PyInstaller ``frozen``) default OFF for zero
+    console overhead; development defaults ON so vendors still see profiles.
+    """
+    flag = os.environ.get("TILEVISION_PROFILE", "").strip().lower()
+    if flag in ("0", "false", "off", "no"):
+        return False
+    if flag in ("1", "true", "on", "yes"):
+        return True
+    return not getattr(sys, "frozen", False)
 
 
 def _rss_mb() -> float | None:
@@ -51,6 +68,16 @@ class StageTimings:
         return sum(self.stages.values())
 
 
+class _NullMeasure:
+    """No-op context manager when profiling is disabled."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return False
+
+
 class PipelineTimer:
     """Context manager / helper for measuring pipeline stages."""
 
@@ -59,6 +86,7 @@ class PipelineTimer:
         self._timings = StageTimings()
         self._wall_start = time.perf_counter()
         self._meta: Dict[str, Any] = {}
+        self._enabled = profiling_enabled()
 
     @property
     def timings(self) -> StageTimings:
@@ -66,9 +94,13 @@ class PipelineTimer:
 
     def set_meta(self, **kwargs: Any) -> None:
         """Attach non-timing profile fields (cache hit, catalog size, …)."""
+        if not self._enabled:
+            return
         self._meta.update(kwargs)
 
     def measure(self, stage: str):
+        if not self._enabled:
+            return _NullMeasure()
         return _StageMeasure(self, stage)
 
     def log_summary(
@@ -77,6 +109,8 @@ class PipelineTimer:
         log: logging.Logger | None = None,
         meta: Dict[str, Any] | None = None,
     ) -> None:
+        if not self._enabled:
+            return
         log = log or logger
         stages = dict(self._timings.stages)
         if extra_stages:

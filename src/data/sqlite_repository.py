@@ -437,52 +437,53 @@ class SQLiteImageRepository(IImageRepository):
 
     def get_indexed_by_file_stem(self, stem: str) -> Optional[TileImage]:
         """
-        Find an indexed tile whose file_name stem matches (O(1) SQL, not full scan).
+        Find an indexed tile whose file_name stem matches via indexed lookup.
 
-        Used by Crop & Search to link a temp crop back to its catalog source
-        without deserializing every tile's embeddings via get_all().
+        Avoids ``lower(file_name)`` (which forced a full table scan). Uses
+        equality / prefix ``LIKE`` on ``file_name`` so ``idx_tiles_file_name``
+        / ``idx_tiles_indexed_file_name`` can be used.
         """
-        target = (stem or "").strip().lower()
+        target = (stem or "").strip()
         if not target:
             return None
 
-        # Match stem with common image extensions; case-insensitive.
-        # file_name is indexed (idx_tiles_file_name).
-        query = (
-            "SELECT * FROM tiles "
-            "WHERE is_indexed = 1 AND ("
-            "lower(file_name) = ? OR "
-            "lower(file_name) LIKE ? OR "
-            "lower(file_name) LIKE ? OR "
-            "lower(file_name) LIKE ? OR "
-            "lower(file_name) LIKE ?"
-            ") LIMIT 1;"
-        )
-        params = (
-            target,
+        # Common extensions — equality hits the file_name index.
+        # SQLite LIKE is ASCII case-insensitive, so mixed-case catalogues match.
+        exact_names = (
             f"{target}.jpg",
             f"{target}.jpeg",
             f"{target}.png",
             f"{target}.webp",
+            f"{target}.JPG",
+            f"{target}.JPEG",
+            f"{target}.PNG",
+            f"{target}.WEBP",
+            target,
+        )
+        placeholders = ",".join("?" for _ in exact_names)
+        query = (
+            f"SELECT * FROM tiles WHERE is_indexed = 1 "
+            f"AND file_name IN ({placeholders}) LIMIT 1;"
         )
         try:
             with self._db.session() as conn:
                 cursor = conn.cursor()
-                cursor.execute(query, params)
+                cursor.execute(query, exact_names)
                 row = cursor.fetchone()
                 if row:
                     return self._row_to_entity(row)
 
-                # Fallback: stem may include dots (product codes). Use LIKE
-                # with extension wildcard, then verify stem equality in Python.
+                # Prefix search for stems that already include dots / codes.
+                # file_name LIKE 'stem.%' can use idx_tiles_file_name.
                 cursor.execute(
-                    "SELECT * FROM tiles WHERE is_indexed = 1 "
-                    "AND lower(file_name) LIKE ? LIMIT 25;",
+                    "SELECT * FROM tiles WHERE file_name LIKE ? "
+                    "AND is_indexed = 1 LIMIT 25;",
                     (f"{target}.%",),
                 )
+                target_l = target.lower()
                 for row in cursor.fetchall():
                     entity = self._row_to_entity(row)
-                    if Path(entity.file_name).stem.lower() == target:
+                    if Path(entity.file_name).stem.lower() == target_l:
                         return entity
         except sqlite3.Error as e:
             logger.error("Failed to fetch tile by file stem %s: %s", target, e)
