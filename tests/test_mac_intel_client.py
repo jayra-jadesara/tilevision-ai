@@ -124,21 +124,21 @@ def test_mac_intel_frozen_startup_schedules_update_check(
     assert scheduled["delay"] == 4000
 
 
-def test_mac_intel_search_timeout_allows_cpu_headroom(mac_intel_platform):
+def test_mac_intel_search_does_not_auto_abort(mac_intel_platform):
     from src.presentation.viewmodels.search_viewmodel import (
         SearchViewModel,
         _default_search_timeout_ms,
     )
 
-    # Shared desktop default (Windows / Mac Intel / Mac Silicon).
-    assert _default_search_timeout_ms() == 120_000
+    # Production never auto-aborts a working search (false "took too long" errors).
+    assert _default_search_timeout_ms() == 0
     use_case = MagicMock()
     use_case.get_index_health.return_value = MagicMock(
         is_compatible=True, stale_count=0, indexed_count=1
     )
     use_case.get_searchable_count.return_value = 1
     vm = SearchViewModel(use_case=use_case)
-    assert vm._search_timeout_ms == 120_000
+    assert vm._search_timeout_ms == 0
 
 
 def test_mac_intel_sam2_onnx_uses_cpu_provider_only(mac_intel_platform, monkeypatch):

@@ -282,14 +282,15 @@ class FeatureExtractor:
         image_path: str,
     ) -> tuple[TileFeatures, list[np.ndarray]]:
         """
-        Query-only: return fused TileFeatures plus per-crop DINOv2 vectors.
+        Query-only: one preprocess + one DINOv2 vector (reliable on Mac CPU).
 
-        Search uses each crop vector in FAISS (max-score merge) for better
-        room-photo recall, then hybrid-reranks with the fused features.
+        Multi-crop OpenCV recall is available via Auto Crop / Precise Crop.
+        Drop-search must stay single-pass so results always return.
         """
         total_start = time.perf_counter()
         t0 = time.perf_counter()
-        views = ImagePreprocessor.prepare_query_views(image_path, max_views=3)
+        # Always one view — never stack multi-crop DINOv2 on the drop path.
+        views = ImagePreprocessor.prepare_query_views(image_path, max_views=1)
         preprocess_elapsed = time.perf_counter() - t0
 
         embeddings: list[np.ndarray] = []
@@ -303,14 +304,18 @@ class FeatureExtractor:
             dinov2_elapsed += time.perf_counter() - t1
             embeddings.append(emb)
 
-        # Always fuse from the already-computed DINOv2 vectors (even for one
-        # view) so Mac Intel never pays for a second full DINOv2 pass.
         features = self._fuse_query_embeddings(views[0], embeddings, dinov2_elapsed)
         self._last_timings = ExtractTimings(
             preprocessing=preprocess_elapsed,
             dinov2=self._last_timings.dinov2,
             descriptors=self._last_timings.descriptors,
             total=time.perf_counter() - total_start,
+        )
+        logger.info(
+            "Search extract (single-pass): preprocess=%.2fs dinov2=%.2fs total=%.2fs",
+            preprocess_elapsed,
+            self._last_timings.dinov2,
+            self._last_timings.total,
         )
         return features, embeddings
 

@@ -370,8 +370,12 @@ def build_application() -> int:
         # Drop-image search takes priority over background indexing.
         if busy:
             indexing_viewmodel.pause_for_search()
+            if folder_monitor is not None:
+                folder_monitor.pause_for_search()
         else:
             indexing_viewmodel.resume_after_search()
+            if folder_monitor is not None:
+                folder_monitor.resume_after_search()
 
     search_viewmodel = SearchViewModel(
         use_case=search_tiles_use_case,

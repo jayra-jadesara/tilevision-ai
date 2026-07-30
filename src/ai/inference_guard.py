@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from contextlib import contextmanager
 from typing import Iterator
 
@@ -19,10 +20,10 @@ logger = logging.getLogger("tilevision.ai.inference_guard")
 
 _INFERENCE_LOCK = threading.RLock()
 
-# Search / query paths should fail fast if indexing holds the lock.
-DEFAULT_SEARCH_LOCK_TIMEOUT_S = 60.0
+# Search / query paths wait for the lock; indexing must yield quickly.
+DEFAULT_SEARCH_LOCK_TIMEOUT_S = 120.0
 # Indexing can wait longer for the lock (search should finish quickly).
-DEFAULT_INDEX_LOCK_TIMEOUT_S = 120.0
+DEFAULT_INDEX_LOCK_TIMEOUT_S = 180.0
 
 # Cooperative yield: indexing waits between work units while search is active.
 _search_priority_count = 0
@@ -120,3 +121,18 @@ def inference_lock_held() -> bool:
         _INFERENCE_LOCK.release()
         return False
     return True
+
+
+def wait_until_inference_idle(*, max_wait_s: float = 90.0, poll_s: float = 0.15) -> bool:
+    """
+    Block until the global inference lock is free (or timeout).
+
+    Used by Search before starting DINOv2 so drop-search is not stuck behind
+    the current indexing forward pass.
+    """
+    deadline = time.monotonic() + float(max_wait_s)
+    while time.monotonic() < deadline:
+        if not inference_lock_held():
+            return True
+        time.sleep(float(poll_s))
+    return not inference_lock_held()

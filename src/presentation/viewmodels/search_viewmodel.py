@@ -20,11 +20,11 @@ from src.presentation.workers.search_worker import SearchWorker
 
 logger = logging.getLogger("tilevision.presentation.viewmodels.search_viewmodel")
 
-# Hard stop so the UI never sits on "Searching..." forever (DINOv2/MPS/lock hangs).
-# Must be longer than the inference lock wait so a yielded search can finish.
-# Desktop clients (Windows / Mac Intel / Mac Silicon) use a longer default because
-# room-photo multi-crop + CPU query embeds need headroom on showroom PCs.
-_SEARCH_TIMEOUT_MS = 120_000
+# Soft status reminder only — do NOT abort a working search on Mac CPU.
+# Hard abort caused false "Search took too long" errors while DINOv2 was still running.
+# Set search_timeout_ms > 0 only for tests that exercise the abort path.
+_SEARCH_TIMEOUT_MS = 0  # 0 = never auto-abort
+_SEARCH_STATUS_HINT_MS = 45_000
 
 
 def _default_search_timeout_ms() -> int:
@@ -88,10 +88,14 @@ class SearchViewModel(QObject):
             if search_timeout_ms is None
             else int(search_timeout_ms)
         )
-        self._search_timeout_ms = max(100, timeout)
+        # 0 disables the abort timer permanently (production default).
+        self._search_timeout_ms = max(0, timeout)
         self._timeout_timer = QTimer(self)
         self._timeout_timer.setSingleShot(True)
         self._timeout_timer.timeout.connect(self._on_search_timeout)
+        self._status_hint_timer = QTimer(self)
+        self._status_hint_timer.setSingleShot(True)
+        self._status_hint_timer.timeout.connect(self._on_search_status_hint)
         self._on_search_busy_changed = on_search_busy_changed
         self._search_priority_held = False
 
@@ -207,14 +211,25 @@ class SearchViewModel(QObject):
             lambda message, gen=generation: self._on_search_failed(message, gen)
         )
         self._worker.search_timed.connect(self._on_search_timed)
+        self._worker.search_progress.connect(self._on_search_progress)
         self._worker.finished.connect(self._worker.deleteLater)
-        self._timeout_timer.start(self._search_timeout_ms)
+        if self._search_timeout_ms > 0:
+            self._timeout_timer.start(self._search_timeout_ms)
+        self._status_hint_timer.start(_SEARCH_STATUS_HINT_MS)
         self._worker.start()
 
     @Slot()
     def clear_results(self) -> None:
         self._timeout_timer.stop()
+        self._status_hint_timer.stop()
         self._search_generation += 1
+        worker = self._worker
+        self._worker = None
+        if worker is not None and worker.isRunning():
+            try:
+                worker.requestInterruption()
+            except Exception:
+                pass
         self._release_search_priority()
         self._last_results = []
         self._last_query_path = None
@@ -254,6 +269,7 @@ class SearchViewModel(QObject):
             logger.info("Ignoring stale search completion (generation %s)", generation)
             return
         self._timeout_timer.stop()
+        self._status_hint_timer.stop()
         self._release_search_priority()
         self._last_results = results
         self._worker = None
@@ -294,14 +310,34 @@ class SearchViewModel(QObject):
             logger.info("Ignoring stale search failure (generation %s)", generation)
             return
         self._timeout_timer.stop()
+        self._status_hint_timer.stop()
         self._release_search_priority()
         self._worker = None
         self._set_state(SearchState.ERROR)
         self.status_message.emit(f"Search failed: {message}")
         self.search_error.emit(message)
 
+    @Slot(str)
+    def _on_search_progress(self, message: str) -> None:
+        if self._state != SearchState.SEARCHING:
+            return
+        self.status_message.emit(message)
+
+    @Slot()
+    def _on_search_status_hint(self) -> None:
+        """Reassure the user — do not abort. Mac CPU can take a minute."""
+        if self._state != SearchState.SEARCHING:
+            return
+        self.status_message.emit(
+            "Still searching… AI matching can take up to a minute on this computer. "
+            "Please wait — results will appear here."
+        )
+
     @Slot()
     def _on_search_timeout(self) -> None:
+        """Optional hard abort (disabled in production; used by unit tests only)."""
+        if self._search_timeout_ms <= 0:
+            return
         if self._state != SearchState.SEARCHING:
             return
         logger.error(
@@ -309,6 +345,7 @@ class SearchViewModel(QObject):
             self._search_timeout_ms / 1000.0,
             self._last_query_path,
         )
+        self._status_hint_timer.stop()
         self._search_generation += 1
         worker = self._worker
         self._worker = None
@@ -321,12 +358,8 @@ class SearchViewModel(QObject):
         self._set_state(SearchState.ERROR)
         message = (
             "Search took too long and was stopped.\n\n"
-            "Drop the image again — Search now uses a faster path.\n\n"
-            "If Indexing is running, pause it first (or wait a few seconds).\n\n"
-            "Also try:\n"
-            "• Auto Crop & Search on room photos\n"
-            "• Restart the app\n"
-            "• Settings → Rebuild FAISS Index if Index shows tiles but search stays empty"
+            "Pause Indexing, then drop the image again.\n\n"
+            "Also try Auto Crop & Search, or restart the app."
         )
         self.status_message.emit("Search timed out.")
         self.search_error.emit(message)

@@ -56,6 +56,17 @@ class TileImageEventHandler(FileSystemEventHandler):
         self._supported_extensions: Set[str] = set(SUPPORTED_IMAGE_EXTENSIONS)
         self._pending_timers: Dict[str, threading.Timer] = {}
         self._timer_lock = threading.Lock()
+        self._paused = threading.Event()  # set => skip auto-index (Search running)
+
+    def pause_for_search(self) -> None:
+        """Stop auto-indexing new files while the user is searching."""
+        self._paused.set()
+        logger.info("Folder monitor paused for Search.")
+
+    def resume_after_search(self) -> None:
+        """Allow auto-indexing again after Search finishes."""
+        self._paused.clear()
+        logger.info("Folder monitor resumed after Search.")
 
     def _is_supported(self, file_path: Path) -> bool:
         return file_path.suffix.lower() in self._supported_extensions
@@ -89,6 +100,13 @@ class TileImageEventHandler(FileSystemEventHandler):
 
     def _process_file(self, file_path_str: str) -> None:
         """Verify file write completion and run indexing."""
+        if self._paused.is_set():
+            logger.info(
+                "Skipping auto-index while Search is active: %s",
+                Path(file_path_str).name,
+            )
+            return
+
         file_path = Path(file_path_str).resolve()
         if not self._is_supported(file_path):
             return
@@ -236,6 +254,16 @@ class FolderMonitorController:
             self.start_monitoring(folders)
         else:
             self.stop_monitoring()
+
+    def pause_for_search(self) -> None:
+        """Pause auto-index while Search runs."""
+        if self._handler is not None:
+            self._handler.pause_for_search()
+
+    def resume_after_search(self) -> None:
+        """Resume auto-index after Search."""
+        if self._handler is not None:
+            self._handler.resume_after_search()
 
     def stop_monitoring(self) -> None:
         if self._observer is not None:
