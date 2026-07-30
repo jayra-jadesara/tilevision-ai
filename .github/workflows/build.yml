@@ -505,7 +505,7 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           replace: true
-            body: |
+          body: |
             ## Important — use in-app update (fast)
 
             Do **not** download the large `.dmg` / `.exe` from this page in Chrome/Safari.
