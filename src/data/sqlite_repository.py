@@ -8,6 +8,8 @@ and domain models.
 from datetime import datetime
 import logging
 import sqlite3
+import threading
+import time
 from pathlib import Path
 from typing import Dict, List, Optional
 import numpy as np
@@ -32,21 +34,31 @@ from src.data.repository_interface import (
 
 logger = logging.getLogger("tilevision.data.sqlite_repository")
 
+# Wall clocks on Windows (and some VMs) can return the same time_ns() value for
+# many successive calls inside one OS tick. Folder recency uses string ORDER BY
+# last_indexed_at, with id DESC as a tie-breaker — and id does NOT change on
+# re-index — so identical timestamps make a re-indexed older folder lose to a
+# newer row id. Force a process-wide strictly increasing nanosecond counter.
+_last_emitted_indexed_ns = 0
+_indexed_ts_lock = threading.Lock()
+
 
 def _utc_timestamp_now() -> str:
     """
     UTC timestamp with nanosecond resolution for stable folder ordering.
 
-    Windows CI (and some hosts) can return identical microsecond timestamps
-    for successive calls within the same clock tick. When two folders then
-    tie on last_indexed_at, ORDER BY id DESC incorrectly prefers the newer
-    row id over a re-indexed older folder. Nanoseconds from time.time_ns()
-    are strictly increasing across rapid successive calls.
+    Guarantees a strictly increasing value within this process even when the
+    host clock is coarse (common on Windows CI runners).
     """
-    import time
-    from datetime import datetime, timezone
+    from datetime import timezone
 
-    ns = time.time_ns()
+    global _last_emitted_indexed_ns
+    with _indexed_ts_lock:
+        ns = time.time_ns()
+        if ns <= _last_emitted_indexed_ns:
+            ns = _last_emitted_indexed_ns + 1
+        _last_emitted_indexed_ns = ns
+
     sec, nsec = divmod(ns, 1_000_000_000)
     dt = datetime.fromtimestamp(sec, timezone.utc)
     return f"{dt.strftime('%Y-%m-%d %H:%M:%S')}.{nsec:09d}"

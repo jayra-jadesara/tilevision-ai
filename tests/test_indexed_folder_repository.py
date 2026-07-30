@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -64,6 +65,23 @@ def test_rapid_reindex_ordering_is_stable(tmp_path):
         repo.record_folder_indexed("/tiles/B")
         repo.record_folder_indexed("/tiles/A")
         assert repo.get_last_indexed_folder().folder_path == "/tiles/A"
+
+
+def test_reindex_ordering_survives_coarse_wall_clock(tmp_path):
+    """
+    Simulate Windows-style coarse clocks where time.time_ns() returns the same
+    value for many successive calls. Recency must still prefer the re-indexed
+    folder (A), not the higher row id (B).
+    """
+    repo = _repo(tmp_path)
+    frozen_ns = 1_700_000_000_123_456_789
+
+    with mock.patch("time.time_ns", return_value=frozen_ns):
+        repo.record_folder_indexed("/tiles/A")
+        repo.record_folder_indexed("/tiles/B")
+        repo.record_folder_indexed("/tiles/A")
+
+    assert repo.get_last_indexed_folder().folder_path == "/tiles/A"
 
 
 def test_recording_same_folder_twice_does_not_duplicate_rows(tmp_path):
