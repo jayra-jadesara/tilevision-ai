@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 import numpy as np
 
@@ -32,6 +32,22 @@ from src.utils.image_utils import (
     get_thumbnail_path,
 )
 from src.utils.pipeline_timing import PipelineTimer
+from src.utils.search_stages import (
+    STAGE_EMBEDDING_CACHE_HIT,
+    STAGE_EMBEDDING_GENERATED,
+    STAGE_EMBEDDING_NORMALIZED,
+    STAGE_FAISS_SEARCH,
+    STAGE_HEALTH_OK,
+    STAGE_IMAGE_DECODED,
+    STAGE_PREPROCESS_COMPLETE,
+    STAGE_RERANK_COMPLETE,
+    STAGE_RESULTS_READY,
+    STAGE_SQLITE_HYDRATE,
+    STAGE_THUMBNAILS_QUEUED,
+    STAGE_WEAK_FILTER,
+    log_search_failure,
+    log_search_stage,
+)
 from src.ai.preprocess.image_preprocessor import ImagePreprocessor
 
 logger = logging.getLogger("tilevision.core.use_cases.search_tiles")
@@ -159,15 +175,21 @@ class SearchTilesUseCase:
         """Return how many vectors FAISS can actually search right now."""
         try:
             return int(self._index.get_total_count())
+        except InferenceBusyError:
+            # Caller must treat busy separately from an empty index.
+            raise
         except Exception as exc:
             logger.warning("Could not read FAISS searchable count: %s", exc)
-            return 0
+            raise RuntimeError(
+                f"Could not read the searchable vector index: {exc}"
+            ) from exc
 
     def execute(
         self,
         query_image_path: str,
         top_k: int = 20,
         filters: Optional[Dict[str, str]] = None,
+        on_stage: Optional[Callable[[str], None]] = None,
     ) -> List[SearchResult]:
         """
         Execute visual similarity search for a query tile image.
@@ -181,6 +203,7 @@ class SearchTilesUseCase:
                 must be in _ALLOWED_FILTER_FIELDS; unknown keys are ignored
                 (not treated as an error, since a UI might pass a superset
                 of possible filter widgets where some are left at "Any").
+            on_stage: Optional callback(str) for UI progress breadcrumbs.
 
         Returns:
             A list of SearchResult objects sorted by similarity score descending.
@@ -194,6 +217,9 @@ class SearchTilesUseCase:
             k: v for k, v in (filters or {}).items()
             if k in _ALLOWED_FILTER_FIELDS and v
         }
+
+        def stage(name: str, detail: str = "") -> None:
+            log_search_stage(logger, name, detail=detail, on_stage=on_stage)
 
         logger.info(
             f"Initiating similarity search query for: {query_path.name} "
@@ -209,6 +235,24 @@ class SearchTilesUseCase:
             )
 
         try:
+            # Ensure DINOv2 weights are loaded before decode/embed.
+            if hasattr(self._feature_extractor, "load_model"):
+                self._feature_extractor.load_model()
+
+            # Ensure FAISS is loaded and dimension matches production embeddings.
+            if getattr(self._index, "_index", None) is None:
+                self._index.load_index()
+            index_dim = int(self._index.embedding_dimension())
+            from src.ai.feature_versions import CURRENT_EMBEDDING_DIMENSION
+
+            if index_dim != CURRENT_EMBEDDING_DIMENSION:
+                raise RuntimeError(
+                    f"FAISS embedding dimension {index_dim} does not match "
+                    f"DINOv2 dimension {CURRENT_EMBEDDING_DIMENSION}. "
+                    "Rebuild FAISS Index."
+                )
+            stage(STAGE_HEALTH_OK, f"faiss_dim={index_dim}")
+
             timer = PipelineTimer("SEARCH TIMING")
 
             # ── 1. Resolve query features (memory cache → catalog → embed) ──
@@ -230,6 +274,7 @@ class SearchTilesUseCase:
                 timer.timings.record("crop", 0.0)
                 timer.timings.record("embedding", 0.0)
                 timer.timings.record("descriptors", 0.0)
+                stage(STAGE_EMBEDDING_CACHE_HIT, query_path.name)
                 logger.info(
                     "Reusing cached query embedding: %s",
                     query_path.name,
@@ -253,6 +298,7 @@ class SearchTilesUseCase:
                     timer.timings.record("crop", 0.0)
                     timer.timings.record("embedding", 0.0)
                     timer.timings.record("descriptors", 0.0)
+                    stage(STAGE_EMBEDDING_CACHE_HIT, f"catalog:{query_path.name}")
                     logger.info(
                         "Reusing indexed features for catalog query: %s",
                         query_path.name,
@@ -264,6 +310,7 @@ class SearchTilesUseCase:
                     try:
                         preloaded_image = ImagePreprocessor.load(query_path)
                     except Exception as exc:
+                        log_search_failure(logger, STAGE_IMAGE_DECODED, exc)
                         raise ValueError(
                             f"Selected file is not a valid, readable image: "
                             f"{query_path.name}"
@@ -271,6 +318,7 @@ class SearchTilesUseCase:
                     if not query_sha256:
                         query_sha256 = compute_sha256(query_path)
                     query_dhash = compute_dhash_from_image(preloaded_image)
+                stage(STAGE_IMAGE_DECODED, query_path.name)
 
                 logger.info("Computing embedding for query image...")
                 extract_for_search = getattr(
@@ -287,6 +335,15 @@ class SearchTilesUseCase:
                         for_query=True,
                     )
                     query_embeddings = [query_features.embedding]
+                if query_features is None or not query_embeddings:
+                    raise RuntimeError(
+                        "DINOv2 embedding generation returned no vectors for the query image."
+                    )
+                stage(STAGE_PREPROCESS_COMPLETE)
+                stage(
+                    STAGE_EMBEDDING_GENERATED,
+                    f"crops={len(query_embeddings)} dim={len(query_features.embedding)}",
+                )
                 extract_timings = self._feature_extractor.last_timings
                 # Map internal extract stages onto the required profile labels.
                 timer.timings.record("crop", extract_timings.preprocessing)
@@ -302,6 +359,18 @@ class SearchTilesUseCase:
             if not query_sha256:
                 with timer.measure("image_load"):
                     query_sha256 = compute_sha256(query_path)
+
+            # Normalize sanity — FAISS search also L2-normalizes; log explicitly.
+            emb0 = np.asarray(
+                query_embeddings[0] if query_embeddings else query_features.embedding,
+                dtype=np.float32,
+            )
+            norm = float(np.linalg.norm(emb0))
+            if not np.isfinite(norm) or norm < 1e-8:
+                raise RuntimeError(
+                    "Query embedding is empty or not finite after DINOv2 — cannot search."
+                )
+            stage(STAGE_EMBEDDING_NORMALIZED, f"norm={norm:.4f}")
 
             # ----------------------------------------
             # Detect query pattern type
@@ -335,13 +404,19 @@ class SearchTilesUseCase:
             if active_filters:
                 filtered_ids = set(self._repo.get_ids_matching_filters(active_filters))
                 if not filtered_ids:
-                    logger.info(
+                    logger.warning(
                         "No indexed tiles match metadata filters: %s",
                         active_filters,
                     )
-                    return []
+                    raise RuntimeError(
+                        "No indexed tiles match the active search filters "
+                        f"({active_filters}).\n\n"
+                        "Clear Brand/Category/Color/Size filters (set to Any), "
+                        "then drop your image again."
+                    )
 
             candidates: List[TileImage] = []
+            matching_ids: List[int] = []
 
             if filtered_ids is not None and len(filtered_ids) <= _FILTERED_FULL_RERANK_CAP:
                 logger.info(
@@ -353,6 +428,10 @@ class SearchTilesUseCase:
                 candidates = [
                     tile for tile in matched_tiles if tile.features is not None
                 ]
+                stage(
+                    STAGE_SQLITE_HYDRATE,
+                    f"{len(candidates)} feature-ready of {len(matched_tiles)} filtered",
+                )
             else:
                 search_k = self._compute_faiss_search_k(top_k, total_vectors)
 
@@ -376,9 +455,11 @@ class SearchTilesUseCase:
                     )
 
                 if not matching_ids:
+                    stage(STAGE_FAISS_SEARCH, "0 IDs")
                     logger.info("No matching records found in vector index.")
                     return []
 
+                stage(STAGE_FAISS_SEARCH, f"{len(matching_ids)} IDs")
                 logger.info(
                     "Retrieving database metadata for matching IDs: %s",
                     matching_ids,
@@ -387,16 +468,36 @@ class SearchTilesUseCase:
                     matched_tiles = self._repo.get_by_ids(matching_ids)
 
                 tile_map = {t.id: t for t in matched_tiles if t.id is not None}
+                missing_ids = 0
+                missing_features = 0
 
                 for record_id in matching_ids:
                     tile = tile_map.get(record_id)
                     if tile is None:
+                        missing_ids += 1
                         continue
                     if filtered_ids is not None and record_id not in filtered_ids:
                         continue
                     if not self._matches_filters(tile, active_filters):
                         continue
+                    if tile.features is None:
+                        missing_features += 1
+                        continue
                     candidates.append(tile)
+
+                stage(
+                    STAGE_SQLITE_HYDRATE,
+                    f"{len(candidates)} records "
+                    f"(missing_ids={missing_ids}, missing_features={missing_features})",
+                )
+
+                if matching_ids and not candidates:
+                    raise RuntimeError(
+                        "FAISS returned similar tiles but none could be loaded from SQLite "
+                        f"(missing rows={missing_ids}, incomplete features={missing_features}).\n\n"
+                        "The catalogue index is out of sync. Go to Settings → Rebuild FAISS Index, "
+                        "then search again."
+                    )
 
             logger.info(
                 "Candidates for reranking: %d",
@@ -479,8 +580,16 @@ class SearchTilesUseCase:
                 key=lambda item: item[0],
                 reverse=True,
             )
+            stage(STAGE_RERANK_COMPLETE, f"{len(reranked)} candidates")
+
+            if candidates and not reranked:
+                raise RuntimeError(
+                    "Candidates were found but hybrid reranking produced no scored tiles. "
+                    "Rebuild FAISS Index or re-index the catalogue folder."
+                )
 
             reranked = self._filter_weak_results(reranked, top_k)
+            stage(STAGE_WEAK_FILTER, f"kept {len(reranked)}")
 
             results: List[SearchResult] = []
 
@@ -504,11 +613,14 @@ class SearchTilesUseCase:
                         )
                     )
 
+            stage(STAGE_THUMBNAILS_QUEUED, f"{len(results)}")
+            stage(STAGE_RESULTS_READY, f"{len(results)} results")
             timer.log_summary(log=logger)
             return results
         except InferenceBusyError:
             raise
         except Exception as e:
+            log_search_failure(logger, "execute", e)
             logger.error(f"Failed to execute tile search query: {e}")
             raise RuntimeError(f"Visual similarity search execution error: {e}") from e
 
@@ -587,6 +699,10 @@ class SearchTilesUseCase:
         """
         Remove weak tail results so unrelated catalog tiles are not shown
         just to fill top_k in a small showroom database.
+
+        Reliability: never return an empty list when FAISS+rerank produced
+        candidates — always keep at least the best match so a valid drop
+        cannot silently become "no results".
         """
         if not reranked:
             return []
@@ -610,10 +726,24 @@ class SearchTilesUseCase:
             if len(kept) >= top_k:
                 break
 
-        logger.info(
-            "Weak-result filter: kept %d of %d candidates (min_raw=%.3f)",
-            len(kept),
-            len(reranked),
-            min_raw,
-        )
+        if not kept:
+            # Always surface the strongest match rather than an empty UI.
+            keep_n = min(max(1, min(3, top_k)), len(reranked))
+            kept = list(reranked[:keep_n])
+            logger.warning(
+                "Weak-result filter would have kept 0 of %d — "
+                "retaining top %d match(es) so search is never empty "
+                "(best_score=%.3f, min_raw=%.3f)",
+                len(reranked),
+                keep_n,
+                reranked[0][0],
+                min_raw,
+            )
+        else:
+            logger.info(
+                "Weak-result filter: kept %d of %d candidates (min_raw=%.3f)",
+                len(kept),
+                len(reranked),
+                min_raw,
+            )
         return kept

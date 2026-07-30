@@ -10,9 +10,13 @@ import logging
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from PySide6.QtCore import QObject, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, QTimer, Qt, Signal, Slot
 
-from src.ai.inference_guard import begin_search_priority, end_search_priority
+from src.ai.inference_guard import (
+    InferenceBusyError,
+    begin_search_priority,
+    end_search_priority,
+)
 from src.core.models import SearchResult, SearchHistoryEntry
 from src.core.use_cases.search_tiles import SearchTilesUseCase
 from src.data.repository_interface import ISearchHistoryRepository, IActivityLogRepository
@@ -105,6 +109,7 @@ class SearchViewModel(QObject):
         self._stall_timer.timeout.connect(self._on_search_stall)
         self._on_search_busy_changed = on_search_busy_changed
         self._search_priority_held = False
+        self._pending_query_path: Optional[str] = None
 
     @property
     def state(self) -> str:
@@ -151,14 +156,35 @@ class SearchViewModel(QObject):
 
     @Slot(str)
     def search_by_image(self, image_path: str) -> None:
-        if self._state == SearchState.SEARCHING:
-            logger.warning("Search already in progress; ignoring new search request.")
+        path = Path(image_path)
+        if not path.exists() or not path.is_file():
+            self._set_state(SearchState.ERROR)
+            self.search_error.emit(f"Selected file does not exist: {image_path}")
+            self.status_message.emit("Search failed: file not found.")
+            logger.warning("[SEARCH] Drop/path rejected — file missing: %s", image_path)
             return
+
+        if self._state == SearchState.SEARCHING:
+            # Do not drop the user's second image — run it when the current one finishes.
+            self._pending_query_path = str(path)
+            logger.warning(
+                "[SEARCH] Search already in progress; queued next query: %s",
+                path.name,
+            )
+            self.status_message.emit(
+                f"Search in progress — will search '{path.name}' next…"
+            )
+            return
+
+        # Claim priority BEFORE FAISS health probes so indexing yields the lock
+        # instead of the UI mistaking a busy lock for an empty index.
+        self._claim_search_priority()
 
         try:
             health = self._use_case.get_index_health()
             indexed = int(getattr(health, "indexed_count", 0) or 0)
             if indexed <= 0:
+                self._release_search_priority()
                 self._set_state(SearchState.NO_RESULTS)
                 self.results_ready.emit([])
                 self.status_message.emit(
@@ -171,6 +197,7 @@ class SearchViewModel(QObject):
                 )
                 return
             if not health.is_compatible and health.stale_count > 0:
+                self._release_search_priority()
                 self._set_state(SearchState.ERROR)
                 self.search_error.emit(
                     "Indexed features are outdated. "
@@ -180,8 +207,15 @@ class SearchViewModel(QObject):
                 )
                 self.status_message.emit("Search blocked: index is outdated.")
                 return
-            searchable = self._use_case.get_searchable_count()
-            if searchable <= 0:
+            try:
+                searchable = self._use_case.get_searchable_count()
+            except InferenceBusyError:
+                logger.warning(
+                    "[SEARCH] FAISS busy during health check — continuing; worker will wait."
+                )
+                searchable = None
+            if searchable is not None and searchable <= 0:
+                self._release_search_priority()
                 self._set_state(SearchState.ERROR)
                 self.search_error.emit(
                     "Catalog metadata is present but the searchable vector index is empty.\n\n"
@@ -191,14 +225,11 @@ class SearchViewModel(QObject):
                 self.status_message.emit("Search blocked: vector index is empty.")
                 return
         except Exception as exc:
-            logger.warning("Could not verify feature index health: %s", exc)
-
-        path = Path(image_path)
-        if not path.exists() or not path.is_file():
-            self._set_state(SearchState.ERROR)
-            self.search_error.emit(f"Selected file does not exist: {image_path}")
-            self.status_message.emit("Search failed: file not found.")
-            return
+            # Non-fatal: worker will re-validate and surface a clear error.
+            logger.warning(
+                "[SEARCH] Could not verify feature index health (continuing): %s",
+                exc,
+            )
 
         self._last_query_path = str(path)
         self.query_image_selected.emit(str(path))
@@ -206,9 +237,9 @@ class SearchViewModel(QObject):
         self._search_generation += 1
         generation = self._search_generation
 
-        self._claim_search_priority()
         self._set_state(SearchState.SEARCHING)
         self.status_message.emit(f"Searching for tiles similar to '{path.name}'...")
+        logger.info("[SEARCH] Starting worker for %s (generation=%s)", path.name, generation)
 
         self._worker = SearchWorker(self._use_case, str(path), self._top_k, self._active_filters)
         self._worker.search_completed.connect(
@@ -219,19 +250,31 @@ class SearchViewModel(QObject):
         )
         self._worker.search_timed.connect(self._on_search_timed)
         self._worker.search_progress.connect(self._on_search_progress)
-        self._worker.search_heartbeat.connect(self._on_search_heartbeat)
-        self._worker.finished.connect(self._worker.deleteLater)
+        self._worker.search_heartbeat.connect(
+            self._on_search_heartbeat,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        worker = self._worker
+        worker.finished.connect(worker.deleteLater)
         if self._search_timeout_ms > 0:
             self._timeout_timer.start(self._search_timeout_ms)
         self._status_hint_timer.start(_SEARCH_STATUS_HINT_MS)
         self._stall_timer.start(_SEARCH_STALL_MS)
         self._worker.start()
 
+    def _start_pending_search_if_any(self) -> None:
+        pending = self._pending_query_path
+        self._pending_query_path = None
+        if pending and self._state != SearchState.SEARCHING:
+            logger.info("[SEARCH] Starting queued query: %s", pending)
+            self.search_by_image(pending)
+
     @Slot()
     def clear_results(self) -> None:
         self._timeout_timer.stop()
         self._status_hint_timer.stop()
         self._stall_timer.stop()
+        self._pending_query_path = None
         self._search_generation += 1
         worker = self._worker
         self._worker = None
@@ -288,12 +331,14 @@ class SearchViewModel(QObject):
         if results:
             self._set_state(SearchState.RESULTS)
             self.status_message.emit(f"Found {len(results)} similar tile(s).")
+            logger.info("[SEARCH] Results displayed: %d", len(results))
         else:
             self._set_state(SearchState.NO_RESULTS)
             self.status_message.emit(
                 "No similar tiles found in the indexed catalog. "
                 "Try another photo, Auto Crop, or check that your catalogue is indexed."
             )
+            logger.warning("[SEARCH] Completed with 0 results for %s", self._last_query_path)
 
         self.results_ready.emit(results)
         self.search_stats_ready.emit(len(results), self._last_elapsed_seconds)
@@ -316,6 +361,8 @@ class SearchViewModel(QObject):
             except Exception as e:
                 logger.error(f"Failed to record search activity: {e}")
 
+        self._start_pending_search_if_any()
+
     def _on_search_failed(self, message: str, generation: int = 0) -> None:
         if generation and generation != self._search_generation:
             logger.info("Ignoring stale search failure (generation %s)", generation)
@@ -325,9 +372,21 @@ class SearchViewModel(QObject):
         self._stall_timer.stop()
         self._release_search_priority()
         self._worker = None
+
+        # User-initiated cancel / clear — do not show a scary error dialog.
+        if message == "Search cancelled":
+            if self._state == SearchState.SEARCHING:
+                self._set_state(SearchState.IDLE)
+                self.status_message.emit("Search cancelled.")
+            logger.info("[SEARCH] Worker reported cancel for generation %s", generation)
+            self._start_pending_search_if_any()
+            return
+
         self._set_state(SearchState.ERROR)
         self.status_message.emit(f"Search failed: {message}")
         self.search_error.emit(message)
+        logger.error("[SEARCH] Failed: %s", message)
+        self._start_pending_search_if_any()
 
     @Slot(str)
     def _on_search_progress(self, message: str) -> None:
