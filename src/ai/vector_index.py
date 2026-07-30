@@ -60,7 +60,9 @@ class FaissIndexManager:
             logger.critical("faiss package is not installed! Cannot load index.")
             raise ImportError("faiss-cpu package is required for FaissIndexManager.")
 
-        # Parallelize FlatIP / HNSW distance scans for large catalogs (100k+).
+        # Parallelize FlatIP distance scans (exact O(n·d) search).
+        # This is IndexFlatIP — NOT IVF/HNSW/PQ. OpenMP speeds linear scan;
+        # asymptotic complexity remains O(n) in catalog size.
         try:
             import os
 
@@ -87,12 +89,43 @@ class FaissIndexManager:
                 self._create_new_index()
 
     def _create_new_index(self) -> None:
-        """Initialize a new IndexIDMap with a flat Inner Product (Cosine Similarity) index."""
-        # Flat Inner Product index
+        """
+        Initialize a new IndexIDMap wrapping IndexFlatIP.
+
+        FlatIP performs exact inner-product (cosine on L2-normalized vectors)
+        search in O(n·d). Approximate indexes (IVF/HNSW/PQ) are not used so
+        showroom recall stays exact and rebuilds stay simple.
+        """
+        # Flat Inner Product index — exact search, O(n·d)
         flat_index = faiss.IndexFlatIP(self._dimension)
         # IDMap allows mapping SQLite database IDs (non-consecutive) to vectors
         self._index = faiss.IndexIDMap(flat_index)
-        logger.info(f"New empty FAISS ID-mapped index initialized (dimension={self._dimension}).")
+        logger.info(
+            "New empty FAISS IndexIDMap(IndexFlatIP) initialized "
+            "(dimension=%d, complexity=O(n·d) exact).",
+            self._dimension,
+        )
+
+    def index_type_name(self) -> str:
+        """Human-readable FAISS index type for profiling (e.g. IndexFlatIP)."""
+        if self._index is None:
+            try:
+                self.load_index()
+            except Exception:
+                return "unloaded"
+        idx = self._index
+        try:
+            if faiss is not None and hasattr(idx, "index"):
+                inner = faiss.downcast_index(idx.index)
+                return f"IndexIDMap({type(inner).__name__})"
+            if faiss is not None:
+                return type(faiss.downcast_index(idx)).__name__
+            return type(idx).__name__
+        except Exception:
+            return type(idx).__name__ if idx is not None else "unloaded"
+
+    def embedding_dimension(self) -> int:
+        return int(self._dimension)
 
     def add_vectors(self, ids: List[int], vectors: List[List[float]], persist: bool = True) -> None:
         """
@@ -215,7 +248,11 @@ class FaissIndexManager:
         """
         if self._index is None:
             self.load_index()
-        return int(self._index.ntotal) if self._index is not None else 0
+        # Brief lock so concurrent add/remove cannot tear the read.
+        with synchronized_inference(
+            timeout=DEFAULT_SEARCH_LOCK_TIMEOUT_S, purpose="FAISS ntotal"
+        ):
+            return int(self._index.ntotal) if self._index is not None else 0
 
     def search_vectors(self, query_vector: List[float], top_k: int) -> Tuple[List[int], List[float]]:
         """

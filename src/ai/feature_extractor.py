@@ -39,7 +39,7 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import List
+from typing import List, TYPE_CHECKING
 
 import numpy as np
 
@@ -50,6 +50,9 @@ from src.ai.descriptors.color_descriptor import ColorDescriptor
 from src.ai.descriptors.texture_descriptor import TextureDescriptor
 from src.ai.descriptors.edge_descriptor import EdgeDescriptor
 from src.ai.descriptors.pattern_descriptor import PatternDescriptor
+
+if TYPE_CHECKING:
+    from PIL import Image
 
 logger = logging.getLogger("tilevision.ai.feature_extractor")
 
@@ -280,17 +283,26 @@ class FeatureExtractor:
     def extract_for_search(
         self,
         image_path: str,
+        *,
+        preloaded: Image.Image | None = None,
     ) -> tuple[TileFeatures, list[np.ndarray]]:
         """
         Query-only: one preprocess + one DINOv2 vector (reliable on Mac CPU).
 
         Multi-crop OpenCV recall is available via Auto Crop / Precise Crop.
         Drop-search must stay single-pass so results always return.
+
+        Pass ``preloaded`` so the search use-case can decode the query once
+        and reuse it for dHash + embedding.
         """
         total_start = time.perf_counter()
         t0 = time.perf_counter()
         # Always one view — never stack multi-crop DINOv2 on the drop path.
-        views = ImagePreprocessor.prepare_query_views(image_path, max_views=1)
+        views = ImagePreprocessor.prepare_query_views(
+            image_path,
+            max_views=1,
+            preloaded=preloaded,
+        )
         preprocess_elapsed = time.perf_counter() - t0
 
         embeddings: list[np.ndarray] = []

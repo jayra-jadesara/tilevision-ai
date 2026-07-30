@@ -407,6 +407,8 @@ class ImagePreprocessor:
     def preprocess_for_query(
         cls,
         image_path: str | Path,
+        *,
+        preloaded: Image.Image | None = None,
     ) -> PreprocessedImage:
         """
         Search-only preprocessing with extra handling for scene/room photos.
@@ -417,9 +419,12 @@ class ImagePreprocessor:
         Room photos use fast OpenCV tile-region isolation (no SAM on drop),
         then optional perspective straighten. Clean catalogue tiles skip that
         path. Use Precise Crop & Search for ONNX SAM2 on hard room photos.
+
+        Pass ``preloaded`` to avoid a second disk decode when the caller
+        already opened the image (dHash / validation).
         """
         path = Path(image_path)
-        image = cls.load(path)
+        image = preloaded if preloaded is not None else cls.load(path)
         original_width, original_height = image.size
 
         image = cls.to_rgb(image)
@@ -453,6 +458,7 @@ class ImagePreprocessor:
         image_path: str | Path,
         *,
         max_views: int = 3,
+        preloaded: Image.Image | None = None,
     ) -> list[PreprocessedImage]:
         """
         Build 1–N query views for multi-crop embedding (search-only).
@@ -461,6 +467,8 @@ class ImagePreprocessor:
         alternate OpenCV tile candidates when the photo looks like a room scene.
         On Mac (Intel + Silicon) and Windows CPU, cap extras so DINOv2 query
         latency stays reasonable and search does not feel stuck.
+
+        Pass ``preloaded`` so drop-search can decode the query file once.
         """
         path = Path(image_path)
         try:
@@ -468,7 +476,7 @@ class ImagePreprocessor:
         except Exception:
             max_views = min(int(max_views), 2)
 
-        primary = cls.preprocess_for_query(path)
+        primary = cls.preprocess_for_query(path, preloaded=preloaded)
         views = [primary]
 
         # Drop-search uses max_views=1 — never re-decode for unused extra crops.
@@ -478,9 +486,9 @@ class ImagePreprocessor:
         if "tilevision_crops" in path.as_posix().lower():
             return views
 
-        # Extra views need an unletterboxed RGB working copy. Primary is
-        # already letterboxed, so reload once only when multi-crop is needed.
-        image = cls.load(path)
+        # Extra views need an unletterboxed RGB working copy. Reuse the
+        # caller's preloaded image when available; otherwise load once.
+        image = preloaded.copy() if preloaded is not None else cls.load(path)
         image = cls.to_rgb(image)
         image = cls.trim_uniform_borders(image)
         image = cls.crop_to_content_region(image, min_margin_ratio=0.05)

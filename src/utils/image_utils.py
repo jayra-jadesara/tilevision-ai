@@ -178,28 +178,35 @@ def compute_dhash(image_path: Path) -> str:
     """
     try:
         with Image.open(image_path) as img:
-            # Resize to 9x8, converting to grayscale
-            img_gray = img.convert("L").resize((9, 8), Image.Resampling.BILINEAR)
-            pixels = list(img_gray.getdata())
-            
-            # Difference calculation
-            diff = []
-            for row in range(8):
-                for col in range(8):
-                    pixel_left = pixels[row * 9 + col]
-                    pixel_right = pixels[row * 9 + col + 1]
-                    diff.append(pixel_left > pixel_right)
-                    
-            # Convert binary list to hex string
-            decimal_value = 0
-            for index, value in enumerate(diff):
-                if value:
-                    decimal_value += 1 << index
-                    
-            # Format as 16-character hex padded with leading zeros
-            return f"{decimal_value:016x}"
+            return compute_dhash_from_image(img)
     except Exception as e:
         logger.error(f"Failed to compute dHash for {image_path}: {e}")
+        return ""
+
+
+def compute_dhash_from_image(image: Image.Image) -> str:
+    """
+    Compute dHash from an already-decoded PIL image (no disk reopen).
+    """
+    try:
+        img_gray = image.convert("L").resize((9, 8), Image.Resampling.BILINEAR)
+        pixels = list(img_gray.getdata())
+
+        diff = []
+        for row in range(8):
+            for col in range(8):
+                pixel_left = pixels[row * 9 + col]
+                pixel_right = pixels[row * 9 + col + 1]
+                diff.append(pixel_left > pixel_right)
+
+        decimal_value = 0
+        for index, value in enumerate(diff):
+            if value:
+                decimal_value += 1 << index
+
+        return f"{decimal_value:016x}"
+    except Exception as e:
+        logger.error(f"Failed to compute dHash from image: {e}")
         return ""
 
 

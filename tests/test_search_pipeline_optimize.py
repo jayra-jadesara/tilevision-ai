@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import numpy as np
+import pytest
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -17,6 +18,7 @@ from src.ai.query_cache import QUERY_EMBEDDING_CACHE, QueryEmbeddingCache
 from src.core.models import TileImage
 from src.core.use_cases.search_tiles import SearchTilesUseCase
 from src.utils.pipeline_timing import PipelineTimer
+from src.utils.image_utils import compute_dhash, compute_dhash_from_image
 
 
 def _features() -> TileFeatures:
@@ -151,6 +153,12 @@ def test_find_catalog_tile_by_stem_uses_sql_helper():
 
 def test_pipeline_timer_prints_required_labels(capsys):
     timer = PipelineTimer("SEARCH TIMING")
+    timer.set_meta(
+        cache="miss",
+        catalog_size=100000,
+        faiss_index="IndexIDMap(IndexFlatIP)",
+        embedding_dim=1024,
+    )
     timer.timings.record("image_load", 0.045)
     timer.timings.record("crop", 0.080)
     timer.timings.record("embedding", 0.310)
@@ -165,7 +173,22 @@ def test_pipeline_timer_prints_required_labels(capsys):
     assert "FAISS" in out
     assert "SQLite" in out
     assert "Thumbnail" in out
+    assert "Cache" in out
+    assert "Catalog Size" in out
+    assert "FAISS Index" in out
+    assert "Embedding Dim" in out
+    assert "Thread ID" in out
     assert "TOTAL" in out
+
+
+def test_faiss_index_type_is_flat_ip(tmp_path):
+    faiss = pytest.importorskip("faiss")
+    from src.ai.vector_index import FaissIndexManager
+
+    manager = FaissIndexManager(str(tmp_path / "t.index"), dimension=8)
+    manager.load_index()
+    assert manager.index_type_name() == "IndexIDMap(IndexFlatIP)"
+    assert manager.embedding_dimension() == 8
 
 
 def test_global_query_cache_roundtrip(tmp_path):
@@ -201,3 +224,23 @@ def test_sqlite_stem_lookup_avoids_full_scan(tmp_path):
     assert found.id == tile_id
     assert found.file_name == "marble-white-60x60.jpg"
     assert repo.get_indexed_by_file_stem("missing-product") is None
+
+
+def test_dhash_from_image_matches_path_hash(tmp_path):
+    path = tmp_path / "tile.jpg"
+    Image.new("RGB", (64, 64), color=(40, 80, 120)).save(path)
+    with Image.open(path) as img:
+        from_mem = compute_dhash_from_image(img)
+    from_path = compute_dhash(path)
+    assert from_mem == from_path
+    assert len(from_mem) == 16
+
+
+def test_query_cache_key_uses_abs_path_size_mtime(tmp_path):
+    path = tmp_path / "tile.jpg"
+    Image.new("RGB", (16, 16), color=(1, 2, 3)).save(path)
+    key = QueryEmbeddingCache.key_for_path(path)
+    assert key is not None
+    assert Path(key.path).is_absolute()
+    assert key.size == path.stat().st_size
+    assert key.mtime_ns == path.stat().st_mtime_ns

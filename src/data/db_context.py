@@ -215,17 +215,20 @@ class DatabaseContext:
     @contextmanager
     def session(self) -> Generator[sqlite3.Connection, None, None]:
         """
-        Context manager for acquiring a SQLite connection.
-        
-        Handles committing transactions and closing connections cleanly.
-        Yields a sqlite3.Connection object.
+        Open a short-lived SQLite connection for one transactional unit of work.
+
+        Connections are NEVER shared across threads:
+        - Each ``with session()`` call creates a fresh connection on the calling
+          thread and closes it on exit.
+        - ``check_same_thread=True`` enforces that this connection object is
+          only used on the thread that opened it.
+        Concurrent search/index workers therefore each hold independent
+        connections; SQLite file locking serializes writers.
         """
-        # check_same_thread=False is allowed if we guarantee single-thread access per session.
-        # SQLite handles file locking automatically.
         conn = sqlite3.connect(
             str(self._db_path),
             timeout=30.0,  # 30-second timeout for busy locks
-            check_same_thread=False
+            check_same_thread=True,
         )
         # Enable foreign keys and row factory for dict-like rows if desired
         conn.execute("PRAGMA foreign_keys = ON;")

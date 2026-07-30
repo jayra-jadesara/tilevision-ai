@@ -9,6 +9,7 @@ keeping the UI thread fully responsive while DINOv2 runs inference.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Optional
 
@@ -17,6 +18,9 @@ from PySide6.QtCore import QThread, Signal
 from src.core.use_cases.search_tiles import SearchTilesUseCase
 
 logger = logging.getLogger("tilevision.presentation.workers.search_worker")
+
+# Heartbeat interval while Search is running (stall detector uses this).
+_HEARTBEAT_INTERVAL_S = 5.0
 
 
 class SearchWorker(QThread):
@@ -31,6 +35,8 @@ class SearchWorker(QThread):
     search_timed = Signal(float)
     # Human-readable stage for the status line (never abort on its own).
     search_progress = Signal(str)
+    # Periodic liveness pulse during long DINOv2 / FAISS work.
+    search_heartbeat = Signal()
 
     def __init__(
         self,
@@ -49,6 +55,20 @@ class SearchWorker(QThread):
         """Execute the search in the background thread."""
         logger.info("Search QThread started for query image: %s", self._query_image_path)
         start_time = time.monotonic()
+        stop_heartbeat = threading.Event()
+
+        def _heartbeat_loop() -> None:
+            while not stop_heartbeat.wait(_HEARTBEAT_INTERVAL_S):
+                if self.isInterruptionRequested():
+                    return
+                self.search_heartbeat.emit()
+
+        heartbeat_thread = threading.Thread(
+            target=_heartbeat_loop,
+            name="search-heartbeat",
+            daemon=True,
+        )
+        heartbeat_thread.start()
 
         try:
             if self.isInterruptionRequested():
@@ -61,6 +81,7 @@ class SearchWorker(QThread):
             )
 
             self.search_progress.emit("Pausing Indexing so Search can run…")
+            self.search_heartbeat.emit()
             # Let any in-flight indexing forward finish / yield.
             idle = wait_until_inference_idle(max_wait_s=90.0)
             if not idle:
@@ -71,6 +92,7 @@ class SearchWorker(QThread):
                 return
 
             self.search_progress.emit("Running AI match (this may take a moment on CPU)…")
+            self.search_heartbeat.emit()
 
             results = None
             last_error: Exception | None = None
@@ -95,6 +117,7 @@ class SearchWorker(QThread):
                     self.search_progress.emit(
                         f"AI engine busy (attempt {attempt}/3) — waiting for Indexing…"
                     )
+                    self.search_heartbeat.emit()
                     wait_until_inference_idle(max_wait_s=45.0)
                     time.sleep(0.5)
                     continue
@@ -112,6 +135,7 @@ class SearchWorker(QThread):
                 return
 
             self.search_progress.emit("Building results…")
+            self.search_heartbeat.emit()
             logger.info(
                 "Search QThread finished in %.3fs. Results: %d",
                 elapsed,
@@ -129,3 +153,5 @@ class SearchWorker(QThread):
                 return
             logger.error("Search worker failed for query '%s': %s", self._query_image_path, e)
             self.search_failed.emit(str(e))
+        finally:
+            stop_heartbeat.set()

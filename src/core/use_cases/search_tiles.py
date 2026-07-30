@@ -27,11 +27,12 @@ from src.ai.vector_index import FaissIndexManager
 from src.utils.image_utils import (
     compute_sha256,
     compute_dhash,
+    compute_dhash_from_image,
     hamming_distance,
     get_thumbnail_path,
-    validate_image,
 )
 from src.utils.pipeline_timing import PipelineTimer
+from src.ai.preprocess.image_preprocessor import ImagePreprocessor
 
 logger = logging.getLogger("tilevision.core.use_cases.search_tiles")
 
@@ -219,7 +220,8 @@ class SearchTilesUseCase:
             query_embeddings: list = []
             query_sha256 = ""
             query_dhash = ""
-            cache_hit = False
+            cache_status = "miss"
+            preloaded_image = None
 
             cached_query = QUERY_EMBEDDING_CACHE.get(query_path)
             if cached_query is not None:
@@ -227,7 +229,7 @@ class SearchTilesUseCase:
                 query_embeddings = [
                     np.asarray(e, dtype=np.float32) for e in cached_query.embeddings
                 ]
-                cache_hit = True
+                cache_status = "hit"
                 timer.timings.record("image_load", 0.0)
                 timer.timings.record("crop", 0.0)
                 timer.timings.record("embedding", 0.0)
@@ -238,14 +240,8 @@ class SearchTilesUseCase:
                 )
 
             if query_features is None:
+                # Cheap byte hash first — may hit the catalog without decoding.
                 with timer.measure("image_load"):
-                    if not validate_image(query_path):
-                        raise ValueError(
-                            f"Selected file is not a valid, readable image: {query_path.name}"
-                        )
-                    # SHA-256 is a cheap byte hash (no pixel decode). dHash
-                    # opens the image — defer until after embedding so DINOv2
-                    # gets CPU/GPU first.
                     query_sha256 = compute_sha256(query_path)
 
                 cached_tile = self._repo.get_by_path(str(query_path.resolve()))
@@ -257,6 +253,7 @@ class SearchTilesUseCase:
                 ):
                     query_features = cached_tile.features
                     query_embeddings = [query_features.embedding]
+                    cache_status = "catalog"
                     timer.timings.record("crop", 0.0)
                     timer.timings.record("embedding", 0.0)
                     timer.timings.record("descriptors", 0.0)
@@ -266,13 +263,27 @@ class SearchTilesUseCase:
                     )
 
             if query_features is None:
+                # Decode the query image exactly once for dHash + embedding.
+                with timer.measure("image_load"):
+                    try:
+                        preloaded_image = ImagePreprocessor.load(query_path)
+                    except Exception as exc:
+                        raise ValueError(
+                            f"Selected file is not a valid, readable image: "
+                            f"{query_path.name}"
+                        ) from exc
+                    if not query_sha256:
+                        query_sha256 = compute_sha256(query_path)
+                    query_dhash = compute_dhash_from_image(preloaded_image)
+
                 logger.info("Computing embedding for query image...")
                 extract_for_search = getattr(
                     self._feature_extractor, "extract_for_search", None
                 )
                 if extract_for_search is not None:
                     query_features, query_embeddings = extract_for_search(
-                        str(query_path)
+                        str(query_path),
+                        preloaded=preloaded_image,
                     )
                 else:
                     query_features = self._feature_extractor.extract(
@@ -291,11 +302,10 @@ class SearchTilesUseCase:
                     query_embeddings,
                 )
 
-            # Exact-match hashes — only pay dHash decode cost once features ready.
-            with timer.measure("image_load"):
-                if not query_sha256:
+            # Exact-match SHA for memory-cache hits (no decode required).
+            if not query_sha256:
+                with timer.measure("image_load"):
                     query_sha256 = compute_sha256(query_path)
-                query_dhash = compute_dhash(query_path)
 
             # ----------------------------------------
             # Detect query pattern type
@@ -312,6 +322,12 @@ class SearchTilesUseCase:
 
             # 2. Retrieve candidate tiles (FAISS or metadata-filtered full set).
             total_vectors = self._index.get_total_count()
+            timer.set_meta(
+                cache=cache_status,
+                catalog_size=total_vectors,
+                faiss_index=self._index.index_type_name(),
+                embedding_dim=self._index.embedding_dimension(),
+            )
 
             if total_vectors <= 0:
                 raise RuntimeError(
@@ -352,10 +368,10 @@ class SearchTilesUseCase:
                     )
 
                 logger.info(
-                    "Querying FAISS vector index (search_k=%s, query_crops=%s, cache_hit=%s)...",
+                    "Querying FAISS vector index (search_k=%s, query_crops=%s, cache=%s)...",
                     search_k,
                     len(query_embeddings) or 1,
-                    cache_hit,
+                    cache_status,
                 )
                 with timer.measure("faiss"):
                     matching_ids = self._search_faiss_multi_crop(
@@ -472,30 +488,23 @@ class SearchTilesUseCase:
 
             results: List[SearchResult] = []
 
+            # Thumbnail paths only — existence / QPixmap decode is deferred to
+            # the UI so search returns as soon as ranking finishes.
             with timer.measure("thumbnail"):
                 for score, tile, exact_match in reranked[:top_k]:
-
                     thumbnail_path = get_thumbnail_path(
                         Path(tile.file_path),
                         self._thumbnail_dir,
                     )
-
-                    thumb_str = (
-                        str(thumbnail_path)
-                        if thumbnail_path.exists()
-                        else tile.file_path
-                    )
-
                     similarity_percentage = calibrate_display_percent(
                         score,
                         exact_match=exact_match,
                     )
-
                     results.append(
                         SearchResult(
                             tile=tile,
                             similarity_score=similarity_percentage,
-                            thumbnail_path=thumb_str,
+                            thumbnail_path=str(thumbnail_path),
                         )
                     )
 

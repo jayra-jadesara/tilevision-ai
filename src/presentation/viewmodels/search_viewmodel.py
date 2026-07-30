@@ -25,9 +25,9 @@ logger = logging.getLogger("tilevision.presentation.viewmodels.search_viewmodel"
 # Set search_timeout_ms > 0 only for tests that exercise the abort path.
 _SEARCH_TIMEOUT_MS = 0  # 0 = never auto-abort for wall-clock timeout
 _SEARCH_STATUS_HINT_MS = 45_000
-# Hang detector: only auto-cancel if the worker emits no progress for this long.
-# Progress stages reset the timer. User Cancel / app close still abort immediately.
-_SEARCH_HANG_MS = 600_000  # 10 minutes without progress = likely hung
+# Stall detector: abort only when heartbeats stop for this long.
+# Heartbeats fire every ~5s from SearchWorker while the QThread is alive.
+_SEARCH_STALL_MS = 90_000
 
 
 def _default_search_timeout_ms() -> int:
@@ -99,10 +99,10 @@ class SearchViewModel(QObject):
         self._status_hint_timer = QTimer(self)
         self._status_hint_timer.setSingleShot(True)
         self._status_hint_timer.timeout.connect(self._on_search_status_hint)
-        # Progress-based hang monitor (not an arbitrary search timeout).
-        self._hang_timer = QTimer(self)
-        self._hang_timer.setSingleShot(True)
-        self._hang_timer.timeout.connect(self._on_search_hang)
+        # Heartbeat-based stall monitor (not an arbitrary search timeout).
+        self._stall_timer = QTimer(self)
+        self._stall_timer.setSingleShot(True)
+        self._stall_timer.timeout.connect(self._on_search_stall)
         self._on_search_busy_changed = on_search_busy_changed
         self._search_priority_held = False
 
@@ -219,18 +219,19 @@ class SearchViewModel(QObject):
         )
         self._worker.search_timed.connect(self._on_search_timed)
         self._worker.search_progress.connect(self._on_search_progress)
+        self._worker.search_heartbeat.connect(self._on_search_heartbeat)
         self._worker.finished.connect(self._worker.deleteLater)
         if self._search_timeout_ms > 0:
             self._timeout_timer.start(self._search_timeout_ms)
         self._status_hint_timer.start(_SEARCH_STATUS_HINT_MS)
-        self._hang_timer.start(_SEARCH_HANG_MS)
+        self._stall_timer.start(_SEARCH_STALL_MS)
         self._worker.start()
 
     @Slot()
     def clear_results(self) -> None:
         self._timeout_timer.stop()
         self._status_hint_timer.stop()
-        self._hang_timer.stop()
+        self._stall_timer.stop()
         self._search_generation += 1
         worker = self._worker
         self._worker = None
@@ -279,7 +280,7 @@ class SearchViewModel(QObject):
             return
         self._timeout_timer.stop()
         self._status_hint_timer.stop()
-        self._hang_timer.stop()
+        self._stall_timer.stop()
         self._release_search_priority()
         self._last_results = results
         self._worker = None
@@ -321,7 +322,7 @@ class SearchViewModel(QObject):
             return
         self._timeout_timer.stop()
         self._status_hint_timer.stop()
-        self._hang_timer.stop()
+        self._stall_timer.stop()
         self._release_search_priority()
         self._worker = None
         self._set_state(SearchState.ERROR)
@@ -332,9 +333,16 @@ class SearchViewModel(QObject):
     def _on_search_progress(self, message: str) -> None:
         if self._state != SearchState.SEARCHING:
             return
-        # Any real stage progress resets the hang watchdog.
-        self._hang_timer.start(_SEARCH_HANG_MS)
+        # Progress also counts as liveness.
+        self._stall_timer.start(_SEARCH_STALL_MS)
         self.status_message.emit(message)
+
+    @Slot()
+    def _on_search_heartbeat(self) -> None:
+        """Reset stall watchdog — worker is alive even during long DINOv2."""
+        if self._state != SearchState.SEARCHING:
+            return
+        self._stall_timer.start(_SEARCH_STALL_MS)
 
     @Slot()
     def _on_search_status_hint(self) -> None:
@@ -347,18 +355,17 @@ class SearchViewModel(QObject):
         )
 
     @Slot()
-    def _on_search_hang(self) -> None:
+    def _on_search_stall(self) -> None:
         """
-        Abort only when the worker appears hung (no progress for a long time).
+        Abort only when heartbeats stop (worker appears wedged).
 
-        This is NOT a search-duration timeout — a slow but progressing DINOv2
-        forward on Mac Intel must be allowed to finish.
+        A slow but heartbeating DINOv2 forward on Mac Intel must finish.
         """
         if self._state != SearchState.SEARCHING:
             return
         logger.error(
-            "Search appears hung (no progress for %ss) for %s",
-            _SEARCH_HANG_MS / 1000.0,
+            "Search stalled (no heartbeat for %ss) for %s",
+            _SEARCH_STALL_MS / 1000.0,
             self._last_query_path,
         )
         self._timeout_timer.stop()
@@ -394,7 +401,7 @@ class SearchViewModel(QObject):
             self._last_query_path,
         )
         self._status_hint_timer.stop()
-        self._hang_timer.stop()
+        self._stall_timer.stop()
         self._search_generation += 1
         worker = self._worker
         self._worker = None

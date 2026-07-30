@@ -851,10 +851,9 @@ class SearchView(QWidget):
             tile = result.tile
             is_best_match = row == 0
 
+            # Placeholder only — QPixmap decode is deferred so the table
+            # paints immediately after search returns.
             thumb_item = QTableWidgetItem()
-            pixmap = QPixmap(result.thumbnail_path)
-            if not pixmap.isNull():
-                thumb_item.setIcon(QIcon(pixmap))
             thumb_item.setFlags(thumb_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self._results_table.setItem(row, 0, thumb_item)
 
@@ -890,6 +889,27 @@ class SearchView(QWidget):
                         font = item.font()
                         font.setBold(True)
                         item.setFont(font)
+
+        # Defer pixmap I/O until after the table is visible.
+        QTimer.singleShot(0, self._load_result_thumbnails)
+
+    def _load_result_thumbnails(self) -> None:
+        """Lazy-load result icons after search returns (keeps UI responsive)."""
+        results = self._current_results
+        for row, result in enumerate(results):
+            if row >= self._results_table.rowCount():
+                break
+            item = self._results_table.item(row, 0)
+            if item is None:
+                continue
+            pixmap = QPixmap(result.thumbnail_path)
+            if pixmap.isNull():
+                pixmap = QPixmap(result.tile.file_path)
+            if not pixmap.isNull():
+                item.setIcon(QIcon(pixmap))
+            # Yield to the event loop every few icons.
+            if row > 0 and row % 4 == 0:
+                QApplication.processEvents()
 
     def _on_row_double_clicked(self, row: int, _column: int) -> None:
         self._open_image_at_row(row)
