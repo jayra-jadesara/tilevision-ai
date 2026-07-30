@@ -320,8 +320,9 @@ class SearchViewModel(QObject):
         self._release_search_priority()
         self._set_state(SearchState.ERROR)
         message = (
-            "Search is taking too long and was stopped.\n\n"
-            "Pause or finish Indexing first, then drop the image again.\n\n"
+            "Search took too long and was stopped.\n\n"
+            "Drop the image again — Search now uses a faster path.\n\n"
+            "If Indexing is running, pause it first (or wait a few seconds).\n\n"
             "Also try:\n"
             "• Auto Crop & Search on room photos\n"
             "• Restart the app\n"

@@ -20,7 +20,7 @@ logger = logging.getLogger("tilevision.ai.inference_guard")
 _INFERENCE_LOCK = threading.RLock()
 
 # Search / query paths should fail fast if indexing holds the lock.
-DEFAULT_SEARCH_LOCK_TIMEOUT_S = 45.0
+DEFAULT_SEARCH_LOCK_TIMEOUT_S = 60.0
 # Indexing can wait longer for the lock (search should finish quickly).
 DEFAULT_INDEX_LOCK_TIMEOUT_S = 120.0
 
