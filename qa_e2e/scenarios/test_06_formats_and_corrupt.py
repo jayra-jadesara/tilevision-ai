@@ -19,6 +19,11 @@ pytestmark = pytest.mark.qa_e2e
     ["q_png", "q_jpg", "q_webp", "q_tiff", "q_large", "q_small"],
 )
 def test_supported_formats_and_sizes(session, driver, catalog_indexed, record_expectation, query_id):
+    import os
+
+    # Full format matrix is covered locally; CI runs a representative subset.
+    if os.environ.get("CI") and query_id in {"q_tiff", "q_large", "q_small"}:
+        pytest.skip("CI subset — full format/size matrix runs locally on Mac Intel")
     q = next(x for x in session.expected_manifest["queries"] if x["id"] == query_id)
     action = session.artifacts.begin(f"Format/size search: {query_id}")
     since = time.time()
