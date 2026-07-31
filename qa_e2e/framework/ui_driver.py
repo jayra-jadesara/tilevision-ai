@@ -204,7 +204,7 @@ class UIDriver:
     def progress_bar(self) -> QProgressBar:
         return self.find("SearchProgressBar", QProgressBar)  # type: ignore[return-value]
 
-    def wait_search_settled(self, *, timeout: float = 300.0) -> str:
+    def wait_search_settled(self, *, timeout: float = 240.0) -> str:
         from src.presentation.viewmodels.search_viewmodel import SearchState
 
         deadline = time.monotonic() + timeout

@@ -127,6 +127,11 @@ def launch_customer_app(
     app.setOrganizationName("JD Software")
     app.setApplicationVersion(APP_VERSION)
 
+    # Headless CI: never block forever on customer QMessageBox dialogs.
+    from qa_e2e.framework.dialogs import install_dialog_auto_dismiss
+
+    install_dialog_auto_dismiss(app)
+
     from src.utils.platform_info import app_icon_path, default_ui_font_family
     from src.theme.theme_manager import get_app_stylesheet
 
