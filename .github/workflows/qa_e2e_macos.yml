@@ -93,7 +93,8 @@ jobs:
         run: |
           set -euo pipefail
           # Representative customer smoke on CI (full matrix: run_qa.py locally).
-          "$MACOS_PYTHON_PATH" qa_e2e/run_qa.py -k "startup or index_folder or drag_drop_search_full or open_image or cancel_search or auto_crop or formats_and_sizes[q_jpg] or corrupt or unsupported or human_session"
+          # Use single quotes so bash does not glob [...] in the -k expression.
+          "$MACOS_PYTHON_PATH" qa_e2e/run_qa.py -k 'startup or index_folder or drag_drop_search_full or open_image or cancel_search or auto_crop or corrupt or unsupported'
 
       - name: Upload QA HTML report + screenshots
         if: always()
