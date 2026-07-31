@@ -22,4 +22,5 @@ markers = [
     "slow: marks larger-scale/perf tests (e.g. 50k-vector FAISS search)",
     "faiss_search: calls FAISS vector search (unstable on macOS CI runners)",
     "mac_client: Mac showroom client flow (simulated darwin or real macOS CI)",
+    "qa_e2e: human-like end-to-end QA against the real app (DINOv2/FAISS/SQLite/UI)",
 ]

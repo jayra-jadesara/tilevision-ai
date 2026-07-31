@@ -1,0 +1,101 @@
+# Human-like end-to-end QA on macOS Intel (customer showroom platform).
+# Uses the real DINOv2 model, FAISS IndexFlatIP, SQLite, and PySide6 UI.
+# Does not modify production code.
+
+name: QA E2E (macOS Intel)
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "qa_e2e/**"
+      - ".github/workflows/qa_e2e_macos.yml"
+      - "src/**"
+      - "requirements.txt"
+  schedule:
+    # Nightly showroom regression (UTC)
+    - cron: "0 7 * * *"
+
+concurrency:
+  group: qa-e2e-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qa-e2e-macos-intel:
+    name: Human E2E QA (macOS Intel)
+    # Native Intel runner — same class as customer Mac Intel installs.
+    # Local showroom machines on macOS 13+ Intel are supported via qa_e2e/run_qa.py.
+    runs-on: macos-15-intel
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12 (x86_64)
+        id: setup-python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache DINOv2 model weights
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: model_weights/dinov2-large
+          key: dinov2-large-v2-${{ hashFiles('scripts/download_dinov2_model.py') }}
+
+      - name: Install dependencies (Intel x86_64)
+        shell: bash
+        env:
+          PYTHON_SETUP_PATH: ${{ steps.setup-python.outputs.python-path }}
+        run: |
+          set -euo pipefail
+          source scripts/install_mac_deps.sh x64
+          "$MACOS_PYTHON_PATH" -m pip install --no-cache-dir pytest psutil
+          echo "MACOS_PYTHON_PATH=$MACOS_PYTHON_PATH" >> "$GITHUB_ENV"
+
+      - name: Download DINOv2 weights
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: bash scripts/macos_build_python.sh scripts/download_dinov2_model.py
+
+      - name: Verify DINOv2 weights present
+        run: test -f model_weights/dinov2-large/config.json
+
+      - name: Cache ONNX SAM2 Precise Crop weights
+        id: sam2-onnx-cache
+        uses: actions/cache@v4
+        with:
+          path: model_weights/sam2.1-hiera-tiny-onnx
+          key: sam2-onnx-tiny-v1-${{ hashFiles('scripts/download_sam2_onnx_model.py') }}
+
+      - name: Download ONNX SAM2 weights
+        if: steps.sam2-onnx-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: bash scripts/macos_build_python.sh scripts/download_sam2_onnx_model.py
+
+      - name: Run human-like E2E QA suite
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+          TILEVISION_DEV_MODE: "1"
+          TILEVISION_LOG_LEVEL: INFO
+          TILEVISION_PROFILE: "1"
+          TILEVISION_OFFLINE_MODEL: "1"
+          TILEVISION_QA_OUT: ${{ github.workspace }}/qa_e2e/artifacts/ci
+          TILEVISION_QA_SPEED: "2.5"
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          VECLIB_MAXIMUM_THREADS: "1"
+          KMP_DUPLICATE_LIB_OK: "TRUE"
+        run: |
+          set -euo pipefail
+          "$MACOS_PYTHON_PATH" qa_e2e/run_qa.py
+
+      - name: Upload QA HTML report + screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tilevision-qa-e2e-macos-intel
+          path: qa_e2e/artifacts/ci/
+          retention-days: 14
