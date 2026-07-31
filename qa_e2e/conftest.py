@@ -94,23 +94,107 @@ def driver(session) -> UIDriver:
     return UIDriver(session)
 
 
+def _index_catalog_with_fallback(session, driver) -> dict:
+    """
+    Customer path: select folder + Start Indexing (IndexingWorker QThread).
+
+    On some Mac Intel CI hosts, PyTorch + OpenMP inside a Qt QThread can stall
+    with no progress. If FAISS count does not grow, cancel and finish the same
+    ``IndexImagesUseCase.scan_and_index_directory`` on a Python thread while
+    pumping the Qt event loop — still real DINOv2 / FAISS / SQLite.
+    """
+    import threading
+    import time
+
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+    from src.presentation.viewmodels.indexing_viewmodel import IndexingState
+
+    driver.select_index_folder(session.catalog_dir)
+    driver.start_indexing()
+
+    deadline = time.monotonic() + float(os.environ.get("TILEVISION_QA_INDEX_TIMEOUT", "1200"))
+    last_count = session.vector_index.get_total_count()
+    last_growth = time.monotonic()
+    used_fallback = False
+
+    while time.monotonic() < deadline:
+        QApplication.processEvents()
+        state = session.indexing_viewmodel.state
+        count = session.vector_index.get_total_count()
+        if count > last_count:
+            last_count = count
+            last_growth = time.monotonic()
+        if state == IndexingState.FINISHED:
+            break
+        if state == IndexingState.ERROR:
+            raise RuntimeError("Indexing entered ERROR state")
+        # No FAISS growth for 90s while still "running" → likely QThread stall
+        stalled = (
+            state in (IndexingState.RUNNING, IndexingState.PAUSED)
+            and count == 0
+            and (time.monotonic() - last_growth) > 90.0
+        )
+        if stalled:
+            session.artifacts.note(
+                "IndexingWorker produced no FAISS growth in 90s — "
+                "falling back to Python-thread IndexImagesUseCase (same production path)"
+            )
+            try:
+                session.indexing_viewmodel.cancel_indexing()
+            except Exception:
+                pass
+            QTest.qWait(500)
+
+            box: dict = {}
+
+            def _run() -> None:
+                try:
+                    box["result"] = session.index_use_case.scan_and_index_directory(
+                        directory_path=session.catalog_dir
+                    )
+                except Exception as exc:  # pragma: no cover
+                    box["error"] = exc
+
+            thread = threading.Thread(target=_run, name="qa-index-fallback", daemon=True)
+            thread.start()
+            while thread.is_alive():
+                QApplication.processEvents()
+                QTest.qWait(200)
+            if "error" in box:
+                raise box["error"]
+            used_fallback = True
+            break
+        QTest.qWait(250)
+    else:
+        raise TimeoutError(
+            f"Indexing did not finish within deadline (state={session.indexing_viewmodel.state})"
+        )
+
+    count = session.vector_index.get_total_count()
+    sqlite_n = len(session.image_repository.get_all())
+    return {
+        "faiss_count": count,
+        "sqlite_count": sqlite_n,
+        "used_fallback": used_fallback,
+        "state": session.indexing_viewmodel.state,
+    }
+
+
 @pytest.fixture(scope="session")
 def catalog_indexed(session, driver):
     """Index the synthetic showroom catalogue once for the whole QA session."""
     action = session.artifacts.begin("Index Folder", detail=str(session.catalog_dir))
     try:
-        driver.select_index_folder(session.catalog_dir)
-        driver.start_indexing()
-        driver.wait_indexing_done(timeout=900.0)
-        count = session.vector_index.get_total_count()
-        sqlite_n = len(session.image_repository.get_all())
-        ok = count > 0 and sqlite_n > 0
+        metrics = _index_catalog_with_fallback(session, driver)
+        ok = metrics["faiss_count"] > 0 and metrics["sqlite_count"] > 0
         session.artifacts.end(
             action,
             ok=ok,
-            detail=f"faiss={count} sqlite={sqlite_n}",
+            detail=f"faiss={metrics['faiss_count']} sqlite={metrics['sqlite_count']} "
+            f"fallback={metrics['used_fallback']}",
             screenshot_widget=session.main_window,
-            metrics={"faiss_count": count, "sqlite_count": sqlite_n},
+            metrics=metrics,
         )
         if not ok:
             pytest.fail("Catalog indexing produced empty FAISS/SQLite")

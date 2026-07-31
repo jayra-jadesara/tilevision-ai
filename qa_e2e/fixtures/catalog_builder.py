@@ -129,11 +129,13 @@ def build_customer_catalog(root: Path, *, tile_count: int = 12) -> Dict[str, Any
     specs = _TILE_SPECS[: max(4, min(tile_count, len(_TILE_SPECS)))]
     tiles_meta = []
     for i, (code, brand, category, color, kind) in enumerate(specs):
-        # Mix formats like a real catalogue dump
-        ext = [".jpg", ".png", ".webp", ".tiff"][i % 4]
+        # Catalogue indexing accepts jpg/png/webp (not TIFF). Keep catalog as
+        # JPEG so every file is indexed; query-format coverage lives in queries/.
+        ext = ".jpg"
         name = f"TILE_{code}_{brand}_{category}{ext}"
         path = catalog / name
-        _make_tile(path, color, kind, size=512 if i % 3 else 768, seed=1000 + i)
+        # 256px is enough for DINOv2 and much faster on Mac Intel CPU CI.
+        _make_tile(path, color, kind, size=256, seed=1000 + i)
         # Also write a second size variant for a couple tiles
         tiles_meta.append(
             {

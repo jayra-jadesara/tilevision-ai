@@ -61,6 +61,21 @@ class AppSession:
                 self.folder_monitor.stop_monitoring()
         except Exception:
             pass
+        # Stop background workers before tearing down Qt objects.
+        try:
+            self.indexing_viewmodel.cancel_indexing()
+        except Exception:
+            pass
+        try:
+            self.search_viewmodel.clear_results()
+        except Exception:
+            pass
+        try:
+            from PySide6.QtTest import QTest
+
+            QTest.qWait(300)
+        except Exception:
+            pass
         try:
             self.main_window.close()
         except Exception:

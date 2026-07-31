@@ -114,6 +114,10 @@ def launch_customer_app(
     settings.check_for_updates = False
     settings.index_backend = "flat_ip"
     settings.top_k = 10
+    # Keep AI work single-threaded in QA — avoids OpenMP/QThread stalls on
+    # Mac Intel CI hosts while still using the real DINOv2 stack.
+    settings.preprocess_workers = 1
+    settings.index_batch_size = 2
     settings.save()
 
     _install_dev_license(settings.database_path)
