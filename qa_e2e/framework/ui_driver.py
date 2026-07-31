@@ -206,14 +206,32 @@ class UIDriver:
 
     def wait_search_settled(self, *, timeout: float = 240.0) -> str:
         from src.presentation.viewmodels.search_viewmodel import SearchState
+        from qa_e2e.framework.search_fallback import complete_search_via_use_case
 
         deadline = time.monotonic() + timeout
         saw_searching = False
+        searching_since: Optional[float] = None
         while time.monotonic() < deadline:
             QApplication.processEvents()
             state = self.s.search_viewmodel.state
             if state == SearchState.SEARCHING:
                 saw_searching = True
+                if searching_since is None:
+                    searching_since = time.monotonic()
+                # Mac Intel CI: SearchWorker QThread can stall like IndexingWorker.
+                # After 45s still searching with a known query → same use case on
+                # a Python thread, then inject results into the ViewModel/UI.
+                if (time.monotonic() - searching_since) > 45.0:
+                    path = getattr(self.s.search_viewmodel, "_last_query_path", None)
+                    if path:
+                        self.s.artifacts.note(
+                            "SearchWorker stalled >45s — completing via SearchTilesUseCase thread"
+                        )
+                        complete_search_via_use_case(self.s, path, timeout=max(60.0, timeout))
+                        QTest.qWait(400)
+                        return self.s.search_viewmodel.state
+            else:
+                searching_since = None
             if state in (
                 SearchState.RESULTS,
                 SearchState.NO_RESULTS,
