@@ -96,74 +96,42 @@ def driver(session) -> UIDriver:
 
 def _index_catalog_customer_style(session, driver) -> dict:
     """
-    Index the showroom catalogue with the real production use case.
+    Human Index flow: select catalogue folder, click Start Indexing.
 
-    Human steps (UI): navigate to Index, select the catalogue folder, click
-    Start. Embedding work runs on a **Python** thread calling the same
-    ``IndexImagesUseCase.scan_and_index_directory`` the IndexingWorker uses.
-
-    Why not IndexingWorker QThread here? On Mac Intel CI, PyTorch/OpenMP inside
-    a Qt QThread has stalled with zero FAISS growth for 15+ minutes. The Python
-    thread path is still the real DINOv2 → FAISS → SQLite pipeline.
+    Workers are remapped onto Python threads in the harness (same ``run()`` /
+    use-case bodies) so Mac Intel CI cannot stall inside Qt QThread+OpenMP.
     """
-    import threading
     import time
 
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication
+    from src.presentation.viewmodels.indexing_viewmodel import IndexingState
 
     driver.select_index_folder(session.catalog_dir)
-    # Human presses Start (starts IndexingWorker). We immediately cancel that
-    # worker and perform the identical use-case work on a Python thread so CI
-    # cannot hang — local interactive runs can set TILEVISION_QA_USE_QTHREAD=1.
     driver.start_indexing()
-    QTest.qWait(300)
 
-    use_qthread = os.environ.get("TILEVISION_QA_USE_QTHREAD", "").strip() in {
-        "1",
-        "true",
-        "yes",
-    }
-    box: dict = {"mode": "qthread" if use_qthread else "python_thread"}
-
-    if use_qthread:
-        driver.wait_indexing_done(
-            timeout=float(os.environ.get("TILEVISION_QA_INDEX_TIMEOUT", "1800"))
-        )
+    deadline = time.monotonic() + float(os.environ.get("TILEVISION_QA_INDEX_TIMEOUT", "1800"))
+    while time.monotonic() < deadline:
+        QApplication.processEvents()
+        state = session.indexing_viewmodel.state
+        if state == IndexingState.FINISHED:
+            break
+        if state == IndexingState.ERROR:
+            raise RuntimeError("Indexing entered ERROR state")
+        if state in (IndexingState.IDLE, IndexingState.CANCELLED) and session.vector_index.get_total_count() > 0:
+            break
+        QTest.qWait(250)
     else:
-        try:
-            session.indexing_viewmodel.cancel_indexing()
-        except Exception:
-            pass
-        QTest.qWait(400)
-
-        def _run() -> None:
-            try:
-                box["result"] = session.index_use_case.scan_and_index_directory(
-                    directory_path=session.catalog_dir
-                )
-            except Exception as exc:  # pragma: no cover
-                box["error"] = exc
-
-        thread = threading.Thread(target=_run, name="qa-index", daemon=True)
-        thread.start()
-        deadline = time.monotonic() + float(
-            os.environ.get("TILEVISION_QA_INDEX_TIMEOUT", "1800")
+        raise TimeoutError(
+            f"Indexing did not finish within deadline (state={session.indexing_viewmodel.state})"
         )
-        while thread.is_alive():
-            if time.monotonic() > deadline:
-                raise TimeoutError("Catalogue indexing exceeded TILEVISION_QA_INDEX_TIMEOUT")
-            QApplication.processEvents()
-            QTest.qWait(200)
-        if "error" in box:
-            raise box["error"]
 
     count = session.vector_index.get_total_count()
     sqlite_n = len(session.image_repository.get_all())
     return {
         "faiss_count": count,
         "sqlite_count": sqlite_n,
-        "mode": box["mode"],
+        "mode": "python_thread_workers",
         "state": session.indexing_viewmodel.state,
     }
 

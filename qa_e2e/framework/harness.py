@@ -133,8 +133,10 @@ def launch_customer_app(
 
     # Headless CI: never block forever on customer QMessageBox dialogs.
     from qa_e2e.framework.dialogs import install_dialog_auto_dismiss
+    from qa_e2e.framework.qthread_patch import install_python_thread_workers
 
     install_dialog_auto_dismiss(app)
+    install_python_thread_workers()
 
     from src.utils.platform_info import app_icon_path, default_ui_font_family
     from src.theme.theme_manager import get_app_stylesheet

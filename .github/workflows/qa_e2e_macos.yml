@@ -86,8 +86,6 @@ jobs:
           TILEVISION_QA_SPEED: "3.0"
           TILEVISION_QA_TILES: "6"
           TILEVISION_QA_INDEX_TIMEOUT: "1800"
-          # Prefer Python-thread indexing (same use case; avoids Qt QThread+OpenMP stalls)
-          TILEVISION_QA_USE_QTHREAD: "0"
           OMP_NUM_THREADS: "1"
           OPENBLAS_NUM_THREADS: "1"
           VECLIB_MAXIMUM_THREADS: "1"
