@@ -438,6 +438,10 @@ class SearchView(QWidget):
         self._history_button = QPushButton("Recent Searches")
         self._history_button.setObjectName("SecondaryButton")
         self._history_button.clicked.connect(self._on_history_clicked)
+        # Only open the popup when the user clicks Recent Searches.
+        # Search completion also refreshes history via the same signal — that
+        # must NOT pop a blocking QMenu (it freezes offscreen/CI and surprises customers).
+        self._history_menu_pending = False
         button_col.addWidget(self._history_button)
 
         button_col.addStretch()
@@ -798,11 +802,15 @@ class SearchView(QWidget):
         
     def _on_history_clicked(self) -> None:
         """Show a popup menu of recent searches (Task C: Search History)."""
+        self._history_menu_pending = True
         self._viewmodel.load_search_history()
-        # _on_search_history_updated (connected below) populates and shows
-        # the menu once the ViewModel responds — see that handler.
+        # _show_history_menu runs when search_history_updated fires.
 
     def _show_history_menu(self, entries: List) -> None:
+        # Ignore silent history refreshes after search completion / recording.
+        if not self._history_menu_pending:
+            return
+        self._history_menu_pending = False
         menu = QMenu(self)
         if not entries:
             no_history_action = menu.addAction("No recent searches yet")

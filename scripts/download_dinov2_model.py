@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +30,7 @@ from src.ai.model_paths import DEFAULT_MODEL_ID, bundled_model_dir  # noqa: E402
 
 # Keep offline bundle small — GitHub release assets must be < 2 GiB total per file.
 _MAX_MODEL_BYTES = 1_400_000_000  # ~1.3 GB (dinov2-large safetensors is ~1.1 GB)
+_MAX_ATTEMPTS = int(os.environ.get("TILEVISION_HF_DOWNLOAD_ATTEMPTS", "6"))
 
 
 def _verify_download(out: Path) -> None:
@@ -53,30 +55,53 @@ def main() -> int:
     out = Path(os.environ.get("TILEVISION_MODEL_DIR", bundled_model_dir())).expanduser()
     out.mkdir(parents=True, exist_ok=True)
 
+    # Already present (CI cache restore / local bundle) — skip Hub.
+    if (out / "config.json").is_file() and list(out.glob("*.safetensors")):
+        print(f"DINOv2 weights already present at {out} — skipping download.")
+        _verify_download(out)
+        return 0
+
     print(f"Downloading {DEFAULT_MODEL_ID} to {out} ...")
     print("(This is ~1 GB — may take several minutes.)")
 
     from huggingface_hub import snapshot_download
+    from huggingface_hub.errors import HfHubHTTPError
 
-    snapshot_download(
-        repo_id=DEFAULT_MODEL_ID,
-        local_dir=str(out),
-        local_dir_use_symlinks=False,
-        allow_patterns=[
-            "config.json",
-            "preprocessor_config.json",
-            "model.safetensors",
-            "*.json",
-        ],
-        ignore_patterns=[
-            "*.bin",
-            "*.h5",
-            "*.ot",
-            "*.msgpack",
-            ".git*",
-            "*.md",
-        ],
-    )
+    last_exc: BaseException | None = None
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        try:
+            snapshot_download(
+                repo_id=DEFAULT_MODEL_ID,
+                local_dir=str(out),
+                local_dir_use_symlinks=False,
+                allow_patterns=[
+                    "config.json",
+                    "preprocessor_config.json",
+                    "model.safetensors",
+                    "*.json",
+                ],
+                ignore_patterns=[
+                    "*.bin",
+                    "*.h5",
+                    "*.ot",
+                    "*.msgpack",
+                    ".git*",
+                    "*.md",
+                ],
+            )
+            last_exc = None
+            break
+        except Exception as exc:
+            last_exc = exc
+            # Retry hard on Hub rate limits / transient network errors.
+            retryable = isinstance(exc, HfHubHTTPError) or "429" in str(exc) or "Too Many Requests" in str(exc)
+            if attempt >= _MAX_ATTEMPTS or not retryable:
+                raise
+            delay = min(120, 8 * (2 ** (attempt - 1)))
+            print(f"Hub download attempt {attempt}/{_MAX_ATTEMPTS} failed ({exc}). Retrying in {delay}s...")
+            time.sleep(delay)
+    if last_exc is not None:
+        raise last_exc
     _verify_download(out)
 
     print()

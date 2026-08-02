@@ -222,6 +222,18 @@ class UIDriver:
                 # After 45s still searching with a known query → same use case on
                 # a Python thread, then inject results into the ViewModel/UI.
                 if (time.monotonic() - searching_since) > 45.0:
+                    # Re-check after pumping events: the real worker may have
+                    # finished while we were waiting (CPU searches often >45s).
+                    QApplication.processEvents()
+                    state = self.s.search_viewmodel.state
+                    if state in (
+                        SearchState.RESULTS,
+                        SearchState.NO_RESULTS,
+                        SearchState.ERROR,
+                    ):
+                        QTest.qWait(400)
+                        QApplication.processEvents()
+                        return state
                     path = getattr(self.s.search_viewmodel, "_last_query_path", None)
                     if path:
                         self.s.artifacts.note(
