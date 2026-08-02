@@ -91,14 +91,31 @@ Each run writes to `TILEVISION_QA_OUT`:
 - `screenshots/` — UI grabs after each major action
 - `junit.xml` — CI junit
 
+## Release Validation (ship gate)
+
+For production release proof, use the ordered pipeline (not pytest alone):
+
+```bash
+python qa_e2e/run_release_validation.py --profile full
+```
+
+See [`RELEASE_VALIDATION.md`](RELEASE_VALIDATION.md) for gates G1–G5, scenarios
+S01–S30, report artifacts (`release_report.html|json|pdf`), and the
+`Release Validation` GitHub Actions matrix (`windows-latest`,
+`macos-15-intel`, `macos-15`).
+
+Overall PASS requires **every** scenario to pass. One failure ⇒ FAIL.
+
 ## GitHub Actions
 
 Workflow: `.github/workflows/qa_e2e_macos.yml`
 
-- Runner: `macos-13` (Intel)
+- Runner: `macos-15-intel`
 - Downloads DINOv2 weights
 - Runs `python qa_e2e/run_qa.py`
 - Uploads the HTML report + screenshots as an artifact
+
+Ship-gate workflow: `.github/workflows/release_validation.yml`
 
 ## Design notes
 

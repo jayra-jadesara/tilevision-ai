@@ -1,0 +1,198 @@
+# Release Validation — prove production readiness on real customer stacks.
+# FAIL the workflow if any gate or scenario fails.
+# Artifacts: release_report.html / .json / .pdf + screenshots + logs
+
+name: Release Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "full (100 searches + 30m idle) or pr (reduced stress)"
+        required: true
+        default: full
+        type: choice
+        options: [full, pr]
+  pull_request:
+    paths:
+      - "qa_e2e/**"
+      - "src/**"
+      - "requirements.txt"
+      - ".github/workflows/release_validation.yml"
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-validation:
+    name: Release Validation (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-15-intel, macos-15]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        id: setup-python
+        if: matrix.os != 'macos-15-intel'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Python 3.12 (Intel x64)
+        id: setup-python-intel
+        if: matrix.os == 'macos-15-intel'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: x64
+
+      - name: Cache DINOv2 model weights
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: model_weights/dinov2-large
+          key: dinov2-large-v2-${{ hashFiles('scripts/download_dinov2_model.py') }}
+
+      - name: Install dependencies (macOS Intel)
+        if: matrix.os == 'macos-15-intel'
+        shell: bash
+        env:
+          PYTHON_SETUP_PATH: ${{ steps.setup-python-intel.outputs.python-path }}
+        run: |
+          set -euo pipefail
+          source scripts/install_mac_deps.sh x64
+          "$MACOS_PYTHON_PATH" -m pip install --no-cache-dir pytest psutil
+          echo "MACOS_PYTHON_PATH=$MACOS_PYTHON_PATH" >> "$GITHUB_ENV"
+          echo "RUN_PYTHON=$MACOS_PYTHON_PATH" >> "$GITHUB_ENV"
+
+      - name: Install dependencies (macOS Apple Silicon)
+        if: matrix.os == 'macos-15'
+        shell: bash
+        env:
+          PYTHON_SETUP_PATH: ${{ steps.setup-python.outputs.python-path }}
+        run: |
+          set -euo pipefail
+          source scripts/install_mac_deps.sh arm64
+          "$MACOS_PYTHON_PATH" -m pip install --no-cache-dir pytest psutil
+          echo "MACOS_PYTHON_PATH=$MACOS_PYTHON_PATH" >> "$GITHUB_ENV"
+          echo "RUN_PYTHON=$MACOS_PYTHON_PATH" >> "$GITHUB_ENV"
+
+      - name: Install dependencies (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install --no-cache-dir -r requirements.txt pytest psutil
+          echo "RUN_PYTHON=python" >> "$GITHUB_ENV"
+
+      - name: Download DINOv2 weights
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          if [ -n "${MACOS_PYTHON_PATH:-}" ]; then
+            bash scripts/macos_build_python.sh scripts/download_dinov2_model.py
+          else
+            python scripts/download_dinov2_model.py
+          fi
+
+      - name: Verify DINOv2 weights
+        shell: bash
+        run: test -f model_weights/dinov2-large/config.json
+
+      - name: Cache ONNX SAM2 weights
+        id: sam2-cache
+        uses: actions/cache@v4
+        with:
+          path: model_weights/sam2.1-hiera-tiny-onnx
+          key: sam2-onnx-tiny-v1-${{ hashFiles('scripts/download_sam2_onnx_model.py') }}
+
+      - name: Download ONNX SAM2 weights
+        if: steps.sam2-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          if [ -n "${MACOS_PYTHON_PATH:-}" ]; then
+            bash scripts/macos_build_python.sh scripts/download_sam2_onnx_model.py || true
+          else
+            python scripts/download_sam2_onnx_model.py || true
+          fi
+
+      - name: Resolve profile
+        id: profile
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "profile=${{ github.event.inputs.profile }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            echo "profile=full" >> "$GITHUB_OUTPUT"
+          else
+            echo "profile=pr" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run release validation (real stack)
+        id: release-run
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+          TILEVISION_DEV_MODE: "1"
+          TILEVISION_LOG_LEVEL: INFO
+          TILEVISION_PROFILE: "1"
+          TILEVISION_OFFLINE_MODEL: "1"
+          TILEVISION_RELEASE_PROFILE: ${{ steps.profile.outputs.profile }}
+          TILEVISION_QA_OUT: ${{ github.workspace }}/qa_e2e/artifacts/release_ci
+          TILEVISION_QA_SPEED: "3.0"
+          TILEVISION_QA_TILES: "8"
+          TILEVISION_QA_INDEX_TIMEOUT: "1800"
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          VECLIB_MAXIMUM_THREADS: "1"
+          KMP_DUPLICATE_LIB_OK: "TRUE"
+        run: |
+          set -euo pipefail
+          "${RUN_PYTHON}" qa_e2e/run_release_validation.py --profile "${TILEVISION_RELEASE_PROFILE}" --out "${TILEVISION_QA_OUT}"
+
+      - name: Enforce release verdict
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          SUMMARY="${{ github.workspace }}/qa_e2e/artifacts/release_ci/release_summary.json"
+          if [ ! -f "$SUMMARY" ]; then
+            echo "Missing release_summary.json — treating as FAIL"
+            exit 1
+          fi
+          python - <<'PY'
+          import json, sys
+          from pathlib import Path
+          p = Path("qa_e2e/artifacts/release_ci/release_summary.json")
+          data = json.loads(p.read_text(encoding="utf-8"))
+          print(json.dumps(data, indent=2))
+          sys.exit(0 if data.get("verdict") == "PASS" else 1)
+          PY
+
+      - name: Upload release artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-validation-${{ matrix.os }}
+          path: |
+            qa_e2e/artifacts/release_ci/release_report.html
+            qa_e2e/artifacts/release_ci/release_report.json
+            qa_e2e/artifacts/release_ci/release_report.pdf
+            qa_e2e/artifacts/release_ci/release_summary.json
+            qa_e2e/artifacts/release_ci/screenshots/
+            qa_e2e/artifacts/release_ci/failures/
+            qa_e2e/artifacts/release_ci/**/*.log
+            qa_e2e/artifacts/release_ci/**/*.pdf
+            qa_e2e/artifacts/release_ci/session.json
+          if-no-files-found: warn
+          retention-days: 30
