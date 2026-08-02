@@ -121,10 +121,14 @@ jobs:
         shell: bash
         run: |
           if [ -n "${MACOS_PYTHON_PATH:-}" ]; then
-            bash scripts/macos_build_python.sh scripts/download_sam2_onnx_model.py || true
+            bash scripts/macos_build_python.sh scripts/download_sam2_onnx_model.py
           else
-            python scripts/download_sam2_onnx_model.py || true
+            python scripts/download_sam2_onnx_model.py
           fi
+
+      - name: Verify ONNX SAM2 weights
+        shell: bash
+        run: test -f model_weights/sam2.1-hiera-tiny-onnx/sam2.1_hiera_tiny.encoder.onnx
 
       - name: Resolve profile
         id: profile
@@ -170,7 +174,11 @@ jobs:
             echo "Missing release_summary.json — treating as FAIL"
             exit 1
           fi
-          python - <<'PY'
+          PYBIN="${RUN_PYTHON:-python}"
+          if ! command -v "$PYBIN" >/dev/null 2>&1; then
+            PYBIN=python3
+          fi
+          "$PYBIN" - <<'PY'
           import json, sys
           from pathlib import Path
           p = Path("qa_e2e/artifacts/release_ci/release_summary.json")
@@ -184,15 +192,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-validation-${{ matrix.os }}
-          path: |
-            qa_e2e/artifacts/release_ci/release_report.html
-            qa_e2e/artifacts/release_ci/release_report.json
-            qa_e2e/artifacts/release_ci/release_report.pdf
-            qa_e2e/artifacts/release_ci/release_summary.json
-            qa_e2e/artifacts/release_ci/screenshots/
-            qa_e2e/artifacts/release_ci/failures/
-            qa_e2e/artifacts/release_ci/**/*.log
-            qa_e2e/artifacts/release_ci/**/*.pdf
-            qa_e2e/artifacts/release_ci/session.json
+          path: qa_e2e/artifacts/release_ci/
           if-no-files-found: warn
           retention-days: 30

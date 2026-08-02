@@ -58,10 +58,30 @@ def collect_environment(*, session=None) -> Dict[str, Any]:
 
     sam2_onnx = Path("model_weights/sam2.1-hiera-tiny-onnx")
     sam2_pt = Path("model_weights/sam2.1-hiera-tiny")
+    encoder = sam2_onnx / "sam2.1_hiera_tiny.encoder.onnx"
+    decoder = sam2_onnx / "sam2.1_hiera_tiny.decoder.onnx"
+    sam2_load_ok = False
+    sam2_load_detail = ""
+    if encoder.is_file():
+        try:
+            import onnxruntime as ort
+
+            # Prove weights load into a real ONNX Runtime session (not mocked).
+            _sess = ort.InferenceSession(str(encoder), providers=["CPUExecutionProvider"])
+            sam2_load_ok = bool(_sess.get_inputs())
+            sam2_load_detail = f"onnxruntime session ok inputs={len(_sess.get_inputs())}"
+            del _sess
+        except Exception as exc:
+            sam2_load_detail = f"{exc.__class__.__name__}: {exc}"
+    else:
+        sam2_load_detail = "encoder onnx missing"
     sam2_status = {
         "onnx_dir_exists": sam2_onnx.is_dir(),
         "transformers_dir_exists": sam2_pt.is_dir(),
-        "onnx_encoder": (sam2_onnx / "sam2.1_hiera_tiny.encoder.onnx").is_file(),
+        "onnx_encoder": encoder.is_file(),
+        "onnx_decoder": decoder.is_file(),
+        "load_ok": sam2_load_ok,
+        "load_detail": sam2_load_detail,
     }
 
     payload: Dict[str, Any] = {

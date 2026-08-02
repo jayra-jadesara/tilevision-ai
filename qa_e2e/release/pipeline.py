@@ -110,7 +110,13 @@ def run_release_validation(
         runtime = environment.get("runtime") or {}
         license_ok = bool(runtime.get("license_ok", False))
         cache_ready = Path(session.settings.thumbnail_dir).exists()
-        config_loaded = bool(getattr(session.settings, "config_dir", None))
+        # AppSettings stores paths privately; prove config.json is on disk.
+        config_path = Path(getattr(session.settings, "_config_file", ""))
+        if not config_path:
+            config_path = Path(session.settings.database_path).parents[1] / "config.json"
+        config_loaded = config_path.is_file()
+        sam2 = environment.get("sam2", {})
+        sam2_ready = bool(sam2.get("onnx_encoder") or sam2.get("load_ok"))
         ai_ok = (
             ready.model_loaded
             and ready.faiss_loaded
@@ -119,8 +125,8 @@ def run_release_validation(
             and license_ok
             and cache_ready
             and config_loaded
+            and sam2_ready
         )
-        sam2 = environment.get("sam2", {})
         gates.append(
             _gate(
                 "G3",
@@ -128,9 +134,12 @@ def run_release_validation(
                 ai_ok,
                 f"model={ready.model_loaded} faiss={ready.faiss_loaded} sqlite={ready.sqlite_connected} "
                 f"license={license_ok} cache={cache_ready} config={config_loaded} "
-                f"backend={ready.faiss_backend} sam2_onnx={sam2.get('onnx_encoder')}",
+                f"backend={ready.faiss_backend} sam2_ready={sam2_ready} "
+                f"config_path={config_path}",
                 readiness=asdict(ready) if is_dataclass(ready) else getattr(ready, "__dict__", {}),
                 embedding_model_ready=ready.model_loaded,
+                dinov2_loaded=ready.model_loaded,
+                sam2_loaded=sam2_ready,
                 faiss_ready=ready.faiss_loaded,
                 sqlite_ready=ready.sqlite_connected,
                 cache_ready=cache_ready,
@@ -232,6 +241,16 @@ def run_release_validation(
             pass
         try:
             (out_dir / "tilevision_release.log").write_text("\n".join(logs), encoding="utf-8")
+        except Exception:
+            pass
+        # Also copy the rotating app log from the isolated HOME if present.
+        try:
+            from src.utils.logger import get_log_file_path
+            import shutil
+
+            app_log = get_log_file_path("tilevision.log")
+            if app_log.is_file():
+                shutil.copy2(app_log, out_dir / "tilevision_app.log")
         except Exception:
             pass
 
