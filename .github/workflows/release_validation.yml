@@ -150,6 +150,9 @@ jobs:
 
       - name: Run release validation (real stack)
         id: release-run
+        # Windows Qt teardown under Git Bash can exit 127 after a real PASS.
+        # Enforce step below is the authoritative gate using release_summary.json.
+        continue-on-error: true
         shell: bash
         env:
           QT_QPA_PLATFORM: offscreen
