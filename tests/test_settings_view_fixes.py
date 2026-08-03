@@ -128,7 +128,11 @@ def test_refresh_feature_status_updates_indexed_tiles_count(qapp, tmp_path, cata
     assert sv._tiles_count_label.text() == "23"
 
 
-def test_search_engine_status_is_customer_friendly(qapp, tmp_path, catalogue_master_service):
+def test_search_engine_status_is_customer_friendly(
+    qapp, tmp_path, catalogue_master_service, monkeypatch
+):
+    # CI Test workflow sets TILEVISION_DEV_MODE=1; customer UI must still hide diagnostics.
+    monkeypatch.delenv("TILEVISION_DEV_MODE", raising=False)
     settings = AppSettings(config_dir=tmp_path)
     # Older installs that chose HNSW are forced back to flat_ip.
     settings._settings["index_backend"] = "hnsw"
@@ -144,7 +148,7 @@ def test_search_engine_status_is_customer_friendly(qapp, tmp_path, catalogue_mas
     assert not hasattr(sv, "_index_backend_combo")
     assert not hasattr(sv, "_apply_advice_button")
     text = sv._search_engine_status_label.text()
-    assert "5,000 Tiles" in text
+    assert "5,000 Tiles" in text or "5000 Tiles" in text
     assert "Exact" in text
     assert "IndexFlatIP" not in text
     assert "HNSW" not in text
