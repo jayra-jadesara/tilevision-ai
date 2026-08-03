@@ -108,7 +108,7 @@ def check_database_schema(db_path: str | Path) -> list[CompatibilityIssue]:
                 code="db_corrupt",
                 severity="error",
                 message=f"Database appears corrupted: {exc}",
-                remediation="Restore from Backup Database, then rebuild the FAISS index.",
+                remediation="Restore from Backup Database, then rebuild the search index.",
             )
         )
     except Exception as exc:
@@ -141,7 +141,7 @@ def check_index_metadata(
                 code="index_meta_missing",
                 severity="warning",
                 message="FAISS index has no metadata sidecar (.meta.json).",
-                remediation="Rebuild FAISS Index once to write compatibility metadata.",
+                remediation="Use Settings → Rebuild Search Index once to refresh search metadata.",
             )
         )
         return issues
@@ -156,7 +156,7 @@ def check_index_metadata(
                     f"(model={meta.embedding_model}, dim={meta.embedding_dimension}, "
                     f"feature_v={meta.feature_version})."
                 ),
-                remediation="Use Settings → Rebuild FAISS Index (guided rebuild).",
+                remediation="Use Settings → Rebuild Search Index (guided rebuild).",
             )
         )
 
@@ -166,12 +166,10 @@ def check_index_metadata(
                 code="index_backend_mismatch",
                 severity="warning",
                 message=(
-                    f"On-disk index backend={meta.index_backend} differs from "
-                    f"configured={expected_backend.value}."
+                    "The search index needs a rebuild to match this application version."
                 ),
                 remediation=(
-                    "Rebuild FAISS Index to switch backends, or set Settings → "
-                    "Index Backend back to the on-disk type."
+                    "Use Settings → Rebuild Search Index so search matches this version."
                 ),
             )
         )
@@ -191,7 +189,7 @@ def check_feature_status(
             severity="error",
             message=status.message
             or f"{status.stale_count} of {status.indexed_count} tiles have stale features.",
-            remediation="Use Settings → Rebuild FAISS Index after re-scanning folders.",
+            remediation="Use Settings → Rebuild Search Index after re-scanning folders.",
         )
     ]
 

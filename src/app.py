@@ -247,7 +247,6 @@ def build_application() -> int:
     )
 
     from src.ai.index_backends import BackendParams, IndexBackend
-    from src.ai.search_optimization_engine import SearchOptimizationEngine
 
     backend = IndexBackend.parse(settings.index_backend)
     backend_params = BackendParams(
@@ -262,13 +261,6 @@ def build_application() -> int:
         dimension=1024,
         backend=backend,
         backend_params=backend_params,
-    )
-    search_optimization_engine = SearchOptimizationEngine(
-        index_path=settings.index_path,
-        embedding_dimension=1024,
-        backend_params=backend_params,
-        vector_index=vector_index,
-        catalog_count_provider=lambda: len(image_repository.get_all()),
     )
 
     # ── 8. Construct Use Cases ────────────────────────────────────────────────
@@ -302,7 +294,6 @@ def build_application() -> int:
     from src.utils.pipeline_timing import profiling_enabled
 
     compatibility_report = None
-    soe_decision = None
     try:
         logger.info("Warming up AI engine and FAISS index...")
         t0 = _time.perf_counter()
@@ -315,34 +306,16 @@ def build_application() -> int:
         if not version_status.is_compatible and version_status.stale_count > 0:
             logger.warning(
                 "Stale feature index detected: %s "
-                "Use Settings > Rebuild FAISS Index after re-scanning folders.",
+                "Use Settings > Rebuild Search Index after re-scanning folders.",
                 version_status.message,
             )
         compatibility_report = run_compatibility_check(
             database_path=settings.database_path,
             index_path=settings.index_path,
-            expected_backend=vector_index.configured_backend,
+            expected_backend=backend,
             feature_status_provider=image_repository.get_feature_version_status,
             catalog_size=vector_index.get_total_count(),
         )
-        # Search Optimization Engine — measured decision after warm-up.
-        try:
-            soe_decision = search_optimization_engine.analyze_and_decide(
-                catalog_size=vector_index.get_total_count(),
-                current_backend=settings.index_backend,
-                run_benchmark=True,
-            )
-            search_optimization_engine.apply_to_settings(settings, soe_decision)
-            vector_index.configure_backend(soe_decision.selected_backend)
-            logger.info(
-                "SearchOptimizationEngine: backend=%s health=%s rebuild=%s",
-                soe_decision.selected_backend.value,
-                soe_decision.search_health,
-                soe_decision.rebuild_required,
-            )
-        except Exception as soe_exc:
-            logger.warning("SearchOptimizationEngine failed at startup: %s", soe_exc)
-            soe_decision = None
         logger.info(
             "AI engine warm-up complete (model=%.0f ms, faiss=%.0f ms).",
             model_ms,
@@ -574,7 +547,6 @@ def build_application() -> int:
         diagnostics_info_provider=_diagnostics_info,
         on_watch_folders_changed=_restart_folder_monitor,
         on_check_updates=lambda: update_controller.check_now(main_window),
-        search_optimization_engine=search_optimization_engine,
         vector_index=vector_index,
     )
     auto_index_notifier.catalog_updated.connect(main_window.handle_auto_index_event)
@@ -588,12 +560,6 @@ def build_application() -> int:
             main_window.offer_compatibility_rebuild(summary)
 
         QTimer.singleShot(750, _offer_rebuild)
-    elif soe_decision is not None and soe_decision.rebuild_required:
-
-        def _auto_optimize() -> None:
-            main_window.run_search_optimization(auto_rebuild_if_needed=True)
-
-        QTimer.singleShot(900, _auto_optimize)
 
     logger.info("TileVision AI is running.")
 

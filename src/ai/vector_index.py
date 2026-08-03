@@ -74,7 +74,7 @@ class FaissIndexManager:
 
     @property
     def configured_backend(self) -> IndexBackend:
-        """Backend requested by settings / SearchOptimizationEngine."""
+        """Backend requested by settings (production: flat_ip)."""
         return self._backend
 
     def configure_backend(self, backend: IndexBackend | str) -> None:

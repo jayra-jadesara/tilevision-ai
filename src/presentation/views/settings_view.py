@@ -7,12 +7,13 @@ Lets the user configure:
   - Language (placeholder — English only for now).
   - Backup Database (uses the database path internally; not shown to the
     user — an absolute file path invites accidental navigation/deletion).
-  - Rebuild FAISS Index (force re-embed everything).
+  - Rebuild Search Index (force re-embed everything).
   - Clear thumbnail Cache.
   - Export Logs.
 """
 
 import logging
+import os
 import shutil
 from pathlib import Path
 from typing import Callable, List, Optional
@@ -74,7 +75,6 @@ class SettingsView(QWidget):
         feature_version_provider: Optional[Callable[[], FeatureVersionStatus]] = None,
         gpu_info_provider: Optional[Callable[[], GpuRuntimeInfo]] = None,
         diagnostics_info_provider: Optional[Callable[[], dict]] = None,
-        search_optimization_engine=None,
         vector_index=None,
         theme: str = "dark",
         parent: Optional[QWidget] = None,
@@ -115,7 +115,6 @@ class SettingsView(QWidget):
         self._feature_version_provider = feature_version_provider
         self._gpu_info_provider = gpu_info_provider
         self._diagnostics_info_provider = diagnostics_info_provider
-        self._search_optimization_engine = search_optimization_engine
         self._vector_index = vector_index
         self._rebuild_worker: Optional[RebuildIndexWorker] = None
         self._rebuild_progress_dialog: Optional[QProgressDialog] = None
@@ -427,9 +426,7 @@ class SettingsView(QWidget):
         return box
 
     def _build_search_engine_section(self) -> QGroupBox:
-        """Customer-facing Search Engine status (no FAISS backend jargon)."""
-        from src.ai.search_optimization_engine import format_tile_count, is_developer_mode
-
+        """Customer Search Engine health — no FAISS/backend jargon."""
         box = self._section_box("Search Engine")
         layout = QVBoxLayout(box)
         layout.setSpacing(10)
@@ -442,12 +439,7 @@ class SettingsView(QWidget):
         )
         layout.addWidget(self._search_engine_status_label)
 
-        self._search_engine_summary_label = QLabel()
-        self._search_engine_summary_label.setObjectName("SectionNote")
-        self._search_engine_summary_label.setWordWrap(True)
-        layout.addWidget(self._search_engine_summary_label)
-
-        # Developer Mode only — hidden for production customers.
+        # Developer Mode only (TILEVISION_DEV_MODE=1). Uses index_advisor internally.
         self._dev_search_box = QGroupBox("Developer Mode — Search Diagnostics")
         self._dev_search_box.setObjectName("SettingsSection")
         dev_layout = QVBoxLayout(self._dev_search_box)
@@ -458,43 +450,18 @@ class SettingsView(QWidget):
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
         dev_layout.addWidget(self._dev_search_diag_label)
-
-        row = QHBoxLayout()
-        self._dev_backend_combo = QComboBox()
-        from src.ai.index_backends import IndexBackend, backend_display_name
-
-        for value in (
-            IndexBackend.FLAT_IP.value,
-            IndexBackend.HNSW.value,
-            IndexBackend.IVF.value,
-            IndexBackend.IVF_PQ.value,
-        ):
-            self._dev_backend_combo.addItem(
-                backend_display_name(IndexBackend.parse(value)), value
-            )
-        row.addWidget(QLabel("Backend override:"))
-        row.addWidget(self._dev_backend_combo, stretch=1)
-        self._dev_apply_backend_button = QPushButton("Apply Backend (Rebuild Required)")
-        self._dev_apply_backend_button.setObjectName("SecondaryButton")
-        self._dev_apply_backend_button.clicked.connect(self._on_dev_apply_backend)
-        row.addWidget(self._dev_apply_backend_button)
-        self._dev_reanalyze_button = QPushButton("Re-run Optimization Analysis")
-        self._dev_reanalyze_button.setObjectName("SecondaryButton")
-        self._dev_reanalyze_button.clicked.connect(
-            lambda: self.refresh_search_engine_status(run_analysis=True)
-        )
-        row.addWidget(self._dev_reanalyze_button)
-        dev_layout.addLayout(row)
+        self._dev_refresh_advisor_button = QPushButton("Refresh Advisor")
+        self._dev_refresh_advisor_button.setObjectName("SecondaryButton")
+        self._dev_refresh_advisor_button.clicked.connect(self._refresh_developer_search_diagnostics)
+        dev_layout.addWidget(self._dev_refresh_advisor_button)
         layout.addWidget(self._dev_search_box)
-        self._dev_search_box.setVisible(is_developer_mode())
+        self._dev_search_box.setVisible(os.environ.get("TILEVISION_DEV_MODE") == "1")
 
-        self.refresh_search_engine_status(run_analysis=False)
+        self.refresh_search_engine_status()
         return box
 
     def refresh_search_engine_status(self, *, run_analysis: bool = False) -> None:
-        """Refresh customer Search Engine panel from live catalog + SOE."""
-        from src.ai.search_optimization_engine import format_tile_count
-
+        """Refresh customer Search Engine health from live catalog data."""
         catalog_size = 0
         try:
             if self._catalog_count_provider is not None:
@@ -502,112 +469,102 @@ class SettingsView(QWidget):
         except Exception as exc:
             logger.warning("Could not read catalog size for Search Engine: %s", exc)
 
-        decision = None
-        engine = getattr(self, "_search_optimization_engine", None)
-        if run_analysis and engine is not None:
+        index_status = "Healthy"
+        status_line = "✓ Ready"
+        if self._feature_version_provider is not None:
             try:
-                decision = engine.analyze_and_decide(
-                    catalog_size=catalog_size,
-                    current_backend=self._settings.index_backend,
-                    run_benchmark=True,
-                )
-                engine.apply_to_settings(self._settings, decision)
-                vector_index = getattr(self, "_vector_index", None)
-                if vector_index is not None and hasattr(vector_index, "configure_backend"):
-                    vector_index.configure_backend(decision.selected_backend)
+                feat = self._feature_version_provider()
+                if feat.indexed_count == 0:
+                    status_line = "Ready"
+                    index_status = "No catalog yet"
+                elif not feat.is_compatible and feat.stale_count > 0:
+                    status_line = "Update recommended"
+                    index_status = "Needs rebuild"
             except Exception as exc:
-                logger.warning("Search optimization analysis failed: %s", exc)
+                logger.warning("Feature status for Search Engine failed: %s", exc)
 
-        status = self._settings.search_optimization_status
-        if status.lower().startswith("optimized"):
-            status_line = "✓ Optimized"
-        elif "need" in status.lower():
-            status_line = "Needs Optimization"
-        else:
-            status_line = status
+        last_indexed = "—"
+        try:
+            if self._indexing_use_case is not None:
+                getter = getattr(self._indexing_use_case, "get_last_indexed_folder_status", None)
+                if getter is not None:
+                    st = getter()
+                    when = getattr(st, "last_indexed_at", None) if st is not None else None
+                    if when is not None:
+                        last_indexed = when.strftime("%Y-%m-%d %H:%M") if hasattr(when, "strftime") else str(when)
+        except Exception as exc:
+            logger.debug("Last indexed lookup failed: %s", exc)
 
-        last_opt = self._settings.last_search_optimization_at or "Not run yet"
-        mode = (self._settings.search_engine_mode or "automatic").title()
-        health = self._settings.search_health or "Excellent"
-        index_status = self._settings.index_health_status or "Healthy"
-
+        catalog_label = f"{catalog_size:,} Tile" if catalog_size == 1 else f"{catalog_size:,} Tiles"
         self._search_engine_status_label.setText(
             f"Status\n{status_line}\n\n"
-            f"Mode\n{mode}\n\n"
-            f"Catalog\n{format_tile_count(catalog_size)}\n\n"
-            f"Search Health\n{health}\n\n"
+            f"Search Quality\nExact\n\n"
+            f"Catalog\n{catalog_label}\n\n"
             f"Index Status\n{index_status}\n\n"
-            f"Last Optimization\n{last_opt}"
+            f"Last Indexed\n{last_indexed}"
         )
-        summary = self._settings.last_optimization_summary or (
-            "TileVision automatically keeps search fast and accurate for this computer."
-        )
-        self._search_engine_summary_label.setText(summary)
 
         if getattr(self, "_dev_search_box", None) is not None and self._dev_search_box.isVisible():
-            diag = ""
-            if decision is not None:
-                diag = decision.technical_reason + "\n\n" + str(decision.diagnostics)
-            elif engine is not None and engine.last_decision is not None:
-                last = engine.last_decision
-                diag = last.technical_reason + "\n\n" + str(last.diagnostics)
-            else:
-                diag = (
-                    f"configured_backend={self._settings.index_backend}\n"
-                    f"catalog={catalog_size}"
-                )
-            self._dev_search_diag_label.setText(diag)
-            idx = self._dev_backend_combo.findData(self._settings.index_backend)
-            if idx >= 0:
-                self._dev_backend_combo.setCurrentIndex(idx)
+            self._refresh_developer_search_diagnostics()
 
-    def _on_dev_apply_backend(self) -> None:
-        from src.ai.search_optimization_engine import is_developer_mode
+    def _refresh_developer_search_diagnostics(self) -> None:
+        """Internal index_advisor diagnostics — Developer Mode only."""
+        if os.environ.get("TILEVISION_DEV_MODE") != "1":
+            return
+        if not hasattr(self, "_dev_search_diag_label"):
+            return
+        try:
+            from src.ai.feature_versions import CURRENT_EMBEDDING_DIMENSION
+            from src.ai.index_advisor import advise_index_backend
+            from src.ai.index_backends import BackendParams
 
-        if not is_developer_mode():
-            return
-        value = self._dev_backend_combo.currentData()
-        if not value:
-            return
-        self._settings.index_backend = str(value)
-        vector_index = getattr(self, "_vector_index", None)
-        if vector_index is not None and hasattr(vector_index, "configure_backend"):
-            vector_index.configure_backend(str(value))
-        self._settings.search_optimization_status = "Needs Optimization"
-        self._settings.index_health_status = "Needs rebuild"
-        self.refresh_search_engine_status(run_analysis=False)
-        QMessageBox.information(
-            self,
-            "Developer Mode",
-            "Backend override saved. Use Rebuild FAISS Index to apply on disk.",
-        )
+            catalog_size = 0
+            if self._catalog_count_provider is not None:
+                catalog_size = int(self._catalog_count_provider() or 0)
+            advice = advise_index_backend(
+                catalog_size=catalog_size,
+                current_backend="flat_ip",
+                embedding_dimension=CURRENT_EMBEDDING_DIMENSION,
+                backend_params=BackendParams(
+                    hnsw_m=self._settings.hnsw_m,
+                    hnsw_ef_search=self._settings.hnsw_ef_search,
+                    ivf_nlist=self._settings.ivf_nlist,
+                    ivf_nprobe=self._settings.ivf_nprobe,
+                    ivf_pq_m=self._settings.ivf_pq_m,
+                ),
+            )
+            active = "flat_ip"
+            vector_index = getattr(self, "_vector_index", None)
+            if vector_index is not None:
+                try:
+                    active = vector_index.active_backend().value
+                except Exception:
+                    try:
+                        active = vector_index.configured_backend.value
+                    except Exception:
+                        active = "flat_ip"
+            rows = "\n".join(
+                f"- {r.backend}: exact={r.exact} recall={r.recall} mem={r.memory} speed={r.speed}"
+                for r in advice.comparison
+            )
+            self._dev_search_diag_label.setText(
+                f"Production policy: flat_ip (exact)\n"
+                f"Active backend: {active}\n"
+                f"Advisor recommended: {advice.recommended_backend.value}\n"
+                f"Reason: {advice.reason}\n"
+                f"Expected recall: {advice.expected_recall:.2f}\n"
+                f"Expected search: ~{advice.expected_search_ms:.1f} ms\n"
+                f"Estimated RAM: ~{advice.estimated_ram_mib:.0f} MiB\n"
+                f"Catalog: {advice.catalog_size:,}  dim={advice.embedding_dimension}\n"
+                f"Comparison:\n{rows}\n"
+                f"{advice.approximate_warning}"
+            )
+        except Exception as exc:
+            self._dev_search_diag_label.setText(f"Advisor unavailable: {exc}")
 
     def refresh_index_advisor(self) -> None:
-        """Compatibility alias — refreshes Search Engine status."""
-        self.refresh_search_engine_status(run_analysis=False)
-
-    def start_automatic_search_optimization(self, *, reason: str = "") -> None:
-        """
-        Customer-safe automatic rebuild when SOE requires optimization.
-
-        Progress copy never names FAISS backends.
-        """
-        if getattr(self, "_auto_optimize_running", False):
-            return
-        if self._indexing_use_case is None or self._indexed_folders_provider is None:
-            return
-        folders = self._indexed_folders_provider()
-        if not folders:
-            return
-        self._auto_optimize_running = True
-        self._settings.search_optimization_status = "Optimizing"
-        self.refresh_search_engine_status(run_analysis=False)
-        self._start_rebuild(
-            skip_confirm=True,
-            window_title="Optimizing Search",
-            preparing_text="Optimizing Search...",
-            progress_prefix="Rebuilding Search Index",
-        )
+        """Compatibility alias for older callers."""
+        self.refresh_search_engine_status()
 
     def _refresh_sam2_status(self) -> None:
         """
@@ -654,7 +611,7 @@ class SettingsView(QWidget):
         layout = QVBoxLayout(box)
 
         note = QLabel(
-            "Rebuild FAISS Index re-analyzes every tile after a software update. "
+            "Rebuild Search Index re-analyzes every tile after a software update. "
             "Clear Cache removes thumbnails only (they regenerate automatically). "
             "Backup Database, Export Logs, and Export Diagnostics are optional "
             "support tools — use them before major changes or when contacting support."
@@ -675,7 +632,7 @@ class SettingsView(QWidget):
         self._export_logs_button.setObjectName("SecondaryButton")
         self._export_logs_button.clicked.connect(self._on_export_logs)
 
-        self._rebuild_button = QPushButton("Rebuild FAISS Index")
+        self._rebuild_button = QPushButton("Rebuild Search Index")
         self._rebuild_button.setObjectName("SecondaryButton")
         self._rebuild_button.clicked.connect(self._on_rebuild_faiss)
         self._rebuild_button.setEnabled(
@@ -865,13 +822,13 @@ class SettingsView(QWidget):
                 self,
                 "Rebuild Recommended",
                 f"{summary}\n\nOpen Settings when folders are configured, then "
-                "use Rebuild FAISS Index.",
+                "use Rebuild Search Index.",
             )
             return
         reply = QMessageBox.question(
             self,
             "Guided Rebuild",
-            f"{summary}\n\nStart Rebuild FAISS Index now?",
+            f"{summary}\n\nStart Rebuild Search Index now?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes,
         )
@@ -953,26 +910,13 @@ class SettingsView(QWidget):
         if not folders:
             return
 
-        # Align in-memory FAISS config with SearchOptimizationEngine decision.
-        engine = getattr(self, "_search_optimization_engine", None)
-        if engine is not None:
+        # Ensure production FlatIP configuration before rebuild.
+        self._settings.index_backend = "flat_ip"
+        if self._vector_index is not None and hasattr(self._vector_index, "configure_backend"):
             try:
-                catalog_size = 0
-                if self._catalog_count_provider is not None:
-                    catalog_size = int(self._catalog_count_provider() or 0)
-                decision = engine.analyze_and_decide(
-                    catalog_size=catalog_size,
-                    current_backend=self._settings.index_backend,
-                    run_benchmark=False,
-                )
-                engine.apply_to_settings(self._settings, decision)
-                if self._vector_index is not None and hasattr(self._vector_index, "configure_backend"):
-                    self._vector_index.configure_backend(decision.selected_backend)
-                    # Structure change: clear on-disk index so rebuild embeds into new backend.
-                    if decision.rebuild_required and hasattr(self._vector_index, "clear_all"):
-                        self._vector_index.clear_all()
+                self._vector_index.configure_backend("flat_ip")
             except Exception as exc:
-                logger.warning("Pre-rebuild search optimization failed: %s", exc)
+                logger.warning("Could not configure FlatIP before rebuild: %s", exc)
 
         self._rebuild_progress_prefix = progress_prefix
         self._rebuild_button.setEnabled(False)
@@ -1016,7 +960,6 @@ class SettingsView(QWidget):
         )
 
     def _on_rebuild_finished(self, total_reembedded: int, total_failed: int) -> None:
-        self._auto_optimize_running = False
         self._rebuild_button.setEnabled(True)
         if self._rebuild_progress_dialog is not None:
             self._rebuild_progress_dialog.setValue(
@@ -1029,7 +972,7 @@ class SettingsView(QWidget):
         if self._on_catalog_changed is not None:
             self._on_catalog_changed()
         self.refresh_feature_status()
-        self.refresh_search_engine_status(run_analysis=True)
+        self.refresh_search_engine_status()
 
         message = f"Rebuild complete. {total_reembedded} image(s) re-indexed."
         if total_failed:
@@ -1037,7 +980,6 @@ class SettingsView(QWidget):
         QMessageBox.information(self, "Rebuild Complete", message)
 
     def _on_rebuild_failed(self, error_message: str) -> None:
-        self._auto_optimize_running = False
         self._rebuild_button.setEnabled(True)
         if self._rebuild_progress_dialog is not None:
             self._rebuild_progress_dialog.close()

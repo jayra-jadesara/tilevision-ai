@@ -203,7 +203,7 @@ class DashboardView(QWidget):
         self._db_size_card = _StatCard(self._format_size(self._database_size_provider), "Database Size")
         grid.addWidget(self._db_size_card, 0, 2)
 
-        self._faiss_size_card = _StatCard(self._format_size(self._faiss_size_provider), "FAISS Index Size")
+        self._faiss_size_card = _StatCard(self._format_size(self._faiss_size_provider), "Search Index Size")
         grid.addWidget(self._faiss_size_card, 0, 3)
 
         self._last_search_card = _StatCard(self._format_last_search(), "Last Search")

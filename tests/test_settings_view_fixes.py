@@ -130,6 +130,12 @@ def test_refresh_feature_status_updates_indexed_tiles_count(qapp, tmp_path, cata
 
 def test_search_engine_status_is_customer_friendly(qapp, tmp_path, catalogue_master_service):
     settings = AppSettings(config_dir=tmp_path)
+    # Older installs that chose HNSW are forced back to flat_ip.
+    settings._settings["index_backend"] = "hnsw"
+    settings.save()
+    settings.load()
+    assert settings.index_backend == "flat_ip"
+
     sv = SettingsView(
         settings=settings,
         catalogue_master_service=catalogue_master_service,
@@ -139,8 +145,23 @@ def test_search_engine_status_is_customer_friendly(qapp, tmp_path, catalogue_mas
     assert not hasattr(sv, "_apply_advice_button")
     text = sv._search_engine_status_label.text()
     assert "5,000 Tiles" in text
-    assert "Automatic" in text or "automatic" in text.lower()
+    assert "Exact" in text
     assert "IndexFlatIP" not in text
     assert "HNSW" not in text
+    assert "Recall" not in text
     # Developer diagnostics hidden without TILEVISION_DEV_MODE.
-    assert not sv._dev_search_box.isVisible()
+    assert sv._dev_search_box.isHidden()
+
+
+def test_developer_mode_shows_advisor_diagnostics(qapp, tmp_path, catalogue_master_service, monkeypatch):
+    monkeypatch.setenv("TILEVISION_DEV_MODE", "1")
+    settings = AppSettings(config_dir=tmp_path)
+    sv = SettingsView(
+        settings=settings,
+        catalogue_master_service=catalogue_master_service,
+        catalog_count_provider=lambda: 23,
+    )
+    assert not sv._dev_search_box.isHidden()
+    sv._refresh_developer_search_diagnostics()
+    diag = sv._dev_search_diag_label.text()
+    assert "flat_ip" in diag.lower() or "FlatIP" in diag or "IndexFlatIP" in diag
