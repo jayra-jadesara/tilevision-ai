@@ -48,7 +48,10 @@ HIDDEN_IMPORTS = [
     "PySide6.QtNetwork",
     "PySide6.QtPrintSupport",
     "PySide6.QtSvg",
+    "PySide6.QtTest",
     "shiboken6",
+    # Used by packaged-app release validation (S21 memory stress / collectors).
+    "psutil",
 ]
 
 # Optional SAM2 Precise Crop (lab). Only added when TILEVISION_BUNDLE_SAM2 is on
@@ -198,7 +201,7 @@ def collect_extra_package_bundles() -> tuple[list, list, list]:
     datas: list = []
     binaries: list = []
     hiddenimports: list = []
-    packages = ["onnxruntime", "cv2", "faiss", "reportlab", "PySide6"]
+    packages = ["onnxruntime", "cv2", "faiss", "reportlab", "PySide6", "psutil"]
     if should_bundle_sam2_onnx():
         # Already listed; collect_all is idempotent enough for CI.
         pass

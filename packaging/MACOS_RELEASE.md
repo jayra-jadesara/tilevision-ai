@@ -72,16 +72,33 @@ CI: `.github/workflows/build.yml` (`workflow_dispatch` or tag `v*`).
 
 ## Validation
 
-1. `scripts/verify_frozen_mac_app.sh` — arch, models, torch, deps
-2. `scripts/smoke_launch_mac_app.sh` — short first-launch smoke
-3. Full **Release Validation** (30/30) from the unpacked `.app` on a Mac host:
+### Packaged application (required for ship)
+GitHub Actions workflow **`Packaged App Release Validation`**:
+
+1. Build `.app` + professional DMG on `macos-15-intel` and `macos-15`
+2. Mount DMG → install to `/Applications/TileVision AI.app`
+3. Run installed binary `--verify-bundle`
+4. Run installed binary `--release-validation` (S01–S30)
+5. FAIL unless `release_summary.json` verdict is **PASS**
+
+Drivers (`qa_e2e`) are loaded from the CI checkout via `TILEVISION_QA_SUITE_DIR`.
+Product modules and models come from the **installed** `.app` (`sys.frozen`).
 
 ```bash
-export TILEVISION_DEV_MODE=1 TILEVISION_OFFLINE_MODEL=1
-# Prefer validating against the same codebase with the installed models;
-# frozen-app E2E wiring may use the repo entrypoint with bundled weights.
-python qa_e2e/run_release_validation.py --profile pr
+# Local (on a Mac, after building a DMG):
+bash scripts/validate_installed_mac_dmg.sh \
+  dist/TileVision-AI-AppleSilicon.dmg \
+  "$PWD" \
+  /tmp/packaged_rv_out
 ```
+
+### Static / smoke (packaging CI)
+1. `scripts/verify_frozen_mac_app.sh` — arch, models, torch, deps
+2. `scripts/smoke_launch_mac_app.sh` — short first-launch smoke
+
+### Source-tree Release Validation
+Still available for day-to-day PR gates (`release_validation.yml`) but does **not**
+prove the DMG-installed customer binary.
 
 ## Reports
 
