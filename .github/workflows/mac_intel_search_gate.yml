@@ -1,0 +1,149 @@
+# P0: macOS Intel search must complete (OpenMP↔QThread hang regression gate).
+#
+# Runs the real Release Validation suite on macos-15-intel with the production
+# OpenMP-safe Python AI thread path (not mocks). FAIL if any search times out
+# or stalls.
+
+name: Mac Intel Search Gate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/presentation/workers/**"
+      - "src/presentation/viewmodels/search_viewmodel.py"
+      - "src/ai/embedder.py"
+      - "src/ai/vector_index.py"
+      - "src/core/use_cases/search_tiles.py"
+      - "src/utils/search_stages.py"
+      - "main.py"
+      - "src/app.py"
+      - "qa_e2e/**"
+      - ".github/workflows/mac_intel_search_gate.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/presentation/workers/**"
+      - "src/ai/embedder.py"
+      - "src/ai/vector_index.py"
+      - "main.py"
+      - "src/app.py"
+
+concurrency:
+  group: mac-intel-search-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mac-intel-search:
+    name: Mac Intel search (real stack)
+    runs-on: macos-15-intel
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        id: setup-python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: x64
+
+      - name: Cache DINOv2 model weights
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: model_weights/dinov2-large
+          key: dinov2-large-v2-${{ hashFiles('scripts/download_dinov2_model.py') }}
+
+      - name: Install Mac build dependencies
+        shell: bash
+        env:
+          PYTHON_SETUP_PATH: ${{ steps.setup-python.outputs.python-path }}
+        run: |
+          set -euo pipefail
+          source scripts/install_mac_deps.sh x64
+          echo "MACOS_PYTHON_PATH=$MACOS_PYTHON_PATH" >> "$GITHUB_ENV"
+          "$MACOS_PYTHON_PATH" -m pip install --no-cache-dir pytest psutil reportlab
+
+      - name: Download DINOv2 weights
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: bash scripts/macos_build_python.sh scripts/download_dinov2_model.py
+
+      - name: Download ONNX SAM2 weights
+        run: bash scripts/macos_build_python.sh scripts/download_sam2_onnx_model.py
+
+      - name: Prove production Python AI threads are active
+        run: |
+          bash scripts/macos_build_python.sh - <<'PY'
+          from src.presentation.workers.native_ai_thread import (
+              configure_macos_openmp_for_ai,
+              install_python_ai_worker_threads,
+              production_uses_python_ai_threads,
+              should_use_python_ai_threads,
+          )
+          configure_macos_openmp_for_ai()
+          install_python_ai_worker_threads()
+          assert should_use_python_ai_threads(), "Darwin must prefer Python AI threads"
+          assert production_uses_python_ai_threads(), "production install failed"
+          import os
+          assert os.environ.get("OMP_NUM_THREADS") == "1"
+          print("OK: production OpenMP-safe AI threads armed")
+          PY
+
+      - name: Run release validation (100 searches, real DINOv2/FAISS)
+        env:
+          TILEVISION_DEV_MODE: "1"
+          TILEVISION_OFFLINE_MODEL: "1"
+          TILEVISION_RELEASE_PROFILE: full
+          TILEVISION_RELEASE_SEARCH_COUNT: "100"
+          TILEVISION_RELEASE_IDLE_SECONDS: "5"
+          TILEVISION_RELEASE_MEM_LOOPS: "4"
+          TILEVISION_QA_OUT: ${{ github.workspace }}/qa_e2e/artifacts/mac_intel_search_gate
+          TILEVISION_QA_SPEED: "3.0"
+          TILEVISION_QA_TILES: "4"
+          TILEVISION_QA_INDEX_TIMEOUT: "3600"
+          TILEVISION_QA_SEARCH_STALL_S: "180"
+          TILEVISION_RELEASE_SEARCH_TIMEOUT: "360"
+          # Must NOT force QThread — that is the hang path.
+          TILEVISION_FORCE_QTHREAD_AI: "0"
+          QT_QPA_PLATFORM: offscreen
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          VECLIB_MAXIMUM_THREADS: "1"
+          KMP_DUPLICATE_LIB_OK: "TRUE"
+        run: |
+          set -euo pipefail
+          bash scripts/macos_build_python.sh qa_e2e/run_release_validation.py \
+            --profile full \
+            --out "${TILEVISION_QA_OUT}"
+
+      - name: Enforce PASS + no timeout wording in logs
+        if: always()
+        run: |
+          set -euo pipefail
+          SUMMARY=qa_e2e/artifacts/mac_intel_search_gate/release_summary.json
+          test -f "$SUMMARY"
+          python3 - <<'PY'
+          import json, pathlib, sys
+          p = pathlib.Path("qa_e2e/artifacts/mac_intel_search_gate/release_summary.json")
+          data = json.loads(p.read_text())
+          print(json.dumps(data, indent=2))
+          if data.get("verdict") != "PASS":
+              sys.exit(1)
+          log = pathlib.Path("qa_e2e/artifacts/mac_intel_search_gate/tilevision_release.log")
+          text = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
+          for bad in ("Search took too long", "worker stopped responding", "Search timed out"):
+              if bad.lower() in text.lower():
+                  print(f"FAIL: found timeout/stall wording: {bad}", file=sys.stderr)
+                  sys.exit(1)
+          print("PASS: verdict=PASS and no timeout/stall dialog text in logs")
+          PY
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-intel-search-gate
+          path: qa_e2e/artifacts/mac_intel_search_gate/
+          if-no-files-found: warn
+          retention-days: 30
