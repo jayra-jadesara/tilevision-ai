@@ -164,13 +164,14 @@ class UpdateAvailableDialog(QDialog):
         self._progress.show()
         self._progress.setRange(0, 1000)
         self._progress.setValue(0)
-        self._download_btn.setEnabled(False)
-        self._later_btn.setEnabled(False)
-        self._skip_btn.setEnabled(False)
-        self._browser_btn.setEnabled(False)
-        self._cancel_btn.show()
+        # Hide idle actions — do not leave greyed-out duplicate buttons visible.
+        self._download_btn.hide()
+        self._later_btn.hide()
+        self._skip_btn.hide()
+        self._browser_btn.hide()
         self._open_btn.hide()
         self._install_btn.hide()
+        self._cancel_btn.show()
 
         self._worker = UpdateDownloadWorker(
             self._info.download_url,
@@ -203,17 +204,20 @@ class UpdateAvailableDialog(QDialog):
         self._progress.setRange(0, 1000)
         self._progress.setValue(1000)
         self._cancel_btn.hide()
-        self._install_btn.show()
-        self._open_btn.show()
-        self._download_btn.setEnabled(True)
-        self._download_btn.setText("Download & Install")
+        self._later_btn.show()
         self._later_btn.setEnabled(True)
+        self._skip_btn.show()
         self._skip_btn.setEnabled(True)
-        self._browser_btn.setEnabled(True)
+        self._browser_btn.hide()
+        self._download_btn.hide()
+        self._install_btn.show()
+        self._install_btn.setEnabled(True)
+        self._open_btn.show()
+        self._open_btn.setEnabled(True)
 
         if self._auto_install_after_download:
             self._status.setText(
-                f"Download complete.\nInstalling update and restarting TileVision AI…"
+                "Download complete.\nInstalling update and restarting TileVision AI…"
             )
             QTimer.singleShot(250, self._on_install_and_restart)
         else:
@@ -245,9 +249,14 @@ class UpdateAvailableDialog(QDialog):
         self._cancel_btn.hide()
         self._open_btn.hide()
         self._install_btn.hide()
+        self._download_btn.show()
         self._download_btn.setEnabled(True)
+        self._download_btn.setText("Download & Install")
+        self._later_btn.show()
         self._later_btn.setEnabled(True)
+        self._skip_btn.show()
         self._skip_btn.setEnabled(True)
+        self._browser_btn.show()
         self._browser_btn.setEnabled(True)
 
     def _on_cancel_download(self) -> None:
@@ -278,24 +287,27 @@ class UpdateAvailableDialog(QDialog):
             return
 
         self._installing = True
-        self._install_btn.setEnabled(False)
-        self._open_btn.setEnabled(False)
-        self._download_btn.setEnabled(False)
-        self._later_btn.setEnabled(False)
-        self._skip_btn.setEnabled(False)
-        self._browser_btn.setEnabled(False)
+        self._install_btn.hide()
+        self._open_btn.hide()
+        self._download_btn.hide()
+        self._later_btn.hide()
+        self._skip_btn.hide()
+        self._browser_btn.hide()
+        self._cancel_btn.hide()
         self._status.setText("Installing update… TileVision AI will restart.")
 
         try:
             launch_update_installer(self._downloaded_path)
         except UpdateInstallError as exc:
             self._installing = False
-            self._install_btn.setEnabled(True)
-            self._open_btn.setEnabled(True)
-            self._download_btn.setEnabled(True)
+            self._later_btn.show()
             self._later_btn.setEnabled(True)
+            self._skip_btn.show()
             self._skip_btn.setEnabled(True)
-            self._browser_btn.setEnabled(True)
+            self._install_btn.show()
+            self._install_btn.setEnabled(True)
+            self._open_btn.show()
+            self._open_btn.setEnabled(True)
             logger.error("In-app install failed: %s", exc)
             QMessageBox.warning(
                 self,
@@ -305,12 +317,14 @@ class UpdateAvailableDialog(QDialog):
             return
         except Exception as exc:
             self._installing = False
-            self._install_btn.setEnabled(True)
-            self._open_btn.setEnabled(True)
-            self._download_btn.setEnabled(True)
+            self._later_btn.show()
             self._later_btn.setEnabled(True)
+            self._skip_btn.show()
             self._skip_btn.setEnabled(True)
-            self._browser_btn.setEnabled(True)
+            self._install_btn.show()
+            self._install_btn.setEnabled(True)
+            self._open_btn.show()
+            self._open_btn.setEnabled(True)
             logger.exception("Unexpected install failure")
             QMessageBox.warning(
                 self,
