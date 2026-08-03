@@ -163,3 +163,68 @@ def test_check_for_updates_returns_none_when_current():
         info = update_check.check_for_updates(current_version="1.0.0")
 
     assert info is None
+
+
+def test_fetch_update_manifest_falls_back_to_api_on_latest_404():
+    """Empty latest tag (no assets) → /latest/download/... 404; recover via API."""
+    manifest = {
+        "version": "1.2.4",
+        "release_notes": "fix",
+        "downloads": {"windows": "https://example.com/setup.exe"},
+    }
+    api_payload = json.dumps(
+        [
+            {
+                "tag_name": "v1.2.4-empty",
+                "draft": False,
+                "prerelease": False,
+                "assets": [],
+            },
+            {
+                "tag_name": "v1.2.4",
+                "draft": False,
+                "prerelease": False,
+                "assets": [
+                    {
+                        "name": "update_manifest.json",
+                        "browser_download_url": "https://example.com/update_manifest.json",
+                    }
+                ],
+            },
+        ]
+    ).encode("utf-8")
+    manifest_bytes = json.dumps(manifest).encode("utf-8")
+
+    calls = {"n": 0}
+
+    class _Response:
+        def __init__(self, body: bytes):
+            self._body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return self._body
+
+    def _urlopen(request, timeout=12.0, context=None):
+        calls["n"] += 1
+        url = request.full_url if hasattr(request, "full_url") else str(request)
+        if url.rstrip("/") == update_check.DEFAULT_MANIFEST_URL.rstrip("/"):
+            raise update_check.urllib.error.HTTPError(
+                url, 404, "Not Found", hdrs=None, fp=None
+            )
+        if url == update_check._GITHUB_RELEASES_API:
+            return _Response(api_payload)
+        if url == "https://example.com/update_manifest.json":
+            return _Response(manifest_bytes)
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    with patch.object(update_check.urllib.request, "urlopen", side_effect=_urlopen):
+        data = update_check.fetch_update_manifest(update_check.DEFAULT_MANIFEST_URL)
+
+    assert data["version"] == "1.2.4"
+    assert calls["n"] == 3

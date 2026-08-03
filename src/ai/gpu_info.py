@@ -46,12 +46,18 @@ def configure_mps_fallback() -> bool:
 
 
 def is_mps_unsupported_op_error(message: str) -> bool:
-    """Return True when a RuntimeError describes a missing MPS operator."""
+    """Return True when an error describes a missing/unsupported MPS feature.
+
+    Includes missing Metal ops (e.g. upsample_bicubic2d) and torch builds that
+    reject ``autocast(device_type=\"mps\")``. Those must fall back to CPU —
+    never be misclassified as OOM batch-split retries.
+    """
     text = (message or "").lower()
     return (
         "not currently implemented for the mps device" in text
         or "not implemented for the mps" in text
         or ("upsample_bicubic2d" in text and "mps" in text)
+        or ("unsupported autocast" in text and "mps" in text)
     )
 
 
