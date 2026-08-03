@@ -35,6 +35,11 @@ WizardStyle=modern
 PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
+; Allow in-app silent upgrades to close the running app and replace files.
+CloseApplications=yes
+CloseApplicationsFilter=TileVisionAI.exe
+RestartApplications=no
+AppMutex=TileVisionAI_SingleInstance
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -56,7 +61,8 @@ Name: "{commonappdata}\TileVisionAI"; Permissions: users-modify
 Name: "{commonappdata}\TileVisionAI\.lic"; Permissions: users-modify
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+; Always relaunch after install — including /SILENT in-app upgrades.
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall
 
 [Messages]
 WelcomeLabel2=This will install [name/ver] on your computer.%n%nTileVision AI is an offline visual tile search application for showrooms and distributors.
