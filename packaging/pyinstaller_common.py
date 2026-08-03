@@ -127,6 +127,13 @@ EXCLUDES = [
     "tensorboard",
     "triton",
     "IPython",
+    # Release-validation drivers must load from the CI checkout at runtime —
+    # never ship them inside the customer .app (also avoids Analysis pulling
+    # the suite in via main.py --release-validation).
+    "qa_e2e",
+    "pytest",
+    "pytest_qt",
+    "_pytest",
 ]
 
 
@@ -201,7 +208,10 @@ def collect_extra_package_bundles() -> tuple[list, list, list]:
     datas: list = []
     binaries: list = []
     hiddenimports: list = []
-    packages = ["onnxruntime", "cv2", "faiss", "reportlab", "PySide6", "psutil"]
+    packages = ["onnxruntime", "faiss", "reportlab", "PySide6", "psutil"]
+    # NOTE: do NOT collect_all("cv2"). OpenCV's own PyInstaller hooks already
+    # collect it; a second collect_all duplicates Frameworks/Resources layout
+    # and triggers "recursion is detected during loading of cv2" on macOS .app.
     if should_bundle_sam2_onnx():
         # Already listed; collect_all is idempotent enough for CI.
         pass

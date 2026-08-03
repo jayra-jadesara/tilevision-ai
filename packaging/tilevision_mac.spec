@@ -46,6 +46,9 @@ a = Analysis(
     excludes=EXCLUDES,
     cipher=block_cipher,
     noarchive=False,
+    # Keep cv2 as source files so its macOS bootstrap can locate the extension
+    # beside the package (avoids "recursion is detected during loading of cv2").
+    module_collection_mode={"cv2": "py"},
 )
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
