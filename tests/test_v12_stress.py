@@ -126,6 +126,7 @@ def test_missing_database_reported(tmp_path):
     assert any(i.code == "db_missing" for i in issues)
 
 
+@pytest.mark.slow
 def test_sqlite_survives_pool_stress(tmp_path):
     db = DatabaseContext(str(tmp_path / "pool.db"))
 
