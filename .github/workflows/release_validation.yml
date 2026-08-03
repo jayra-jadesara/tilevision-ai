@@ -173,7 +173,15 @@ jobs:
           KMP_DUPLICATE_LIB_OK: "TRUE"
         run: |
           set -euo pipefail
-          "${RUN_PYTHON}" qa_e2e/run_release_validation.py --profile "${TILEVISION_RELEASE_PROFILE}" --out "${TILEVISION_QA_OUT}"
+          PYBIN="${RUN_PYTHON:-python}"
+          if ! command -v "$PYBIN" >/dev/null 2>&1; then
+            PYBIN=python3
+          fi
+          # Prefer python.exe on Windows so Git Bash does not wrap a broken shim.
+          if [ "${{ runner.os }}" = "Windows" ] && command -v python.exe >/dev/null 2>&1; then
+            PYBIN=python.exe
+          fi
+          "$PYBIN" qa_e2e/run_release_validation.py --profile "${TILEVISION_RELEASE_PROFILE}" --out "${TILEVISION_QA_OUT}"
 
       - name: Enforce release verdict
         if: always()
