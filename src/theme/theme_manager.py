@@ -394,6 +394,70 @@ def get_shared_view_qss(theme: str) -> str:
     """
 
 
+def get_dialog_qss(theme: str) -> str:
+    """
+    Shared chrome for custom modal dialogs (Update, Crop, License, …).
+
+    Matches main app buttons/progress — does not restyle the OS title bar
+    (Windows caption stays native unless the dialog is frameless).
+    """
+    p = get_palette(theme)
+    return (
+        get_shared_view_qss(theme)
+        + f"""
+    QDialog {{
+        background-color: {p['bg_app']};
+        color: {p['text_primary']};
+    }}
+    QLabel {{
+        color: {p['text_primary']};
+    }}
+    #DialogHint, #DialogStatus {{
+        color: {p['text_secondary']};
+        font-size: 12px;
+    }}
+    #DialogNotes {{
+        background-color: {p['bg_input']};
+        color: {p['text_primary']};
+        border: 1px solid {p['border_strong']};
+        border-radius: 8px;
+        padding: 8px;
+        font-size: 12px;
+        selection-background-color: {p['accent']};
+    }}
+    #DialogProgressBar {{
+        background-color: {p['bg_input']};
+        border: 1px solid {p['border_strong']};
+        border-radius: 6px;
+        text-align: center;
+        color: {p['text_primary']};
+        font-size: 12px;
+        min-height: 18px;
+    }}
+    #DialogProgressBar::chunk {{
+        background: qlineargradient(
+            x1: 0, y1: 0, x2: 1, y2: 0,
+            stop: 0 {p['accent']},
+            stop: 1 {p['accent_soft']}
+        );
+        border-radius: 5px;
+    }}
+    #LinkButton {{
+        background: transparent;
+        border: none;
+        color: {p['accent_text']};
+        text-align: left;
+        padding: 4px 0;
+        font-size: 11px;
+    }}
+    #LinkButton:hover {{
+        color: {p['accent']};
+        text-decoration: underline;
+    }}
+    """
+    )
+
+
 def get_settings_view_qss(theme: str) -> str:
     """Shared stylesheet for Settings and Export Profiles tabs."""
     p = get_palette(theme)
