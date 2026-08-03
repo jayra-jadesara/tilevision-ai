@@ -50,8 +50,8 @@ python main.py
   missing Metal ops (e.g. `upsample_bicubic2d` used during visual search) run on CPU
   instead of crashing. If an unsupported op still surfaces, search falls back to full CPU inference.
 - **Intel Mac:** CPU inference only — MPS is never selected on Intel hardware.
-- **Updates:** Packaged Intel builds check `update_manifest.json` on every launch and offer the
-  `macos_intel` DMG (never the Apple Silicon build).
+- **Updates:** Packaged Intel builds check `update_manifest.json` on every launch, download the
+  `macos_intel` DMG in-app (never Apple Silicon), then install & restart into `/Applications`.
 
 Check GPU status:
 

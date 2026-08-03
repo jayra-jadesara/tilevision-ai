@@ -1,4 +1,4 @@
-"""Update available dialog — fast in-app installer download with progress."""
+"""Update available dialog — fast in-app download + install & restart."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from typing import Optional
 from PySide6.QtCore import QTimer, QUrl, Qt
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QHBoxLayout,
     QLabel,
@@ -30,12 +31,13 @@ from src.utils.update_downloader import (
     format_eta,
     format_speed,
 )
+from src.utils.update_installer import UpdateInstallError, launch_update_installer
 
 logger = logging.getLogger("tilevision.presentation.views.update_dialog")
 
 
 class UpdateAvailableDialog(QDialog):
-    """Notify the customer that a new TileVision AI build is ready."""
+    """Download the new build in-app, then install and restart TileVision AI."""
 
     def __init__(
         self,
@@ -44,12 +46,15 @@ class UpdateAvailableDialog(QDialog):
         theme: str = "light",
         parent=None,
         auto_start_download: bool = True,
+        auto_install_after_download: bool = True,
     ) -> None:
         super().__init__(parent)
         self._info = info
         self._theme = theme
+        self._auto_install_after_download = auto_install_after_download
         self._worker: Optional[UpdateDownloadWorker] = None
         self._downloaded_path: Optional[Path] = None
+        self._installing = False
 
         self.setWindowTitle("Update Available")
         self.setModal(True)
@@ -66,10 +71,9 @@ class UpdateAvailableDialog(QDialog):
         layout.addWidget(headline)
 
         hint = QLabel(
-            f"Fast download of <b>{platform_download_label()}</b> "
-            f"uses {DEFAULT_CONNECTIONS} parallel connections inside TileVision "
-            "(not Chrome/Safari — those are often throttled to KB/s and can take hours). "
-            "When it finishes, open the installer. "
+            f"TileVision downloads <b>{platform_download_label()}</b> "
+            f"with {DEFAULT_CONNECTIONS} parallel connections (fast — not the browser), "
+            "then installs and restarts itself. "
             "Your license key and tile catalogue stay on this computer."
         )
         hint.setWordWrap(True)
@@ -108,13 +112,19 @@ class UpdateAvailableDialog(QDialog):
         self._cancel_btn.clicked.connect(self._on_cancel_download)
         buttons.addWidget(self._cancel_btn)
 
-        self._open_btn = QPushButton("Open Installer")
+        self._open_btn = QPushButton("Open File…")
         self._open_btn.hide()
-        self._open_btn.setDefault(True)
+        self._open_btn.setToolTip("Fallback: open the downloaded installer manually")
         self._open_btn.clicked.connect(self._on_open_installer)
         buttons.addWidget(self._open_btn)
 
-        self._download_btn = QPushButton("Download in App")
+        self._install_btn = QPushButton("Install & Restart")
+        self._install_btn.hide()
+        self._install_btn.setDefault(True)
+        self._install_btn.clicked.connect(self._on_install_and_restart)
+        buttons.addWidget(self._install_btn)
+
+        self._download_btn = QPushButton("Download & Install")
         self._download_btn.setDefault(True)
         self._download_btn.clicked.connect(self._on_download)
         buttons.addWidget(self._download_btn)
@@ -125,9 +135,7 @@ class UpdateAvailableDialog(QDialog):
         self._browser_btn = QPushButton("Very slow browser download (not recommended)…")
         self._browser_btn.setFlat(True)
         self._browser_btn.setToolTip(
-            "Fallback only. A single browser connection from GitHub is often "
-            "throttled to ~100–200 KB/s (hours for a Mac installer). "
-            "Prefer Download in App."
+            "Fallback only. Prefer Download & Install inside TileVision."
         )
         self._browser_btn.clicked.connect(self._on_open_browser)
         layout.addWidget(self._browser_btn)
@@ -136,6 +144,9 @@ class UpdateAvailableDialog(QDialog):
             QTimer.singleShot(0, self._on_download)
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        if self._installing:
+            event.ignore()
+            return
         if self._worker is not None and self._worker.isRunning():
             self._worker.cancel()
             self._worker.wait(2000)
@@ -153,12 +164,14 @@ class UpdateAvailableDialog(QDialog):
         self._progress.show()
         self._progress.setRange(0, 1000)
         self._progress.setValue(0)
-        self._download_btn.setEnabled(False)
-        self._later_btn.setEnabled(False)
-        self._skip_btn.setEnabled(False)
-        self._browser_btn.setEnabled(False)
-        self._cancel_btn.show()
+        # Hide idle actions — do not leave greyed-out duplicate buttons visible.
+        self._download_btn.hide()
+        self._later_btn.hide()
+        self._skip_btn.hide()
+        self._browser_btn.hide()
         self._open_btn.hide()
+        self._install_btn.hide()
+        self._cancel_btn.show()
 
         self._worker = UpdateDownloadWorker(
             self._info.download_url,
@@ -190,17 +203,28 @@ class UpdateAvailableDialog(QDialog):
         self._downloaded_path = Path(path)
         self._progress.setRange(0, 1000)
         self._progress.setValue(1000)
-        self._status.setText(
-            f"Download complete:\n{path}\n\n"
-            "Click Open Installer, then reopen TileVision AI when setup finishes."
-        )
         self._cancel_btn.hide()
-        self._open_btn.show()
-        self._download_btn.setEnabled(True)
-        self._download_btn.setText("Download in App")
+        self._later_btn.show()
         self._later_btn.setEnabled(True)
+        self._skip_btn.show()
         self._skip_btn.setEnabled(True)
-        self._browser_btn.setEnabled(True)
+        self._browser_btn.hide()
+        self._download_btn.hide()
+        self._install_btn.show()
+        self._install_btn.setEnabled(True)
+        self._open_btn.show()
+        self._open_btn.setEnabled(True)
+
+        if self._auto_install_after_download:
+            self._status.setText(
+                "Download complete.\nInstalling update and restarting TileVision AI…"
+            )
+            QTimer.singleShot(250, self._on_install_and_restart)
+        else:
+            self._status.setText(
+                f"Download complete:\n{path}\n\n"
+                "Click Install & Restart to apply the update."
+            )
 
     def _on_download_error(self, message: str) -> None:
         self._reset_idle_buttons()
@@ -212,8 +236,7 @@ class UpdateAvailableDialog(QDialog):
             "Download Failed",
             "Could not download the update in the app.\n\n"
             f"{message}\n\n"
-            "You can try again, or use Open in Browser / Google Drive if your "
-            "vendor shared a mirror link.",
+            "You can try Download & Install again.",
         )
 
     def _on_download_cancelled(self) -> None:
@@ -225,9 +248,15 @@ class UpdateAvailableDialog(QDialog):
     def _reset_idle_buttons(self) -> None:
         self._cancel_btn.hide()
         self._open_btn.hide()
+        self._install_btn.hide()
+        self._download_btn.show()
         self._download_btn.setEnabled(True)
+        self._download_btn.setText("Download & Install")
+        self._later_btn.show()
         self._later_btn.setEnabled(True)
+        self._skip_btn.show()
         self._skip_btn.setEnabled(True)
+        self._browser_btn.show()
         self._browser_btn.setEnabled(True)
 
     def _on_cancel_download(self) -> None:
@@ -239,10 +268,9 @@ class UpdateAvailableDialog(QDialog):
         reply = QMessageBox.warning(
             self,
             "Browser download is very slow",
-            "Chrome/Safari downloads from GitHub are often limited to "
+            "Browser downloads from GitHub are often limited to "
             "~100–200 KB/s.\n\n"
-            "A Mac installer (~1.6 GB) can take 2–3 hours that way.\n\n"
-            "Use Download in App instead (many parallel connections).\n\n"
+            "Use Download & Install inside TileVision instead.\n\n"
             "Open the slow browser link anyway?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -250,6 +278,72 @@ class UpdateAvailableDialog(QDialog):
         if reply != QMessageBox.StandardButton.Yes:
             return
         QDesktopServices.openUrl(QUrl(self._info.download_url))
+
+    def _on_install_and_restart(self) -> None:
+        if self._installing:
+            return
+        if self._downloaded_path is None or not self._downloaded_path.exists():
+            QMessageBox.warning(self, "File Missing", "Downloaded installer not found.")
+            return
+
+        self._installing = True
+        self._install_btn.hide()
+        self._open_btn.hide()
+        self._download_btn.hide()
+        self._later_btn.hide()
+        self._skip_btn.hide()
+        self._browser_btn.hide()
+        self._cancel_btn.hide()
+        self._status.setText("Installing update… TileVision AI will restart.")
+
+        try:
+            launch_update_installer(self._downloaded_path)
+        except UpdateInstallError as exc:
+            self._installing = False
+            self._later_btn.show()
+            self._later_btn.setEnabled(True)
+            self._skip_btn.show()
+            self._skip_btn.setEnabled(True)
+            self._install_btn.show()
+            self._install_btn.setEnabled(True)
+            self._open_btn.show()
+            self._open_btn.setEnabled(True)
+            logger.error("In-app install failed: %s", exc)
+            QMessageBox.warning(
+                self,
+                "Install Failed",
+                f"{exc}\n\nYou can use Open File… to install manually.",
+            )
+            return
+        except Exception as exc:
+            self._installing = False
+            self._later_btn.show()
+            self._later_btn.setEnabled(True)
+            self._skip_btn.show()
+            self._skip_btn.setEnabled(True)
+            self._install_btn.show()
+            self._install_btn.setEnabled(True)
+            self._open_btn.show()
+            self._open_btn.setEnabled(True)
+            logger.exception("Unexpected install failure")
+            QMessageBox.warning(
+                self,
+                "Install Failed",
+                f"Could not start the installer:\n{exc}\n\n"
+                "Use Open File… to install manually.",
+            )
+            return
+
+        # Quit so Windows can overwrite Program Files / Mac helper can replace .app.
+        QTimer.singleShot(400, self._quit_for_install)
+
+    def _quit_for_install(self) -> None:
+        logger.info("Quitting so the update installer can replace this build.")
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
+        else:
+            self.accept()
 
     def _on_open_installer(self) -> None:
         if self._downloaded_path is None or not self._downloaded_path.exists():

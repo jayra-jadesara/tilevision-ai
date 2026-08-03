@@ -135,23 +135,22 @@ Before each release:
 ## Automatic update notifications
 
 Packaged apps (Windows `.exe` installer, Mac `.app`) check for updates on startup
-when the PC has internet — **once per day**. Customers see a dialog with a
-**Download Update** button that downloads the correct installer in the app.
+when the PC has internet. Customers see a dialog that **downloads and installs
+inside TileVision** (fast parallel CDN download — not the browser), then restarts.
 
 ### How it works
 
 1. You push a version tag → GitHub Actions builds Windows + Mac installers
 2. CI publishes a **GitHub Release** with `update_manifest.json`
 3. Customer app reads the manifest and compares versions
-4. Customer clicks **Download Update** → the app downloads the Windows `.exe` or Mac `.dmg`
-   in-process with a fast multi-connection transfer (progress bar). Browser open remains
-   available as a fallback.
-5. They run the downloaded installer — license and tile catalogue stay on the PC
+4. Dialog **Download & Install** → multi-connection download of the Windows `.exe`
+   or Mac `.dmg`, then:
+   - **Windows:** silent Inno upgrade (`/SILENT /CLOSEAPPLICATIONS`) and relaunch
+   - **Mac:** helper mounts the DMG, replaces `/Applications/TileVisionAI.app`, relaunches
+5. License key and tile catalogue stay on the PC
 
-**Note on speed:** Installers are published on GitHub Releases. A single browser download
-from GitHub can be very slow in some regions; the in-app downloader uses parallel HTTP
-Range requests against the same files to saturate a good connection. For maximum speed
-you may also mirror the same installer on Google Drive / your CDN and share that link.
+**Note on speed:** Prefer the in-app path. A single browser download from GitHub
+can be very slow in some regions. Browser open remains a last-resort fallback.
 
 ### Release a version with update links
 
@@ -173,9 +172,6 @@ After the **Build** workflow finishes, the release includes:
 | `update_manifest.json` | In-app update checker |
 
 Customers can also use **Settings → Check for Updates** anytime.
-
-**Note:** This notifies and downloads — it does not silently auto-install (safer for
-showroom PCs). Full silent auto-update would require code signing on both platforms.
 
 ---
 
