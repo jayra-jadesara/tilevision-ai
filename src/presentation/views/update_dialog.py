@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.presentation.workers.update_download_worker import UpdateDownloadWorker
+from src.theme.theme_manager import get_dialog_qss
 from src.utils.update_check import UpdateInfo, platform_download_label
 from src.utils.update_downloader import (
     DEFAULT_CONNECTIONS,
@@ -50,23 +51,26 @@ class UpdateAvailableDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self._info = info
-        self._theme = theme
+        self._theme = theme if theme in ("light", "dark") else "light"
         self._auto_install_after_download = auto_install_after_download
         self._worker: Optional[UpdateDownloadWorker] = None
         self._downloaded_path: Optional[Path] = None
         self._installing = False
 
         self.setWindowTitle("Update Available")
+        self.setObjectName("UpdateAvailableDialog")
         self.setModal(True)
         self.setMinimumWidth(520)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
+        layout.setContentsMargins(20, 18, 20, 16)
 
         headline = QLabel(
-            f"<b>TileVision AI {info.latest_version}</b> is available "
+            f"TileVision AI {info.latest_version} is available "
             f"(you have {info.current_version})."
         )
+        headline.setObjectName("DialogTitle")
         headline.setWordWrap(True)
         layout.addWidget(headline)
 
@@ -76,55 +80,68 @@ class UpdateAvailableDialog(QDialog):
             "then installs and restarts itself. "
             "Your license key and tile catalogue stay on this computer."
         )
+        hint.setObjectName("DialogHint")
         hint.setWordWrap(True)
         hint.setTextFormat(Qt.TextFormat.RichText)
         layout.addWidget(hint)
 
         if info.release_notes:
             notes = QTextEdit()
+            notes.setObjectName("DialogNotes")
             notes.setReadOnly(True)
             notes.setPlainText(info.release_notes)
             notes.setMaximumHeight(120)
             layout.addWidget(notes)
 
         self._status = QLabel("Preparing in-app download…")
+        self._status.setObjectName("DialogStatus")
         self._status.setWordWrap(True)
         layout.addWidget(self._status)
 
         self._progress = QProgressBar()
+        self._progress.setObjectName("DialogProgressBar")
         self._progress.setRange(0, 1000)
         self._progress.setValue(0)
+        self._progress.setTextVisible(False)
+        self._progress.setFixedHeight(18)
         layout.addWidget(self._progress)
 
         buttons = QHBoxLayout()
+        buttons.setSpacing(8)
         buttons.addStretch()
 
         self._later_btn = QPushButton("Remind Me Later")
+        self._later_btn.setObjectName("SecondaryButton")
         self._later_btn.clicked.connect(self.reject)
         buttons.addWidget(self._later_btn)
 
         self._skip_btn = QPushButton("Skip This Version")
+        self._skip_btn.setObjectName("SecondaryButton")
         self._skip_btn.clicked.connect(self._on_skip)
         buttons.addWidget(self._skip_btn)
 
         self._cancel_btn = QPushButton("Cancel Download")
+        self._cancel_btn.setObjectName("SecondaryButton")
         self._cancel_btn.hide()
         self._cancel_btn.clicked.connect(self._on_cancel_download)
         buttons.addWidget(self._cancel_btn)
 
         self._open_btn = QPushButton("Open File…")
+        self._open_btn.setObjectName("SecondaryButton")
         self._open_btn.hide()
         self._open_btn.setToolTip("Fallback: open the downloaded installer manually")
         self._open_btn.clicked.connect(self._on_open_installer)
         buttons.addWidget(self._open_btn)
 
         self._install_btn = QPushButton("Install & Restart")
+        self._install_btn.setObjectName("PrimaryButton")
         self._install_btn.hide()
         self._install_btn.setDefault(True)
         self._install_btn.clicked.connect(self._on_install_and_restart)
         buttons.addWidget(self._install_btn)
 
         self._download_btn = QPushButton("Download & Install")
+        self._download_btn.setObjectName("PrimaryButton")
         self._download_btn.setDefault(True)
         self._download_btn.clicked.connect(self._on_download)
         buttons.addWidget(self._download_btn)
@@ -133,15 +150,23 @@ class UpdateAvailableDialog(QDialog):
 
         # Browser is a last-resort fallback only — not the primary path.
         self._browser_btn = QPushButton("Very slow browser download (not recommended)…")
+        self._browser_btn.setObjectName("LinkButton")
         self._browser_btn.setFlat(True)
+        self._browser_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._browser_btn.setToolTip(
             "Fallback only. Prefer Download & Install inside TileVision."
         )
         self._browser_btn.clicked.connect(self._on_open_browser)
         layout.addWidget(self._browser_btn)
 
+        self._apply_styles()
+
         if auto_start_download:
             QTimer.singleShot(0, self._on_download)
+
+    def _apply_styles(self) -> None:
+        """Match TileVision light/dark theme (not classic Windows chrome)."""
+        self.setStyleSheet(get_dialog_qss(self._theme))
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if self._installing:
