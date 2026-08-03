@@ -130,4 +130,14 @@ if __name__ == "__main__":
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
     except Exception:
         pass
-    raise SystemExit(main())
+    code = main()
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+    # Windows + Qt teardown under Git Bash often reports exit 127 after a real
+    # PASS (atexit / QApplication shutdown). Hard-exit so CI sees the verdict.
+    if sys.platform == "win32":
+        os._exit(code)
+    raise SystemExit(code)
