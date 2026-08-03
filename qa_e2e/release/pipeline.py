@@ -231,6 +231,21 @@ def run_release_validation(
                     screenshot_widget=session.main_window if not result.screenshot else None,
                     metrics=result.metrics,
                 )
+                # Incremental artifacts so a hard crash still leaves inspectable evidence.
+                try:
+                    _finalize(
+                        out_dir,
+                        environment,
+                        gates,
+                        scenarios,
+                        session.logs.messages()[-300:],
+                        False,
+                        t0,
+                        resources=[asdict(r) for r in session.artifacts.resources],
+                        actions=[asdict(a) for a in session.artifacts.actions],
+                    )
+                except Exception:
+                    pass
 
         logs = session.logs.messages()[-500:]
         resources = [asdict(r) for r in session.artifacts.resources]

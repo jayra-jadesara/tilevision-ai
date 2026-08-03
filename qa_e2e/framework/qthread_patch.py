@@ -17,7 +17,8 @@ import logging
 import threading
 from typing import Type
 
-from PySide6.QtCore import QThread
+from PySide6.QtCore import QThread, QTimer
+from PySide6.QtWidgets import QApplication
 
 logger = logging.getLogger("tilevision.qa_e2e.qthread_patch")
 
@@ -52,16 +53,32 @@ def _patch_worker_class(cls: Type[QThread]) -> None:
 
         self._qa_finished = False
 
+        # ViewModels connect finished → deleteLater. Emitting finished from a
+        # non-QThread runner + deleteLater races and can SIGSEGV
+        # ("shared QObject was deleted directly"). Keep the object alive for QA.
+        try:
+            self.finished.disconnect()
+        except Exception:
+            pass
+
+        def _emit_finished_on_gui() -> None:
+            try:
+                self.finished.emit()
+            except Exception:
+                pass
+
         def _runner() -> None:
             try:
                 self.run()
             finally:
                 self._qa_finished = True
-                try:
-                    # Notify Qt listeners that the "thread" finished.
-                    self.finished.emit()
-                except Exception:
-                    pass
+                app = QApplication.instance()
+                if app is not None:
+                    # Marshal onto the GUI thread — never emit Qt signals for
+                    # lifetime from a raw Python thread.
+                    QTimer.singleShot(0, _emit_finished_on_gui)
+                else:
+                    _emit_finished_on_gui()
 
         thread = threading.Thread(
             target=_runner,
@@ -82,7 +99,12 @@ def _patch_worker_class(cls: Type[QThread]) -> None:
         t.join(timeout=max(0.0, msecs / 1000.0))
         return not t.is_alive()
 
+    def deleteLater(self) -> None:  # noqa: ANN001
+        # No-op during QA — Python GC owns lifetime of patched workers.
+        return
+
     cls.start = start  # type: ignore[method-assign]
     cls.isRunning = isRunning  # type: ignore[method-assign]
     cls.wait = wait  # type: ignore[method-assign]
+    cls.deleteLater = deleteLater  # type: ignore[method-assign]
     cls._qa_python_thread_patched = True

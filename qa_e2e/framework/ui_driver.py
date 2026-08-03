@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 from typing import List, Optional
@@ -40,12 +41,18 @@ class UIDriver:
         return w
 
     def find_button(self, text: str) -> QPushButton:
+        def _norm(value: str) -> str:
+            # Qt uses '&' for keyboard mnemonics ("Auto Crop & Search" → displayed
+            # "Auto Crop _Search"). Strip mnemonics and collapse whitespace.
+            cleaned = value.replace("&&", "\0").replace("&", "").replace("\0", "&")
+            return " ".join(cleaned.split()).strip().lower()
+
+        needle = _norm(text)
         for btn in self.s.main_window.findChildren(QPushButton):
-            if btn.text().replace("&", "").strip() == text:
+            if _norm(btn.text()) == needle:
                 return btn
-        # Partial match for icons/spaces
         for btn in self.s.main_window.findChildren(QPushButton):
-            if text.lower() in btn.text().replace("&", "").strip().lower():
+            if needle and needle in _norm(btn.text()):
                 return btn
         raise AssertionError(f"Button not found with text containing {text!r}")
 
@@ -208,6 +215,9 @@ class UIDriver:
         from src.presentation.viewmodels.search_viewmodel import SearchState
         from qa_e2e.framework.search_fallback import complete_search_via_use_case
 
+        # CPU DINOv2 searches often take 60–120s. Only treat as stalled when the
+        # worker is no longer running (true hang) OR after a long absolute wait.
+        stall_s = float(os.environ.get("TILEVISION_QA_SEARCH_STALL_S", "180"))
         deadline = time.monotonic() + timeout
         saw_searching = False
         searching_since: Optional[float] = None
@@ -218,12 +228,12 @@ class UIDriver:
                 saw_searching = True
                 if searching_since is None:
                     searching_since = time.monotonic()
-                # Mac Intel CI: SearchWorker QThread can stall like IndexingWorker.
-                # After 45s still searching with a known query → same use case on
-                # a Python thread, then inject results into the ViewModel/UI.
-                if (time.monotonic() - searching_since) > 45.0:
-                    # Re-check after pumping events: the real worker may have
-                    # finished while we were waiting (CPU searches often >45s).
+                worker = getattr(self.s.search_viewmodel, "_worker", None)
+                worker_alive = bool(worker is not None and worker.isRunning())
+                waited = time.monotonic() - searching_since
+                # If the real worker is still running, keep waiting — do NOT start
+                # a second search (double execute → deleteLater races / SIGSEGV).
+                if waited > stall_s and not worker_alive:
                     QApplication.processEvents()
                     state = self.s.search_viewmodel.state
                     if state in (
@@ -237,7 +247,7 @@ class UIDriver:
                     path = getattr(self.s.search_viewmodel, "_last_query_path", None)
                     if path:
                         self.s.artifacts.note(
-                            "SearchWorker stalled >45s — completing via SearchTilesUseCase thread"
+                            f"SearchWorker stalled >{stall_s:.0f}s — completing via SearchTilesUseCase thread"
                         )
                         complete_search_via_use_case(self.s, path, timeout=max(60.0, timeout))
                         QTest.qWait(400)

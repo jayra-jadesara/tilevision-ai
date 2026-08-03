@@ -37,9 +37,14 @@ def complete_search_via_use_case(session, image_path: str, *, timeout: float = 6
 
     vm = session.search_viewmodel
     worker = getattr(vm, "_worker", None)
-    if worker is not None and worker.isRunning():
+    if worker is not None:
         try:
-            worker.requestInterruption()
+            if worker.isRunning():
+                worker.requestInterruption()
+                try:
+                    worker.wait(15_000)
+                except Exception:
+                    pass
         except Exception:
             pass
     vm._worker = None
