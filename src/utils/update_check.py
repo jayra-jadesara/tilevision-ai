@@ -38,6 +38,12 @@ logger = logging.getLogger("tilevision.update_check")
 DEFAULT_MANIFEST_URL = (
     "https://github.com/jayra-jadesara/tilevision-ai/releases/latest/download/update_manifest.json"
 )
+# Used when ``/releases/latest/download/update_manifest.json`` 404s — e.g. an
+# empty non-prerelease tag briefly became "latest" (client log: HTTP 404).
+_GITHUB_RELEASES_API = (
+    "https://api.github.com/repos/jayra-jadesara/tilevision-ai/releases"
+)
+_MANIFEST_ASSET_NAME = "update_manifest.json"
 
 _VERSION_RE = re.compile(r"^v?(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)")
 
@@ -50,6 +56,19 @@ def _build_ssl_context() -> ssl.SSLContext:
         return ssl.create_default_context(cafile=certifi.where())
     except Exception:
         return ssl.create_default_context()
+
+
+def _http_get_bytes(url: str, *, timeout: float) -> bytes:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": f"TileVisionAI/{APP_VERSION}",
+            "Accept": "application/octet-stream, application/json",
+        },
+    )
+    context = _build_ssl_context()
+    with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
+        return response.read()
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,22 +148,80 @@ def resolve_download_url(downloads: dict, platform_key: str) -> str:
     return ""
 
 
+def _parse_manifest_payload(payload: str) -> dict:
+    data = json.loads(payload)
+    if not isinstance(data, dict):
+        raise ValueError("Update manifest must be a JSON object.")
+    return data
+
+
+def _manifest_url_from_release(release: dict) -> str:
+    for asset in release.get("assets") or []:
+        if not isinstance(asset, dict):
+            continue
+        if str(asset.get("name") or "") != _MANIFEST_ASSET_NAME:
+            continue
+        url = str(asset.get("browser_download_url") or "").strip()
+        if url:
+            return url
+    return ""
+
+
+def fetch_update_manifest_via_github_api(*, timeout: float = 12.0) -> dict:
+    """
+    Find the newest non-draft release that publishes ``update_manifest.json``.
+
+    Skips empty tags / incomplete releases so a bad "latest" redirect does not
+    permanently break in-app update checks.
+    """
+    raw = _http_get_bytes(_GITHUB_RELEASES_API, timeout=timeout)
+    releases = json.loads(raw.decode("utf-8"))
+    if not isinstance(releases, list):
+        raise ValueError("GitHub releases API returned a non-list payload.")
+
+    # Prefer non-prerelease, then fall back to any release with a manifest.
+    candidates: list[dict] = []
+    for release in releases:
+        if not isinstance(release, dict) or release.get("draft"):
+            continue
+        if _manifest_url_from_release(release):
+            candidates.append(release)
+
+    if not candidates:
+        raise FileNotFoundError(
+            f"No GitHub release publishes {_MANIFEST_ASSET_NAME}."
+        )
+
+    preferred = [r for r in candidates if not r.get("prerelease")] or candidates
+    manifest_url = _manifest_url_from_release(preferred[0])
+    logger.info(
+        "Update manifest resolved via GitHub API from release %s",
+        preferred[0].get("tag_name") or preferred[0].get("name") or "?",
+    )
+    payload = _http_get_bytes(manifest_url, timeout=timeout).decode("utf-8")
+    return _parse_manifest_payload(payload)
+
+
 def fetch_update_manifest(
     manifest_url: str,
     *,
     timeout: float = 12.0,
 ) -> dict:
-    request = urllib.request.Request(
-        manifest_url,
-        headers={"User-Agent": f"TileVisionAI/{APP_VERSION}"},
-    )
-    context = _build_ssl_context()
-    with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
-        payload = response.read().decode("utf-8")
-    data = json.loads(payload)
-    if not isinstance(data, dict):
-        raise ValueError("Update manifest must be a JSON object.")
-    return data
+    try:
+        payload = _http_get_bytes(manifest_url, timeout=timeout).decode("utf-8")
+        return _parse_manifest_payload(payload)
+    except urllib.error.HTTPError as exc:
+        # Empty / incomplete "latest" tags return 404 for the convenience URL.
+        if (
+            exc.code == 404
+            and manifest_url.rstrip("/") == DEFAULT_MANIFEST_URL.rstrip("/")
+        ):
+            logger.warning(
+                "Update manifest latest/download returned HTTP 404 — "
+                "falling back to GitHub Releases API."
+            )
+            return fetch_update_manifest_via_github_api(timeout=timeout)
+        raise
 
 
 def check_for_updates(

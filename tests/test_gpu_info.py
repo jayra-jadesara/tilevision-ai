@@ -191,3 +191,13 @@ def test_is_mps_unsupported_op_error_detects_upsample_bicubic2d():
     )
     assert gpu_info.is_mps_unsupported_op_error(message) is True
     assert gpu_info.is_mps_unsupported_op_error("CUDA out of memory") is False
+
+
+def test_is_mps_unsupported_op_error_detects_autocast_rejection():
+    assert (
+        gpu_info.is_mps_unsupported_op_error(
+            "User specified an unsupported autocast device_type 'mps'"
+        )
+        is True
+    )
+    assert gpu_info.is_mps_unsupported_op_error("unsupported autocast device_type cuda") is False

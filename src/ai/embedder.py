@@ -55,6 +55,10 @@ _VIEW_WEIGHTS: Tuple[float, ...] = (0.50, 0.30, 0.20)
 def _is_device_oom_error(device_type: str, message: str) -> bool:
     """True only for genuine out-of-memory failures (not missing MPS ops)."""
     text = (message or "").lower()
+    # Client log (Intel Mac): autocast rejection was wrongly treated as
+    # "MPS OOM" → split/retry death spiral. Never classify as OOM.
+    if "unsupported autocast" in text or is_mps_unsupported_op_error(text):
+        return False
     if "out of memory" in text or "insufficient memory" in text:
         return True
     # Do NOT treat bare "mps" as OOM — that matched "not implemented for MPS"
@@ -290,11 +294,11 @@ class DINOv2Embedder:
         with synchronized_inference(timeout=lock_timeout, purpose="DINOv2 embed"):
             try:
                 return self._forward_batch(images)
-            except RuntimeError as exc:
+            except (RuntimeError, ValueError) as exc:
                 message = str(exc)
                 message_l = message.lower()
 
-                # Missing Metal ops (e.g. upsample_bicubic2d) → CPU, not OOM retry.
+                # Missing Metal ops / unsupported MPS autocast → CPU, not OOM retry.
                 if (
                     self._device.type == "mps"
                     and is_mps_unsupported_op_error(message_l)

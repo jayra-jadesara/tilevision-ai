@@ -50,6 +50,50 @@ def test_is_device_oom_error_ignores_mps_unimplemented_op():
     assert embedder_module._is_device_oom_error("cuda", "cuda error: out of memory") is True
 
 
+def test_is_device_oom_error_ignores_unsupported_mps_autocast():
+    msg = "user specified an unsupported autocast device_type 'mps'"
+    assert embedder_module._is_device_oom_error("mps", msg) is False
+
+
+def test_extract_batch_falls_back_to_cpu_on_unsupported_mps_autocast(monkeypatch):
+    """Client Mac Intel log: autocast error was mislabeled MPS OOM then hard-failed."""
+    embedder = _make_embedder(device="mps")
+    images = [
+        Image.new("RGB", (64, 64), color=(10, 20, 30)),
+        Image.new("RGB", (64, 64), color=(40, 50, 60)),
+        Image.new("RGB", (64, 64), color=(70, 80, 90)),
+    ]
+    calls = {"n": 0}
+    cpu_result = np.ones((3, 1024), dtype=np.float32)
+
+    def _forward(batch):
+        calls["n"] += 1
+        if embedder._device.type == "mps":
+            raise RuntimeError(
+                "User specified an unsupported autocast device_type 'mps'"
+            )
+        return cpu_result[: len(batch)]
+
+    monkeypatch.setattr(embedder, "_forward_batch", _forward)
+    monkeypatch.setattr(
+        embedder_module,
+        "detect_gpu_runtime",
+        lambda preference="auto": SimpleNamespace(
+            active_device="cpu",
+            device_name="",
+            summary_for_log=lambda: "cpu",
+        ),
+    )
+    monkeypatch.setattr(embedder_module, "synchronized_inference", lambda **_kwargs: _NullCtx())
+
+    result = embedder._extract_batch(images)
+
+    assert calls["n"] == 2
+    assert embedder._device.type == "cpu"
+    assert embedder._mps_cpu_fallback_done is True
+    assert result.shape[0] == 3
+
+
 def test_extract_batch_falls_back_to_cpu_on_mps_unimplemented_op(monkeypatch):
     embedder = _make_embedder(device="mps")
     images = [Image.new("RGB", (64, 64), color=(10, 20, 30))]
