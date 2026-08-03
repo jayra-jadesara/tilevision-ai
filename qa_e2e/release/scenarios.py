@@ -222,8 +222,10 @@ def s09_index_new_folder(session, driver: UIDriver) -> ScenarioResult:
     try:
         from qa_e2e.fixtures.catalog_builder import build_customer_catalog
 
+        # S09 proves re-index of a new folder; 2 tiles keeps Windows CPU under budget.
+        extra_tiles = int(os.environ.get("TILEVISION_QA_EXTRA_TILES", "2"))
         extra = Path(session.home_dir) / "extra_catalog_root"
-        manifest = build_customer_catalog(extra, tile_count=4)
+        manifest = build_customer_catalog(extra, tile_count=extra_tiles)
         catalog = Path(manifest["catalog_dir"])
         before = session.vector_index.get_total_count()
         driver.select_index_folder(catalog)
