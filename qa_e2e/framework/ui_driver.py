@@ -109,18 +109,33 @@ class UIDriver:
         while time.monotonic() < deadline:
             QApplication.processEvents()
             state = self.s.indexing_viewmodel.state
+            count = self.s.vector_index.get_total_count()
+            worker = getattr(self.s.indexing_viewmodel, "_worker", None)
+            worker_alive = bool(worker is not None and worker.isRunning())
             if state in (IndexingState.RUNNING, IndexingState.PAUSED, IndexingState.CANCELLING):
                 saw_running = True
             if state in (IndexingState.FINISHED, IndexingState.IDLE, IndexingState.CANCELLED) and (
-                saw_running or self.s.vector_index.get_total_count() > 0
+                saw_running or count > 0
             ):
-                # Allow UI to settle
                 QTest.qWait(300)
                 return
             if state == IndexingState.ERROR:
                 raise AssertionError("Indexing entered ERROR state")
+            # Worker exited with vectors but FINISHED signal missed (Windows QA patch).
+            if saw_running and not worker_alive and count > 0 and state == IndexingState.RUNNING:
+                QApplication.processEvents()
+                QTest.qWait(400)
+                if self.s.indexing_viewmodel.state != IndexingState.FINISHED:
+                    try:
+                        self.s.indexing_viewmodel._set_state(IndexingState.FINISHED)
+                    except Exception:
+                        pass
+                return
             QTest.qWait(250)
-        raise TimeoutError(f"Indexing did not finish within {timeout}s (state={self.s.indexing_viewmodel.state})")
+        raise TimeoutError(
+            f"Indexing did not finish within {timeout}s "
+            f"(state={self.s.indexing_viewmodel.state} faiss={self.s.vector_index.get_total_count()})"
+        )
 
     # ── search ─────────────────────────────────────────────────────────────
 

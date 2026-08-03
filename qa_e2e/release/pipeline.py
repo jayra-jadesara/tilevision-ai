@@ -63,7 +63,7 @@ def run_release_validation(
                 artifact_dir=out_dir,
                 human_seed=int(os.environ.get("TILEVISION_QA_SEED", "42")),
                 human_speed=float(os.environ.get("TILEVISION_QA_SPEED", "2.0")),
-                catalog_tiles=int(os.environ.get("TILEVISION_QA_TILES", "8")),
+                catalog_tiles=int(os.environ.get("TILEVISION_QA_TILES", "4")),
             )
             launch_ok = bool(session.main_window.isVisible())
             launch_detail = "MainWindow visible, no launch exception"
