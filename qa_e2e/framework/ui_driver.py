@@ -101,7 +101,7 @@ class UIDriver:
         btn = self.find("StartButton", QPushButton)
         self.human.click(btn)
 
-    def wait_indexing_done(self, *, timeout: float = 600.0) -> None:
+    def wait_indexing_done(self, *, timeout: float = 3600.0) -> None:
         from src.presentation.viewmodels.indexing_viewmodel import IndexingState
 
         deadline = time.monotonic() + timeout
@@ -193,7 +193,24 @@ class UIDriver:
         self.human.click(btn)
 
     def clear_search(self) -> None:
-        self.click_named_action("Clear")
+        # Wait briefly for Clear to enable after drop (state/query path race).
+        deadline = time.monotonic() + 5.0
+        last_err: Optional[Exception] = None
+        while time.monotonic() < deadline:
+            try:
+                btn = self.find_button("Clear")
+                if btn.isEnabled():
+                    self.human.click(btn)
+                    QApplication.processEvents()
+                    return
+                last_err = AssertionError("Button 'Clear' is disabled")
+            except Exception as exc:  # noqa: BLE001
+                last_err = exc
+            QApplication.processEvents()
+            QTest.qWait(100)
+        if last_err is not None:
+            raise last_err
+        raise AssertionError("Clear button not available")
 
     def auto_crop_search(self) -> None:
         self.click_named_action("Auto Crop & Search")

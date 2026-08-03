@@ -17,8 +17,7 @@ import logging
 import threading
 from typing import Type
 
-from PySide6.QtCore import QThread, QTimer
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QThread
 
 logger = logging.getLogger("tilevision.qa_e2e.qthread_patch")
 
@@ -53,32 +52,21 @@ def _patch_worker_class(cls: Type[QThread]) -> None:
 
         self._qa_finished = False
 
-        # ViewModels connect finished → deleteLater. Emitting finished from a
-        # non-QThread runner + deleteLater races and can SIGSEGV
-        # ("shared QObject was deleted directly"). Keep the object alive for QA.
+        # ViewModels connect finished → deleteLater. Emitting QThread.finished
+        # from a non-QThread runner + deleteLater races and can SIGSEGV
+        # ("shared QObject was deleted directly"). Production signals used by
+        # the UI (search_completed / indexing_finished / …) still fire from
+        # run(); we intentionally skip QThread.finished and no-op deleteLater.
         try:
             self.finished.disconnect()
         except Exception:
             pass
-
-        def _emit_finished_on_gui() -> None:
-            try:
-                self.finished.emit()
-            except Exception:
-                pass
 
         def _runner() -> None:
             try:
                 self.run()
             finally:
                 self._qa_finished = True
-                app = QApplication.instance()
-                if app is not None:
-                    # Marshal onto the GUI thread — never emit Qt signals for
-                    # lifetime from a raw Python thread.
-                    QTimer.singleShot(0, _emit_finished_on_gui)
-                else:
-                    _emit_finished_on_gui()
 
         thread = threading.Thread(
             target=_runner,

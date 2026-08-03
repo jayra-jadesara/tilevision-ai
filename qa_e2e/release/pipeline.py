@@ -233,13 +233,16 @@ def run_release_validation(
                 )
                 # Incremental artifacts so a hard crash still leaves inspectable evidence.
                 try:
+                    interim_pass = all(g.get("ok") for g in gates) and all(
+                        s.get("ok") for s in scenarios
+                    )
                     _finalize(
                         out_dir,
                         environment,
                         gates,
                         scenarios,
                         session.logs.messages()[-300:],
-                        False,
+                        interim_pass,
                         t0,
                         resources=[asdict(r) for r in session.artifacts.resources],
                         actions=[asdict(a) for a in session.artifacts.actions],

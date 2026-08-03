@@ -85,7 +85,7 @@ def _search_and_verify(session, driver: UIDriver, path: Path, *, sid: str) -> Di
 
 
 def s01_open_app_search(session, driver: UIDriver) -> ScenarioResult:
-    started = _begin("S01", "Open app → Search image → Verify results")
+    started = _begin("S01", "Open app - Search image - Verify results")
     try:
         driver.goto_search()
         session.human.think(0.2, 0.5)
@@ -95,9 +95,9 @@ def s01_open_app_search(session, driver: UIDriver) -> ScenarioResult:
         ok = info["state"] == SearchState.RESULTS and info["scan_ok"] and exp.ok and all_checks_passed(info["checks"])
         if not ok:
             raise AssertionError(f"{exp.detail}; checks={summarize_checks(info['checks'])}; {info['findings']}")
-        return _ok("S01", "Open app → Search image → Verify results", started, exp.detail, session, **info, ranking_ok=exp.ok)
+        return _ok("S01", "Open app - Search image - Verify results", started, exp.detail, session, **info, ranking_ok=exp.ok)
     except Exception as exc:
-        return fail_result("S01", "Open app → Search image → Verify results", started, exc, screenshot=_shot(session, "S01"))
+        return fail_result("S01", "Open app - Search image - Verify results", started, exc, screenshot=_shot(session, "S01"))
 
 
 def s02_drag_drop(session, driver: UIDriver) -> ScenarioResult:
@@ -228,7 +228,7 @@ def s09_index_new_folder(session, driver: UIDriver) -> ScenarioResult:
         before = session.vector_index.get_total_count()
         driver.select_index_folder(catalog)
         driver.start_indexing()
-        driver.wait_indexing_done(timeout=float(os.environ.get("TILEVISION_QA_INDEX_TIMEOUT", "1800")))
+        driver.wait_indexing_done(timeout=float(os.environ.get("TILEVISION_QA_INDEX_TIMEOUT", "3600")))
         after = session.vector_index.get_total_count()
         sqlite_n = len(session.image_repository.get_all())
         ok = after >= before and sqlite_n > 0
@@ -388,8 +388,8 @@ def s21_memory_stress(session, driver: UIDriver) -> ScenarioResult:
         # Soft bound — flag extreme leaks only (GiB-scale)
         ok = growth < float(os.environ.get("TILEVISION_RELEASE_MEM_MAX_GROWTH_MB", "1500"))
         if not ok:
-            raise AssertionError(f"RSS grew {growth:.1f} MiB ({before:.1f}→{after:.1f})")
-        return _ok("S21", "Memory stress", started, f"RSS {before:.1f}→{after:.1f} MiB", session, before_mb=before, after_mb=after, growth_mb=growth)
+            raise AssertionError(f"RSS grew {growth:.1f} MiB ({before:.1f}->{after:.1f})")
+        return _ok("S21", "Memory stress", started, f"RSS {before:.1f}->{after:.1f} MiB", session, before_mb=before, after_mb=after, growth_mb=growth)
     except Exception as exc:
         return fail_result("S21", "Memory stress", started, exc, screenshot=_shot(session, "S21"))
 
@@ -596,7 +596,7 @@ def s30_light_mode(session, driver: UIDriver) -> ScenarioResult:
 
 
 SCENARIO_REGISTRY: List[Tuple[str, str, ScenarioFn]] = [
-    ("S01", "Open app → Search image → Verify results", s01_open_app_search),
+    ("S01", "Open app - Search image - Verify results", s01_open_app_search),
     ("S02", "Drag & Drop", s02_drag_drop),
     ("S03", "Open File dialog", s03_open_file_dialog),
     ("S04", "Auto Crop", s04_auto_crop),

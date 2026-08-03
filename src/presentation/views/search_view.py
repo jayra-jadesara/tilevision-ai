@@ -666,6 +666,9 @@ class SearchView(QWidget):
         self._crop_button.setEnabled(True)
         self._auto_crop_button.setEnabled(True)
         self._precise_crop_button.setEnabled(True)
+        # Customer can Clear as soon as a photo is loaded — do not wait for
+        # SEARCHING (state can lag one event-loop tick after drop).
+        self._clear_button.setEnabled(True)
         self._confidence_banner.setVisible(False)
 
         suggest_crop, crop_reason = should_suggest_crop(image_path)
@@ -831,7 +834,8 @@ class SearchView(QWidget):
         is_searching = state == SearchState.SEARCHING
         self._drop_zone.set_busy(is_searching or self._crop_busy)
         self._progress_bar.setVisible(is_searching or self._crop_busy)
-        self._clear_button.setEnabled(state != SearchState.IDLE and not self._crop_busy)
+        has_query = self._current_query_image_path is not None
+        self._clear_button.setEnabled((state != SearchState.IDLE or has_query) and not self._crop_busy)
         self._refresh_crop_controls()
         for combo in self._filter_combos.values():
             combo.setEnabled(not is_searching and not self._crop_busy)

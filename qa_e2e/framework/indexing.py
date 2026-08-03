@@ -21,7 +21,8 @@ def index_catalog_customer_style(session, driver) -> dict:
     driver.select_index_folder(session.catalog_dir)
     driver.start_indexing()
 
-    deadline = time.monotonic() + float(os.environ.get("TILEVISION_QA_INDEX_TIMEOUT", "1800"))
+    # Windows CPU DINOv2 is ~10 min / 2-image batch; 8 tiles can exceed 30 min.
+    deadline = time.monotonic() + float(os.environ.get("TILEVISION_QA_INDEX_TIMEOUT", "3600"))
     while time.monotonic() < deadline:
         QApplication.processEvents()
         state = session.indexing_viewmodel.state

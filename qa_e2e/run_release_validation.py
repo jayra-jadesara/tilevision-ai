@@ -113,10 +113,21 @@ def main() -> int:
     if failed:
         print("\nFailed scenarios:")
         for s in failed:
-            print(f"  - {s.get('id')} {s.get('name')}: {s.get('error') or s.get('detail')}")
+            line = f"  - {s.get('id')} {s.get('name')}: {s.get('error') or s.get('detail')}"
+            # Windows cp1252 consoles cannot encode arrows / fancy dashes.
+            try:
+                print(line)
+            except UnicodeEncodeError:
+                print(line.encode("ascii", "replace").decode("ascii"))
 
     return 0 if payload["verdict"] == "PASS" else 1
 
 
 if __name__ == "__main__":
+    # Prefer UTF-8 on Windows so report printing cannot crash after a real FAIL.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    except Exception:
+        pass
     raise SystemExit(main())

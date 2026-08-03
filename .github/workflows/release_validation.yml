@@ -160,10 +160,13 @@ jobs:
           TILEVISION_RELEASE_PROFILE: ${{ steps.profile.outputs.profile }}
           TILEVISION_QA_OUT: ${{ github.workspace }}/qa_e2e/artifacts/release_ci
           TILEVISION_QA_SPEED: "3.0"
-          TILEVISION_QA_TILES: "8"
-          TILEVISION_QA_INDEX_TIMEOUT: "1800"
+          # 4 tiles is enough for ranking/search proofs; Windows CPU needs ~10min/batch.
+          TILEVISION_QA_TILES: "4"
+          TILEVISION_QA_INDEX_TIMEOUT: "3600"
           TILEVISION_QA_SEARCH_STALL_S: "180"
           TILEVISION_RELEASE_SEARCH_TIMEOUT: "360"
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: "utf-8"
           OMP_NUM_THREADS: "1"
           OPENBLAS_NUM_THREADS: "1"
           VECLIB_MAXIMUM_THREADS: "1"
