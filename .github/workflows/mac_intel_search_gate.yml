@@ -74,21 +74,21 @@ jobs:
 
       - name: Prove production Python AI threads are active
         run: |
-          bash scripts/macos_build_python.sh - <<'PY'
-          from src.presentation.workers.native_ai_thread import (
-              configure_macos_openmp_for_ai,
-              install_python_ai_worker_threads,
-              production_uses_python_ai_threads,
-              should_use_python_ai_threads,
-          )
-          configure_macos_openmp_for_ai()
-          install_python_ai_worker_threads()
-          assert should_use_python_ai_threads(), "Darwin must prefer Python AI threads"
-          assert production_uses_python_ai_threads(), "production install failed"
-          import os
-          assert os.environ.get("OMP_NUM_THREADS") == "1"
-          print("OK: production OpenMP-safe AI threads armed")
-          PY
+          bash scripts/macos_build_python.sh -c "
+from src.presentation.workers.native_ai_thread import (
+    configure_macos_openmp_for_ai,
+    install_python_ai_worker_threads,
+    production_uses_python_ai_threads,
+    should_use_python_ai_threads,
+)
+import os
+configure_macos_openmp_for_ai()
+install_python_ai_worker_threads()
+assert should_use_python_ai_threads(), 'Darwin must prefer Python AI threads'
+assert production_uses_python_ai_threads(), 'production install failed'
+assert os.environ.get('OMP_NUM_THREADS') == '1'
+print('OK: production OpenMP-safe AI threads armed')
+"
 
       - name: Run release validation (100 searches, real DINOv2/FAISS)
         env:
