@@ -41,6 +41,14 @@ def _pump_until(condition, timeout=5.0):
     return False
 
 
+def _write_query(path: Path, color=(120, 80, 40)) -> Path:
+    """Write a tiny valid JPEG so ViewModel preflight validation passes."""
+    from PIL import Image
+
+    Image.new("RGB", (16, 16), color=color).save(path, format="JPEG")
+    return path
+
+
 class FakeSearchUseCase:
     """Fake SearchTilesUseCase — returns canned results or raises, on demand."""
 
@@ -78,7 +86,7 @@ def _make_result(score=90.0, path="/tmp/tile.jpg"):
 
 def test_successful_search_transitions_to_results(qapp, tmp_path):
     query_file = tmp_path / "query.jpg"
-    query_file.write_bytes(b"fake")
+    _write_query(query_file)
 
     use_case = FakeSearchUseCase(results=[_make_result()])
     vm = SearchViewModel(use_case=use_case, default_top_k=20)
@@ -97,7 +105,7 @@ def test_successful_search_transitions_to_results(qapp, tmp_path):
 
 def test_empty_results_transitions_to_no_results_state(qapp, tmp_path):
     query_file = tmp_path / "query.jpg"
-    query_file.write_bytes(b"fake")
+    _write_query(query_file)
 
     use_case = FakeSearchUseCase(results=[])
     vm = SearchViewModel(use_case=use_case)
@@ -108,7 +116,7 @@ def test_empty_results_transitions_to_no_results_state(qapp, tmp_path):
 
 def test_use_case_exception_transitions_to_error_state(qapp, tmp_path):
     query_file = tmp_path / "query.jpg"
-    query_file.write_bytes(b"fake")
+    _write_query(query_file)
 
     use_case = FakeSearchUseCase(error=RuntimeError("model not loaded"))
     vm = SearchViewModel(use_case=use_case)
@@ -131,11 +139,51 @@ def test_missing_query_file_does_not_start_a_worker(qapp, tmp_path):
     assert use_case.calls == []  # never reached the use case
 
 
+def test_corrupt_query_image_fails_fast_without_searching(qapp, tmp_path):
+    corrupt = tmp_path / "not_an_image.jpg"
+    corrupt.write_bytes(b"this is not an image payload")
+
+    use_case = FakeSearchUseCase(results=[_make_result()])
+    vm = SearchViewModel(use_case=use_case)
+    errors = []
+    vm.search_error.connect(errors.append)
+
+    vm.search_by_image(str(corrupt))
+
+    assert vm.state == SearchState.ERROR
+    assert use_case.calls == []
+    assert errors and "not a valid, readable image" in errors[0]
+    assert "not_an_image.jpg" in errors[0]
+
+
+def test_corrupt_query_while_searching_is_not_queued(qapp, tmp_path):
+    query_file = tmp_path / "query.jpg"
+    _write_query(query_file)
+    corrupt = tmp_path / "not_an_image.jpg"
+    corrupt.write_bytes(b"this is not an image payload")
+
+    use_case = FakeSearchUseCase(results=[_make_result()], delay=0.25)
+    vm = SearchViewModel(use_case=use_case)
+    errors = []
+    vm.search_error.connect(errors.append)
+
+    vm.search_by_image(str(query_file))
+    assert vm.state == SearchState.SEARCHING
+
+    vm.search_by_image(str(corrupt))
+    assert vm.state == SearchState.SEARCHING  # in-flight search continues
+    assert errors and "not a valid, readable image" in errors[0]
+
+    assert _pump_until(lambda: vm.state == SearchState.RESULTS, timeout=3.0)
+    assert len(use_case.calls) == 1
+    assert use_case.calls[0][0] == str(query_file)
+
+
 def test_concurrent_search_request_is_queued_while_searching(qapp, tmp_path):
     query_file = tmp_path / "query.jpg"
-    query_file.write_bytes(b"fake")
+    _write_query(query_file)
     second = tmp_path / "query2.jpg"
-    second.write_bytes(b"fake2")
+    _write_query(second, color=(40, 80, 120))
 
     # Slow enough that the second call definitely arrives while still searching.
     use_case = FakeSearchUseCase(results=[_make_result()], delay=0.25)
@@ -152,7 +200,7 @@ def test_concurrent_search_request_is_queued_while_searching(qapp, tmp_path):
 
 def test_clear_results_resets_to_idle(qapp, tmp_path):
     query_file = tmp_path / "query.jpg"
-    query_file.write_bytes(b"fake")
+    _write_query(query_file)
 
     use_case = FakeSearchUseCase(results=[_make_result()])
     vm = SearchViewModel(use_case=use_case)
@@ -195,7 +243,7 @@ class FakeActivityRepo:
 
 def test_successful_search_is_recorded_in_history(qapp, tmp_path):
     query_file = tmp_path / "query.jpg"
-    query_file.write_bytes(b"fake")
+    _write_query(query_file)
 
     history_repo = FakeHistoryRepo()
     use_case = FakeSearchUseCase(results=[_make_result(), _make_result()])
@@ -211,7 +259,7 @@ def test_successful_search_is_recorded_in_history(qapp, tmp_path):
 
 def test_successful_search_is_recorded_in_activity_log(qapp, tmp_path):
     query_file = tmp_path / "query.jpg"
-    query_file.write_bytes(b"fake")
+    _write_query(query_file)
 
     activity_repo = FakeActivityRepo()
     use_case = FakeSearchUseCase(results=[_make_result()])
@@ -227,7 +275,7 @@ def test_successful_search_is_recorded_in_activity_log(qapp, tmp_path):
 
 def test_search_stats_signal_carries_count_and_elapsed_time(qapp, tmp_path):
     query_file = tmp_path / "query.jpg"
-    query_file.write_bytes(b"fake")
+    _write_query(query_file)
 
     use_case = FakeSearchUseCase(results=[_make_result(), _make_result(), _make_result()])
     vm = SearchViewModel(use_case=use_case)
@@ -245,7 +293,7 @@ def test_search_stats_signal_carries_count_and_elapsed_time(qapp, tmp_path):
 
 def test_repeat_search_reruns_with_existing_file(qapp, tmp_path):
     query_file = tmp_path / "query.jpg"
-    query_file.write_bytes(b"fake")
+    _write_query(query_file)
 
     use_case = FakeSearchUseCase(results=[_make_result()])
     vm = SearchViewModel(use_case=use_case)
@@ -269,7 +317,7 @@ def test_repeat_search_with_missing_file_emits_error(qapp, tmp_path):
 
 def test_empty_index_fails_fast_without_worker(qapp, tmp_path):
     query_file = tmp_path / "query.jpg"
-    query_file.write_bytes(b"fake")
+    _write_query(query_file)
 
     use_case = FakeSearchUseCase(results=[_make_result()])
     use_case.indexed_count = 0
@@ -290,7 +338,7 @@ def test_empty_index_fails_fast_without_worker(qapp, tmp_path):
 
 def test_empty_faiss_with_indexed_tiles_fails_fast(qapp, tmp_path):
     query_file = tmp_path / "query.jpg"
-    query_file.write_bytes(b"fake")
+    _write_query(query_file)
 
     use_case = FakeSearchUseCase(results=[_make_result()])
     use_case.indexed_count = 300
@@ -309,7 +357,7 @@ def test_empty_faiss_with_indexed_tiles_fails_fast(qapp, tmp_path):
 
 def test_search_notifies_busy_callback(qapp, tmp_path):
     query_file = tmp_path / "query.jpg"
-    query_file.write_bytes(b"fake")
+    _write_query(query_file)
 
     busy_events = []
     use_case = FakeSearchUseCase(results=[_make_result()])

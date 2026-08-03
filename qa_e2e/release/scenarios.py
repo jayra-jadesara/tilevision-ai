@@ -314,9 +314,16 @@ def s17_corrupt(session, driver: UIDriver) -> ScenarioResult:
     try:
         corrupt = Path(session.expected_manifest["corrupt_dir"]) / "not_an_image.jpg"
         driver.drag_drop_image(corrupt)
-        QTest.qWait(1500)
-        QApplication.processEvents()
+        # Product should reject before SEARCHING; still wait briefly for any
+        # queued UI/error path so Apple Silicon CI is not flaky on timing.
+        deadline = time.monotonic() + 15.0
         state = session.search_viewmodel.state
+        while time.monotonic() < deadline:
+            QApplication.processEvents()
+            state = session.search_viewmodel.state
+            if state != SearchState.SEARCHING:
+                break
+            QTest.qWait(50)
         ok = session.main_window.isVisible() and state != SearchState.SEARCHING
         if not ok:
             raise AssertionError(f"corrupt image left app bad state={state}")
