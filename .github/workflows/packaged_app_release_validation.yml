@@ -129,8 +129,15 @@ jobs:
 
       - name: Create professional DMG
         run: |
+          set -euo pipefail
+          # Drop PyInstaller work dirs before allocating the RW DMG image.
+          rm -rf build dist/TileVisionAI
+          bash scripts/free_mac_runner_disk.sh
           bash scripts/create_mac_dmg.sh "dist/TileVision AI.app" "dist/${{ matrix.dmg }}" "TileVision AI"
           ls -lh "dist/${{ matrix.dmg }}"
+          # Keep only the customer DMG on disk for the install step.
+          rm -rf "dist/TileVision AI.app" build dist/TileVisionAI
+          df -h .
 
       - name: Resolve validation profile
         id: profile

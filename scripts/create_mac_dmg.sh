@@ -54,13 +54,46 @@ fi
 
 rm -f "$OUTPUT_DMG" "${OUTPUT_DMG%.dmg}.temp.dmg"
 
-SIZE_MB=$((APP_MB + 280))
+STAGE_MB="$(du -sm "$STAGE" | awk '{print $1}')"
+# HFS+ needs substantial slack beyond `du` for large bundles with many small files.
+# Previous APP_MB+280 overflowed at ~3 GiB apps ("No space left on device" on the volume).
+SIZE_MB=$(( STAGE_MB + STAGE_MB / 4 + 768 ))
+if (( SIZE_MB < STAGE_MB + 1024 )); then
+  SIZE_MB=$((STAGE_MB + 1024))
+fi
 TMP_DMG="${OUTPUT_DMG%.dmg}.temp.dmg"
 
-echo "Creating RW image (${SIZE_MB} MB)..."
-hdiutil create -size "${SIZE_MB}m" -fs HFS+ -volname "$VOLNAME" -ov "$TMP_DMG"
+echo "Staged size: ${STAGE_MB} MB → RW image ${SIZE_MB} MB"
 
-echo "Attaching..."
+# Prefer auto-sized srcfolder image (correct HFS+ sizing). Fall back to explicit -size.
+set +e
+hdiutil create -volname "$VOLNAME" -srcfolder "$STAGE" -ov -format UDRW "$TMP_DMG"
+CREATE_RC=$?
+set -e
+if [[ $CREATE_RC -ne 0 || ! -f "$TMP_DMG" ]]; then
+  echo "WARN: hdiutil -srcfolder failed (rc=$CREATE_RC); retrying with explicit size ${SIZE_MB}m"
+  rm -f "$TMP_DMG"
+  hdiutil create -size "${SIZE_MB}m" -fs HFS+ -volname "$VOLNAME" -ov "$TMP_DMG"
+  echo "Attaching sized image for copy..."
+  ATTACH_OUT="$(hdiutil attach -readwrite -noverify -noautoopen "$TMP_DMG")"
+  echo "$ATTACH_OUT"
+  ATTACHED_DEV="$(echo "$ATTACH_OUT" | awk '/\/dev\// {print $1; exit}')"
+  MOUNT_DIR="$(echo "$ATTACH_OUT" | awk -F'\t' '/\/Volumes\// {print $NF; exit}')"
+  if [[ -z "$MOUNT_DIR" ]]; then
+    MOUNT_DIR="$(echo "$ATTACH_OUT" | grep -o '/Volumes/[^ ]*' | tail -1 || true)"
+  fi
+  if [[ -z "$ATTACHED_DEV" || -z "$MOUNT_DIR" || ! -d "$MOUNT_DIR" ]]; then
+    echo "ERROR: failed to resolve DMG mount (dev=$ATTACHED_DEV mount=$MOUNT_DIR)" >&2
+    exit 1
+  fi
+  find "$MOUNT_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+  ditto "$STAGE" "$MOUNT_DIR"
+  sync
+  hdiutil detach "$ATTACHED_DEV"
+  ATTACHED_DEV=""
+fi
+
+echo "Attaching for Finder layout..."
 ATTACH_OUT="$(hdiutil attach -readwrite -noverify -noautoopen "$TMP_DMG")"
 echo "$ATTACH_OUT"
 ATTACHED_DEV="$(echo "$ATTACH_OUT" | awk '/\/dev\// {print $1; exit}')"
@@ -69,14 +102,9 @@ if [[ -z "$MOUNT_DIR" ]]; then
   MOUNT_DIR="$(echo "$ATTACH_OUT" | grep -o '/Volumes/[^ ]*' | tail -1 || true)"
 fi
 if [[ -z "$ATTACHED_DEV" || -z "$MOUNT_DIR" || ! -d "$MOUNT_DIR" ]]; then
-  echo "ERROR: failed to resolve DMG mount (dev=$ATTACHED_DEV mount=$MOUNT_DIR)" >&2
+  echo "ERROR: failed to resolve DMG mount for layout (dev=$ATTACHED_DEV mount=$MOUNT_DIR)" >&2
   exit 1
 fi
-
-echo "Copying staged contents → $MOUNT_DIR"
-# Clear default empty volume contents, then copy.
-find "$MOUNT_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-ditto "$STAGE" "$MOUNT_DIR"
 
 # Best-effort Finder window layout (ignored if AppleScript unavailable).
 if command -v osascript >/dev/null 2>&1; then
