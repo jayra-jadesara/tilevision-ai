@@ -32,4 +32,4 @@ def main() -> int:
 if __name__ == "__main__":
     sys.exit(main())
 
-# Trigger Mac Intel Search Gate for production validation of v1.2.15.
+# Trigger Mac Intel Search Gate for production validation of v1.2.16.
