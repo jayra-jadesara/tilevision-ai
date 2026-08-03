@@ -74,8 +74,14 @@ class FaissIndexManager:
 
     @property
     def configured_backend(self) -> IndexBackend:
-        """Backend requested by settings (may differ from loaded disk index)."""
+        """Backend requested by settings / SearchOptimizationEngine."""
         return self._backend
+
+    def configure_backend(self, backend: IndexBackend | str) -> None:
+        """Update configured backend (disk rewrite happens on clear/rebuild)."""
+        self._backend = IndexBackend.parse(
+            backend.value if isinstance(backend, IndexBackend) else backend
+        )
 
     def active_backend(self) -> IndexBackend:
         """Backend of the currently loaded FAISS object."""

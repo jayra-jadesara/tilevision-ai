@@ -2,7 +2,7 @@
 ; DO NOT ship this installer to customers — vendor use only.
 
 #define MyAppName "TileVision AI Admin"
-#define MyAppVersion "1.2.12"
+#define MyAppVersion "1.2.13"
 #define MyAppPublisher "JD Software"
 #define MyAppExeName "TileVisionAI-Admin.exe"
 #define BuildSource "..\dist\TileVisionAI-Admin"

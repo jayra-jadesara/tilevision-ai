@@ -128,17 +128,8 @@ def test_refresh_feature_status_updates_indexed_tiles_count(qapp, tmp_path, cata
     assert sv._tiles_count_label.text() == "23"
 
 
-def test_index_backend_is_locked_flat_ip_for_customers(qapp, tmp_path, catalogue_master_service):
+def test_search_engine_status_is_customer_friendly(qapp, tmp_path, catalogue_master_service):
     settings = AppSettings(config_dir=tmp_path)
-    # Simulate an older install that switched to HNSW.
-    settings._settings["index_backend"] = "hnsw"
-    settings.save()
-    settings.load()
-
-    assert settings.index_backend == "flat_ip"
-    settings.index_backend = "hnsw"
-    assert settings.index_backend == "flat_ip"
-
     sv = SettingsView(
         settings=settings,
         catalogue_master_service=catalogue_master_service,
@@ -146,5 +137,10 @@ def test_index_backend_is_locked_flat_ip_for_customers(qapp, tmp_path, catalogue
     )
     assert not hasattr(sv, "_index_backend_combo")
     assert not hasattr(sv, "_apply_advice_button")
-    assert "IndexFlatIP" in sv._index_backend_info.text()
-    assert "5,000" in sv._index_backend_info.text()
+    text = sv._search_engine_status_label.text()
+    assert "5,000 Tiles" in text
+    assert "Automatic" in text or "automatic" in text.lower()
+    assert "IndexFlatIP" not in text
+    assert "HNSW" not in text
+    # Developer diagnostics hidden without TILEVISION_DEV_MODE.
+    assert not sv._dev_search_box.isVisible()

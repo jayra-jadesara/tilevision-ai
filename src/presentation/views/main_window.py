@@ -139,6 +139,8 @@ class MainWindow(QMainWindow):
         diagnostics_info_provider: Optional[Callable[[], dict]] = None,
         on_watch_folders_changed: Optional[Callable[[], None]] = None,
         on_check_updates: Optional[Callable[[], None]] = None,
+        search_optimization_engine=None,
+        vector_index=None,
         parent: Optional[QWidget] = None,
     ) -> None:
         """
@@ -191,6 +193,8 @@ class MainWindow(QMainWindow):
         self._diagnostics_info_provider = diagnostics_info_provider
         self._on_watch_folders_changed = on_watch_folders_changed
         self._on_check_updates = on_check_updates
+        self._search_optimization_engine = search_optimization_engine
+        self._vector_index = vector_index
         self._current_theme = getattr(self._settings, "theme", "dark") if self._settings is not None else "dark"
 
         self.setWindowTitle("TileVision AI — Visual Tile Search")
@@ -322,6 +326,8 @@ class MainWindow(QMainWindow):
                 gpu_info_provider=self._gpu_info_provider,
                 diagnostics_info_provider=self._diagnostics_info_provider,
                 on_check_updates=self._on_check_updates,
+                search_optimization_engine=self._search_optimization_engine,
+                vector_index=self._vector_index,
                 theme=self._current_theme,
             )
             self._content_stack.addWidget(self._settings_view)  # index 3
@@ -526,6 +532,8 @@ class MainWindow(QMainWindow):
         if self._search_viewmodel is not None and result.is_completed:
             self._search_viewmodel.load_filter_options()
         self.refresh_stale_feature_banner()
+        if result.is_completed:
+            self.run_search_optimization(auto_rebuild_if_needed=True)
 
     def _on_catalog_changed(self) -> None:
         """Refresh UI after rebuild/re-index updates the catalog."""
@@ -535,10 +543,32 @@ class MainWindow(QMainWindow):
         settings = getattr(self, "_settings_view", None)
         if settings is not None and hasattr(settings, "refresh_feature_status"):
             settings.refresh_feature_status()
+        if settings is not None and hasattr(settings, "refresh_search_engine_status"):
+            # Status only — full SOE analysis runs on startup / rebuild / explicit refresh.
+            settings.refresh_search_engine_status(run_analysis=False)
         if hasattr(self, "_indexing_view") and hasattr(self._indexing_view, "refresh_folder_display"):
             self._indexing_view.refresh_folder_display()
         if hasattr(self, "_dashboard_view"):
             self._dashboard_view.refresh()
+
+    def run_search_optimization(
+        self, *, auto_rebuild_if_needed: bool = False
+    ) -> None:
+        """Run SearchOptimizationEngine and optionally auto-rebuild."""
+        settings = getattr(self, "_settings_view", None)
+        if settings is None:
+            return
+        if hasattr(settings, "refresh_search_engine_status"):
+            settings.refresh_search_engine_status(run_analysis=True)
+        engine = self._search_optimization_engine
+        if (
+            auto_rebuild_if_needed
+            and engine is not None
+            and engine.last_decision is not None
+            and engine.last_decision.rebuild_required
+            and hasattr(settings, "start_automatic_search_optimization")
+        ):
+            settings.start_automatic_search_optimization()
 
     def handle_auto_index_event(self, file_path: str, action: str) -> None:
         """Update UI after background auto-indexing from watched folders."""

@@ -66,29 +66,26 @@ class AppSettings:
             "last_update_check_at": "",
             "last_update_check_ok": True,
             "last_seen_update_version": "",
-            # Enterprise FAISS backends (v1.2+). Default flat_ip preserves exact search.
+            # FAISS backend — written only by SearchOptimizationEngine (or Developer Mode).
             "index_backend": "flat_ip",
             "hnsw_m": 32,
             "hnsw_ef_search": 64,
             "ivf_nlist": 0,
             "ivf_nprobe": 16,
             "ivf_pq_m": 16,
+            # Customer-facing Search Engine status (no FAISS jargon).
+            "search_engine_mode": "automatic",
+            "search_optimization_status": "Optimized",
+            "search_health": "Excellent",
+            "index_health_status": "Healthy",
+            "last_search_optimization_at": "",
+            "last_optimization_catalog_size": 0,
+            "last_optimization_app_version": "",
+            "last_optimization_summary": "",
         }
         
         self._settings: Dict[str, Any] = self._defaults.copy()
         self.load()
-        self._enforce_production_index_backend()
-
-    def _enforce_production_index_backend(self) -> None:
-        """
-        Customers never choose FAISS backends. IndexFlatIP (flat_ip) is the
-        locked production default for all catalog sizes (including 5,000+).
-        Approximate backends remain available only to internal/dev tools.
-        """
-        if str(self._settings.get("index_backend", "flat_ip")) == "flat_ip":
-            return
-        self._settings["index_backend"] = "flat_ip"
-        self.save()
 
     def load(self) -> None:
         """Load settings from the JSON configuration file."""
@@ -102,7 +99,6 @@ class AppSettings:
                 # Merge loaded configuration with defaults to ensure missing keys are present
                 for key, val in self._defaults.items():
                     self._settings[key] = loaded.get(key, val)
-            self._enforce_production_index_backend()
         except (json.JSONDecodeError, OSError) as e:
             # Logger is set up after settings, so fallback to print / basic config logging
             print(f"Error loading configuration file '{self._config_file}': {e}. Resetting to defaults.")
@@ -399,15 +395,89 @@ class AppSettings:
 
     @property
     def index_backend(self) -> str:
-        """Locked production FAISS backend: always flat_ip (exact IndexFlatIP)."""
-        return "flat_ip"
+        """FAISS backend selected by SearchOptimizationEngine (or Developer Mode)."""
+        from src.ai.index_backends import IndexBackend
+
+        return IndexBackend.parse(str(self._settings.get("index_backend", "flat_ip"))).value
 
     @index_backend.setter
     def index_backend(self, value: str) -> None:
-        # Ignore customer/UI attempts to switch backends — FlatIP is fixed.
-        if str(self._settings.get("index_backend", "flat_ip")) != "flat_ip":
-            self._settings["index_backend"] = "flat_ip"
-            self.save()
+        from src.ai.index_backends import IndexBackend
+
+        self._settings["index_backend"] = IndexBackend.parse(value).value
+        self.save()
+
+    @property
+    def search_engine_mode(self) -> str:
+        return str(self._settings.get("search_engine_mode", "automatic") or "automatic")
+
+    @search_engine_mode.setter
+    def search_engine_mode(self, value: str) -> None:
+        self._settings["search_engine_mode"] = str(value or "automatic")
+        self.save()
+
+    @property
+    def search_optimization_status(self) -> str:
+        return str(self._settings.get("search_optimization_status", "Optimized") or "Optimized")
+
+    @search_optimization_status.setter
+    def search_optimization_status(self, value: str) -> None:
+        self._settings["search_optimization_status"] = str(value or "Optimized")
+        self.save()
+
+    @property
+    def search_health(self) -> str:
+        return str(self._settings.get("search_health", "Excellent") or "Excellent")
+
+    @search_health.setter
+    def search_health(self, value: str) -> None:
+        self._settings["search_health"] = str(value or "Excellent")
+        self.save()
+
+    @property
+    def index_health_status(self) -> str:
+        return str(self._settings.get("index_health_status", "Healthy") or "Healthy")
+
+    @index_health_status.setter
+    def index_health_status(self, value: str) -> None:
+        self._settings["index_health_status"] = str(value or "Healthy")
+        self.save()
+
+    @property
+    def last_search_optimization_at(self) -> str:
+        return str(self._settings.get("last_search_optimization_at", "") or "")
+
+    @last_search_optimization_at.setter
+    def last_search_optimization_at(self, value: str) -> None:
+        self._settings["last_search_optimization_at"] = str(value or "")
+        self.save()
+
+    @property
+    def last_optimization_catalog_size(self) -> int:
+        return int(self._settings.get("last_optimization_catalog_size", 0) or 0)
+
+    @last_optimization_catalog_size.setter
+    def last_optimization_catalog_size(self, value: int) -> None:
+        self._settings["last_optimization_catalog_size"] = max(0, int(value))
+        self.save()
+
+    @property
+    def last_optimization_app_version(self) -> str:
+        return str(self._settings.get("last_optimization_app_version", "") or "")
+
+    @last_optimization_app_version.setter
+    def last_optimization_app_version(self, value: str) -> None:
+        self._settings["last_optimization_app_version"] = str(value or "")
+        self.save()
+
+    @property
+    def last_optimization_summary(self) -> str:
+        return str(self._settings.get("last_optimization_summary", "") or "")
+
+    @last_optimization_summary.setter
+    def last_optimization_summary(self, value: str) -> None:
+        self._settings["last_optimization_summary"] = str(value or "")
+        self.save()
 
     @property
     def hnsw_m(self) -> int:
