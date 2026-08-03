@@ -77,6 +77,18 @@ class AppSettings:
         
         self._settings: Dict[str, Any] = self._defaults.copy()
         self.load()
+        self._enforce_production_index_backend()
+
+    def _enforce_production_index_backend(self) -> None:
+        """
+        Customers never choose FAISS backends. IndexFlatIP (flat_ip) is the
+        locked production default for all catalog sizes (including 5,000+).
+        Approximate backends remain available only to internal/dev tools.
+        """
+        if str(self._settings.get("index_backend", "flat_ip")) == "flat_ip":
+            return
+        self._settings["index_backend"] = "flat_ip"
+        self.save()
 
     def load(self) -> None:
         """Load settings from the JSON configuration file."""
@@ -90,6 +102,7 @@ class AppSettings:
                 # Merge loaded configuration with defaults to ensure missing keys are present
                 for key, val in self._defaults.items():
                     self._settings[key] = loaded.get(key, val)
+            self._enforce_production_index_backend()
         except (json.JSONDecodeError, OSError) as e:
             # Logger is set up after settings, so fallback to print / basic config logging
             print(f"Error loading configuration file '{self._config_file}': {e}. Resetting to defaults.")
@@ -386,17 +399,15 @@ class AppSettings:
 
     @property
     def index_backend(self) -> str:
-        """FAISS backend: flat_ip (default), hnsw, ivf, ivf_pq."""
-        from src.ai.index_backends import IndexBackend
-
-        return IndexBackend.parse(str(self._settings.get("index_backend", "flat_ip"))).value
+        """Locked production FAISS backend: always flat_ip (exact IndexFlatIP)."""
+        return "flat_ip"
 
     @index_backend.setter
     def index_backend(self, value: str) -> None:
-        from src.ai.index_backends import IndexBackend
-
-        self._settings["index_backend"] = IndexBackend.parse(value).value
-        self.save()
+        # Ignore customer/UI attempts to switch backends — FlatIP is fixed.
+        if str(self._settings.get("index_backend", "flat_ip")) != "flat_ip":
+            self._settings["index_backend"] = "flat_ip"
+            self.save()
 
     @property
     def hnsw_m(self) -> int:

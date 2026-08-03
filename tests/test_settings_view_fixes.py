@@ -126,3 +126,25 @@ def test_refresh_feature_status_updates_indexed_tiles_count(qapp, tmp_path, cata
     sv.refresh_feature_status()
 
     assert sv._tiles_count_label.text() == "23"
+
+
+def test_index_backend_is_locked_flat_ip_for_customers(qapp, tmp_path, catalogue_master_service):
+    settings = AppSettings(config_dir=tmp_path)
+    # Simulate an older install that switched to HNSW.
+    settings._settings["index_backend"] = "hnsw"
+    settings.save()
+    settings.load()
+
+    assert settings.index_backend == "flat_ip"
+    settings.index_backend = "hnsw"
+    assert settings.index_backend == "flat_ip"
+
+    sv = SettingsView(
+        settings=settings,
+        catalogue_master_service=catalogue_master_service,
+        catalog_count_provider=lambda: 5000,
+    )
+    assert not hasattr(sv, "_index_backend_combo")
+    assert not hasattr(sv, "_apply_advice_button")
+    assert "IndexFlatIP" in sv._index_backend_info.text()
+    assert "5,000" in sv._index_backend_info.text()
