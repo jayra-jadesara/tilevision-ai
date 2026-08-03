@@ -21,6 +21,7 @@ from src.core.models import SearchResult, SearchHistoryEntry
 from src.core.use_cases.search_tiles import SearchTilesUseCase
 from src.data.repository_interface import ISearchHistoryRepository, IActivityLogRepository
 from src.presentation.workers.search_worker import SearchWorker
+from src.utils.image_utils import validate_image
 
 logger = logging.getLogger("tilevision.presentation.viewmodels.search_viewmodel")
 
@@ -162,6 +163,27 @@ class SearchViewModel(QObject):
             self.search_error.emit(f"Selected file does not exist: {image_path}")
             self.status_message.emit("Search failed: file not found.")
             logger.warning("[SEARCH] Drop/path rejected — file missing: %s", image_path)
+            return
+
+        # Reject corrupt/unreadable images before SEARCHING so the UI never
+        # looks "stuck searching" while a worker slowly fails on decode
+        # (observed ~2s on Apple Silicon Release Validation / S17).
+        if not validate_image(path):
+            message = f"Selected file is not a valid, readable image: {path.name}"
+            if self._state == SearchState.SEARCHING:
+                # Do not queue a bad file behind an in-flight search.
+                logger.warning(
+                    "[SEARCH] Ignoring invalid image while search in progress: %s",
+                    path.name,
+                )
+                self.status_message.emit(f"Ignored invalid image: {path.name}")
+                self.search_error.emit(message)
+                return
+            self._pending_query_path = None
+            self._set_state(SearchState.ERROR)
+            self.search_error.emit(message)
+            self.status_message.emit(f"Search failed: {message}")
+            logger.warning("[SEARCH] Drop/path rejected — unreadable image: %s", path.name)
             return
 
         if self._state == SearchState.SEARCHING:

@@ -50,6 +50,7 @@ from src.presentation.views.crop_dialog import CropDialog
 from src.presentation.workers.tile_crop_worker import TileCropWorker
 from src.theme.theme_manager import get_palette, get_shared_view_qss
 from src.utils.query_image_hints import confidence_message, should_suggest_crop
+from src.utils.image_utils import validate_image
 
 logger = logging.getLogger("tilevision.presentation.views.search_view")
 
@@ -199,6 +200,13 @@ class DropZone(QFrame):
             if not path.is_file():
                 reason = f"Dropped path is not a readable file: {path.name}"
                 logger.warning("[SEARCH] %s", reason)
+                if self._on_drop_rejected is not None:
+                    self._on_drop_rejected(reason)
+                event.ignore()
+                return
+            if not validate_image(path):
+                reason = f"Selected file is not a valid, readable image: {path.name}"
+                logger.warning("[SEARCH] Drop rejected: %s", reason)
                 if self._on_drop_rejected is not None:
                     self._on_drop_rejected(reason)
                 event.ignore()
