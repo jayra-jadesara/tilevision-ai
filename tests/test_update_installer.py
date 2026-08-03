@@ -49,9 +49,24 @@ def test_launch_windows_silent_installer_spawns_detached(tmp_path, monkeypatch):
 
     fake.assert_called_once()
     args, kwargs = fake.call_args
-    assert args[0][0] == str(setup)
-    assert "/SILENT" in args[0]
+    assert args[0][0] == "cmd.exe"
+    assert args[0][1] == "/c"
+    script = Path(args[0][2])
+    assert script.suffix.lower() == ".cmd"
+    body = script.read_text(encoding="utf-8")
+    assert "/SILENT" in body
+    assert "TileVision AI" in body
     assert kwargs.get("start_new_session") is True
+
+
+def test_build_windows_apply_script_waits_and_relaunches(tmp_path):
+    setup = tmp_path / "TileVisionAI-Setup-1.2.6.exe"
+    setup.write_bytes(b"MZ")
+    script = ui.build_windows_apply_script(setup, wait_pid=9999)
+    assert "WAIT_PID=9999" in script
+    assert "/SILENT" in script
+    assert "FORCECLOSEAPPLICATIONS" in script
+    assert "TileVisionAI.exe" in script
 
 
 def test_build_macos_apply_script_waits_and_replaces(tmp_path):

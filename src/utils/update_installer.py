@@ -1,8 +1,8 @@
 """
 Apply a downloaded TileVision AI update without a browser.
 
-Windows: launch the Inno Setup installer in silent mode, then quit so files
-can be replaced. The installer relaunches the app after upgrade.
+Windows: run a detached helper that waits for this process to exit, runs the
+Inno Setup installer silently, then relaunches TileVisionAI.exe.
 
 macOS: detach a helper shell that waits for this process to exit, mounts the
 DMG, replaces ``/Applications/TileVisionAI.app``, then relaunches.
@@ -22,6 +22,7 @@ logger = logging.getLogger("tilevision.update_installer")
 
 MAC_APP_BUNDLE_NAME = "TileVisionAI.app"
 MAC_APPLICATIONS_DIR = Path("/Applications")
+WINDOWS_EXE_NAME = "TileVisionAI.exe"
 
 
 class UpdateInstallError(RuntimeError):
@@ -34,24 +35,82 @@ def installed_mac_app_path() -> Path:
 
 
 def windows_silent_install_args(setup_exe: Path) -> list[str]:
-    """Inno Setup flags for unattended upgrade + relaunch."""
+    """Inno Setup flags for unattended upgrade (no postinstall GUI launch)."""
     return [
         str(setup_exe),
         "/SILENT",
         "/CLOSEAPPLICATIONS",
         "/FORCECLOSEAPPLICATIONS",
         "/NORESTART",
-        # Ensure the postinstall launch runs even under /SILENT.
         "/SP-",
     ]
 
 
+def build_windows_apply_script(
+    setup_exe: Path,
+    *,
+    wait_pid: int | None = None,
+    exe_name: str = WINDOWS_EXE_NAME,
+) -> str:
+    """
+    Return a cmd.exe script that installs silently after ``wait_pid`` exits,
+    then relaunches TileVision from Program Files.
+    """
+    setup = Path(setup_exe).resolve()
+    pid = int(wait_pid if wait_pid is not None else os.getpid())
+    # Escape for cmd: use short quoted paths.
+    setup_q = str(setup).replace('"', "")
+    exe_q = exe_name.replace('"', "")
+    return f"""@echo off
+setlocal
+set "SETUP={setup_q}"
+set "WAIT_PID={pid}"
+set "EXE_NAME={exe_q}"
+
+REM Wait for TileVision to exit (max ~2 minutes).
+:waitloop
+tasklist /FI "PID eq %WAIT_PID%" 2>NUL | find "%WAIT_PID%" >NUL
+if errorlevel 1 goto runsetup
+timeout /T 1 /NOBREAK >NUL
+set /A _n+=1
+if %_n% GEQ 120 goto runsetup
+goto waitloop
+
+:runsetup
+timeout /T 1 /NOBREAK >NUL
+"%SETUP%" /SILENT /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS /NORESTART /SP-
+if errorlevel 1 exit /B %ERRORLEVEL%
+
+REM Prefer 64-bit Program Files, then x86.
+set "APP="
+if exist "%ProgramFiles%\\TileVision AI\\%EXE_NAME%" set "APP=%ProgramFiles%\\TileVision AI\\%EXE_NAME%"
+if not defined APP if exist "%ProgramFiles(x86)%\\TileVision AI\\%EXE_NAME%" set "APP=%ProgramFiles(x86)%\\TileVision AI\\%EXE_NAME%"
+if defined APP (
+  start "" "%APP%"
+)
+exit /B 0
+"""
+
+
+def write_windows_apply_script(
+    setup_exe: Path,
+    *,
+    wait_pid: int | None = None,
+    script_path: Path | None = None,
+) -> Path:
+    """Write the Windows apply helper to a temp .cmd file."""
+    body = build_windows_apply_script(setup_exe, wait_pid=wait_pid)
+    if script_path is None:
+        fd, name = tempfile.mkstemp(prefix="tilevision_update_", suffix=".cmd")
+        os.close(fd)
+        script_path = Path(name)
+    script_path.write_text(body, encoding="utf-8", newline="\r\n")
+    return script_path
+
+
 def launch_windows_silent_installer(setup_exe: Path) -> subprocess.Popen:
     """
-    Start the Windows setup EXE in silent upgrade mode (detached).
-
-    Does not wait for completion — the running app should quit immediately
-    afterward so Inno can overwrite Program Files.
+    Schedule a silent Windows upgrade + relaunch after this process exits.
     """
     setup_exe = Path(setup_exe)
     if not setup_exe.is_file():
@@ -59,20 +118,23 @@ def launch_windows_silent_installer(setup_exe: Path) -> subprocess.Popen:
     if setup_exe.suffix.lower() != ".exe":
         raise UpdateInstallError(f"Expected a Windows .exe installer, got: {setup_exe.name}")
 
-    args = windows_silent_install_args(setup_exe)
-    logger.info("Launching silent Windows installer: %s", setup_exe)
-    # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP so setup outlives this app.
+    script = write_windows_apply_script(setup_exe, wait_pid=os.getpid())
+    logger.info("Scheduling silent Windows installer via %s", script)
+
     creationflags = 0
     if sys.platform == "win32":
         creationflags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
         creationflags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+        creationflags |= getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
     return subprocess.Popen(
-        args,
+        ["cmd.exe", "/c", str(script)],
         cwd=str(setup_exe.parent),
         close_fds=True,
         start_new_session=True,
         creationflags=creationflags,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
 
 

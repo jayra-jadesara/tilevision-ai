@@ -11,7 +11,7 @@
 ;   iscc packaging\tilevision_setup.iss
 
 #define MyAppName "TileVision AI"
-#define MyAppVersion "1.2.5"
+#define MyAppVersion "1.2.6"
 #define MyAppPublisher "JD Software"
 #define MyAppExeName "TileVisionAI.exe"
 #define BuildSource "..\dist\TileVisionAI"
@@ -39,7 +39,6 @@ MinVersion=10.0
 CloseApplications=yes
 CloseApplicationsFilter=TileVisionAI.exe
 RestartApplications=no
-AppMutex=TileVisionAI_SingleInstance
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -61,8 +60,10 @@ Name: "{commonappdata}\TileVisionAI"; Permissions: users-modify
 Name: "{commonappdata}\TileVisionAI\.lic"; Permissions: users-modify
 
 [Run]
-; Always relaunch after install — including /SILENT in-app upgrades.
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall
+; Interactive installs only — silent CI verify and in-app upgrades must NOT
+; launch the GUI here (Start-Process -Wait would hang on the running app).
+; In-app updates relaunch via src/utils/update_installer.py helper script.
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
 [Messages]
 WelcomeLabel2=This will install [name/ver] on your computer.%n%nTileVision AI is an offline visual tile search application for showrooms and distributors.
