@@ -215,6 +215,16 @@ def build_application() -> int:
     # Mac: must run before DINOv2/MPS inference (missing Metal ops → CPU).
     configure_mps_fallback()
 
+    # macOS Intel: OpenMP inside Qt QThread deadlocks DINOv2/FAISS search.
+    # Remap AI workers onto Python threads and cap OpenMP before model load.
+    from src.presentation.workers.native_ai_thread import (
+        apply_torch_faiss_thread_caps,
+        install_python_ai_worker_threads,
+    )
+
+    install_python_ai_worker_threads()
+    apply_torch_faiss_thread_caps()
+
     logger.info("Initializing AI engine...")
     embedder = DINOv2Embedder(device_preference=settings.inference_device)
     indexing_perf = IndexingPerformanceConfig.from_settings(

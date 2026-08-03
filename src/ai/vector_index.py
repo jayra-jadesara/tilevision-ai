@@ -97,7 +97,13 @@ class FaissIndexManager:
         try:
             import os
 
-            threads = min(8, max(1, (os.cpu_count() or 4)))
+            from src.utils.platform_info import is_mac_intel
+
+            # Match torch: single OpenMP thread on macOS Intel to avoid hangs.
+            if is_mac_intel():
+                threads = 1
+            else:
+                threads = min(8, max(1, (os.cpu_count() or 4)))
             faiss.omp_set_num_threads(threads)
             logger.debug("FAISS omp threads set to %d", threads)
         except Exception as exc:

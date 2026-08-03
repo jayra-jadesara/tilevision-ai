@@ -26,6 +26,11 @@ if _PROJECT_ROOT not in sys.path:
 # imported by the app. Without this, DINOv2 search crashes on upsample_bicubic2d.
 if sys.platform == "darwin":
     os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+    # Intel Mac: cap OpenMP before libomp/torch init — prevents the
+    # OpenMP↔QThread deadlock that hung drop-search forever.
+    from src.presentation.workers.native_ai_thread import configure_macos_openmp_for_ai
+
+    configure_macos_openmp_for_ai()
 
 
 def main() -> None:
@@ -39,8 +44,14 @@ def main() -> None:
         sys.exit(0)
 
     from src.ai.gpu_info import configure_mps_fallback
+    from src.presentation.workers.native_ai_thread import (
+        apply_torch_faiss_thread_caps,
+        install_python_ai_worker_threads,
+    )
 
     configure_mps_fallback()
+    install_python_ai_worker_threads()
+    apply_torch_faiss_thread_caps()
 
     from src.app import build_application
     exit_code = build_application()

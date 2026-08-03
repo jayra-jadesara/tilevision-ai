@@ -129,7 +129,18 @@ class DINOv2Embedder:
             configure_mps_fallback()
             logger.info("Apple GPU (MPS): %s", self._runtime.device_name)
         else:
-            thread_count = min(8, os.cpu_count() or 4)
+            from src.utils.platform_info import is_mac_intel
+
+            # macOS Intel: OpenMP oversubscription inside worker threads hangs
+            # search forever. Keep a single intra-op thread on that platform.
+            if is_mac_intel():
+                thread_count = 1
+                try:
+                    torch.set_num_interop_threads(1)
+                except Exception:
+                    pass
+            else:
+                thread_count = min(8, os.cpu_count() or 4)
             torch.set_num_threads(thread_count)
             logger.info("CPU inference threads: %d", thread_count)
 
@@ -150,8 +161,15 @@ class DINOv2Embedder:
         if self._model is not None:
             self._model.to(self._device)
             self._model.eval()
-        thread_count = min(8, os.cpu_count() or 4)
+        from src.utils.platform_info import is_mac_intel
+
+        thread_count = 1 if is_mac_intel() else min(8, os.cpu_count() or 4)
         torch.set_num_threads(thread_count)
+        if is_mac_intel():
+            try:
+                torch.set_num_interop_threads(1)
+            except Exception:
+                pass
         self._mps_cpu_fallback_done = True
 
     def _run_model_forward(self, inputs: dict) -> object:

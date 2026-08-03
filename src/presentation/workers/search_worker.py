@@ -64,7 +64,7 @@ class SearchWorker(QThread):
 
     def run(self) -> None:
         """Execute the search in the background thread."""
-        logger.info("Search QThread started for query image: %s", self._query_image_path)
+        logger.info("Search worker started for query image: %s", self._query_image_path)
         start_time = time.monotonic()
         stop_heartbeat = threading.Event()
         # Capture the main-thread receiver affinity via Queued signal emits.
@@ -165,7 +165,7 @@ class SearchWorker(QThread):
                 detail=f"{len(results)} in {elapsed:.3f}s",
             )
             logger.info(
-                "Search QThread finished in %.3fs. Results: %d",
+                "Search worker finished in %.3fs. Results: %d",
                 elapsed,
                 len(results),
             )
