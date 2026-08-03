@@ -46,6 +46,17 @@ def _run_release_validation() -> int:
     # Strip the mode flag so qa_e2e argparse sees only its own flags.
     sys.argv = [sys.argv[0], *sys.argv[2:]]
 
+    # CRITICAL (frozen macOS .app): preload OpenCV / FAISS / torch BEFORE any
+    # sys.path mutation. OpenCV's bootstrap re-imports "cv2"; if the checkout
+    # root is already on sys.path, that re-import can recurse instead of
+    # binding the native extension (verify-bundle works; suite path did not).
+    if getattr(sys, "frozen", False):
+        import cv2  # noqa: F401
+        import faiss  # noqa: F401
+        import torch  # noqa: F401
+        import torch.cuda  # noqa: F401
+        os.environ.setdefault("TILEVISION_QA_PACKAGED_APP", "1")
+
     suite_dir = os.environ.get("TILEVISION_QA_SUITE_DIR", "").strip()
     if suite_dir:
         # Parent that contains the `qa_e2e` package (usually the git checkout).
@@ -65,7 +76,6 @@ def _run_release_validation() -> int:
             if meipass in sys.path:
                 sys.path.remove(meipass)
             sys.path.insert(0, meipass)
-        os.environ.setdefault("TILEVISION_QA_PACKAGED_APP", "1")
 
     os.environ.setdefault("TILEVISION_DEV_MODE", "1")
     os.environ.setdefault("TILEVISION_OFFLINE_MODEL", "1")
