@@ -32,7 +32,7 @@ def install_python_thread_workers() -> None:
     if production_uses_python_ai_threads() or should_use_python_ai_threads():
         logger.info(
             "[QA] AI workers use production OpenMP-safe Python threads "
-            "(IndexingWorker / SearchWorker / TileCropWorker)"
+            "(IndexingWorker / SearchWorker)"
         )
         return
 

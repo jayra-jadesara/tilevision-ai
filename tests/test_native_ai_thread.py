@@ -17,9 +17,12 @@ from src.presentation.workers.search_worker import SearchWorker
 @pytest.fixture(autouse=True)
 def _reset_native_ai_install(monkeypatch):
     monkeypatch.setattr(nat, "_INSTALLED", False)
-    # Clear class patch flag between tests.
-    if hasattr(SearchWorker, "_tv_python_ai_thread_patched"):
-        delattr(SearchWorker, "_tv_python_ai_thread_patched")
+    # Clear class patch flags between tests (Search + Indexing only).
+    from src.presentation.workers.indexing_worker import IndexingWorker
+
+    for cls in (SearchWorker, IndexingWorker):
+        if hasattr(cls, "_tv_python_ai_thread_patched"):
+            delattr(cls, "_tv_python_ai_thread_patched")
     yield
     monkeypatch.setattr(nat, "_INSTALLED", False)
 

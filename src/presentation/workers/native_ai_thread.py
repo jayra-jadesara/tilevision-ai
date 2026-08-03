@@ -133,14 +133,15 @@ def install_python_ai_worker_threads() -> None:
 
     from src.presentation.workers.indexing_worker import IndexingWorker
     from src.presentation.workers.search_worker import SearchWorker
-    from src.presentation.workers.tile_crop_worker import TileCropWorker
 
-    for cls in (IndexingWorker, SearchWorker, TileCropWorker):
+    # Only workers that run PyTorch/FAISS OpenMP. TileCropWorker stays on
+    # QThread (OpenCV/ONNX) so Qt signal affinity in unit tests remains intact.
+    for cls in (IndexingWorker, SearchWorker):
         _patch_worker_class(cls)
 
     _INSTALLED = True
     logger.info(
-        "AI workers use Python threads on Darwin "
+        "Search/Indexing AI workers use Python threads on Darwin "
         "(OpenMP-safe; same run() bodies / signals)"
     )
 
@@ -205,6 +206,13 @@ def _patch_worker_class(cls: Type[QThread]) -> None:
         t = getattr(self, "_tv_py_thread", None)
         return bool(t is not None and t.is_alive())
 
+    def isFinished(self) -> bool:  # noqa: ANN001
+        if not should_use_python_ai_threads():
+            return QThread.isFinished(self)
+        if getattr(self, "_tv_py_thread", None) is None:
+            return False
+        return bool(getattr(self, "_tv_finished", False))
+
     def wait(self, msecs: int = 30000) -> bool:  # noqa: ANN001
         if not should_use_python_ai_threads():
             return QThread.wait(self, msecs)
@@ -222,6 +230,7 @@ def _patch_worker_class(cls: Type[QThread]) -> None:
 
     cls.start = start  # type: ignore[method-assign]
     cls.isRunning = isRunning  # type: ignore[method-assign]
+    cls.isFinished = isFinished  # type: ignore[method-assign]
     cls.wait = wait  # type: ignore[method-assign]
     cls.deleteLater = deleteLater  # type: ignore[method-assign]
     cls._tv_python_ai_thread_patched = True
