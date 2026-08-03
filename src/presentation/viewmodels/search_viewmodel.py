@@ -225,7 +225,7 @@ class SearchViewModel(QObject):
                     "Indexed features are outdated. "
                     f"{health.stale_count} of {health.indexed_count} tiles "
                     "need re-indexing.\n\n"
-                    "Go to Settings → Rebuild FAISS Index, then search again."
+                    "Go to Settings → Rebuild Search Index, then search again."
                 )
                 self.status_message.emit("Search blocked: index is outdated.")
                 return
@@ -241,7 +241,7 @@ class SearchViewModel(QObject):
                 self._set_state(SearchState.ERROR)
                 self.search_error.emit(
                     "Catalog metadata is present but the searchable vector index is empty.\n\n"
-                    "Go to Settings → Rebuild FAISS Index, wait until it finishes, "
+                    "Go to Settings → Rebuild Search Index, wait until it finishes, "
                     "then drop your image again."
                 )
                 self.status_message.emit("Search blocked: vector index is empty.")
