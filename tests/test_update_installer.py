@@ -86,7 +86,13 @@ def test_write_macos_apply_script_is_executable(tmp_path):
     dmg.write_bytes(b"dmg")
     path = ui.write_macos_apply_script(dmg, wait_pid=1, script_path=tmp_path / "apply.sh")
     assert path.exists()
-    assert path.stat().st_mode & 0o111
+    # Unix execute bits are meaningful on Darwin/Linux; Windows NTFS often
+    # reports no +x even after chmod — content is what matters for the helper.
+    body = path.read_text(encoding="utf-8")
+    assert body.startswith("#!/bin/bash")
+    assert "hdiutil attach" in body
+    if sys.platform != "win32":
+        assert path.stat().st_mode & 0o111
 
 
 def test_launch_macos_dmg_installer_rejects_non_dmg(tmp_path):

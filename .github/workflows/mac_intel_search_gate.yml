@@ -28,6 +28,8 @@ on:
       - "src/ai/vector_index.py"
       - "main.py"
       - "src/app.py"
+      - "scripts/prove_python_ai_threads.py"
+      - ".github/workflows/mac_intel_search_gate.yml"
 
 concurrency:
   group: mac-intel-search-${{ github.ref }}
@@ -73,22 +75,7 @@ jobs:
         run: bash scripts/macos_build_python.sh scripts/download_sam2_onnx_model.py
 
       - name: Prove production Python AI threads are active
-        run: |
-          bash scripts/macos_build_python.sh -c "
-from src.presentation.workers.native_ai_thread import (
-    configure_macos_openmp_for_ai,
-    install_python_ai_worker_threads,
-    production_uses_python_ai_threads,
-    should_use_python_ai_threads,
-)
-import os
-configure_macos_openmp_for_ai()
-install_python_ai_worker_threads()
-assert should_use_python_ai_threads(), 'Darwin must prefer Python AI threads'
-assert production_uses_python_ai_threads(), 'production install failed'
-assert os.environ.get('OMP_NUM_THREADS') == '1'
-print('OK: production OpenMP-safe AI threads armed')
-"
+        run: bash scripts/macos_build_python.sh scripts/prove_python_ai_threads.py
 
       - name: Run release validation (100 searches, real DINOv2/FAISS)
         env:
