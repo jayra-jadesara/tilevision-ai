@@ -302,6 +302,15 @@ def test_update_dialog_auto_installs_after_download(qapp, tmp_path, monkeypatch)
     QCoreApplication.processEvents()
     dialog._on_install_and_restart()
     assert launched["path"] == installer
+    hard = {"n": 0}
+    monkeypatch.setattr(
+        "src.presentation.views.update_dialog.os._exit",
+        lambda code: hard.__setitem__("n", hard["n"] + 1),
+    )
     dialog._quit_for_install()
     assert quit_calls["n"] == 1
+    # Fire the hard-exit timer.
+    QCoreApplication.processEvents()
+    dialog._hard_exit_for_install()
+    assert hard["n"] == 1
     dialog.close()

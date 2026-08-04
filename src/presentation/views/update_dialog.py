@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -37,6 +38,7 @@ from src.utils.update_downloader import (
 from src.utils.update_installer import (
     UpdateInstallError,
     begin_force_quit_for_update,
+    is_force_quit_for_update,
     launch_update_installer,
 )
 
@@ -45,6 +47,9 @@ logger = logging.getLogger("tilevision.presentation.views.update_dialog")
 # If quit stalls (indexing confirm / non-daemon threads), unlock the UI so the
 # customer is not trapped on "Installing…" forever.
 _INSTALL_WATCHDOG_MS = 90_000
+# Hard process exit so the Windows/macOS helper can replace files even when
+# Qt quit is blocked by a modal closeEvent or a non-daemon worker thread.
+_HARD_EXIT_AFTER_QUIT_MS = 1_500
 
 
 class UpdateAvailableDialog(QDialog):
@@ -182,8 +187,12 @@ class UpdateAvailableDialog(QDialog):
         self.setStyleSheet(get_dialog_qss(self._theme))
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        # Never block process exit once the silent installer has been scheduled.
+        if is_force_quit_for_update():
+            event.accept()
+            return
         if self._installing:
-            # Never trap the user forever — allow close after watchdog unlocks.
+            # Brief protect while helper starts; watchdog unlocks if quit stalls.
             event.ignore()
             return
         if self._worker is not None and self._worker.isRunning():
@@ -430,7 +439,10 @@ class UpdateAvailableDialog(QDialog):
         self._skip_btn.hide()
         self._browser_btn.hide()
         self._cancel_btn.hide()
-        self._status.setText("Installing update… TileVision AI will restart.")
+        self._status.setText(
+            "Installing update… TileVision AI will close and restart.\n"
+            "If Windows asks for permission (UAC), click Yes."
+        )
 
         try:
             # Cancel indexing BEFORE spawning the helper so MainWindow.closeEvent
@@ -473,10 +485,20 @@ class UpdateAvailableDialog(QDialog):
         self._cancel_indexing_quietly()
         # Allow the modal to dismiss so nested event loops do not trap quit.
         self._installing = False
+        self.hide()
         app = QApplication.instance()
         if app is not None:
+            # Guarantee the PID dies even if Qt quit is blocked by threads/modals.
+            QTimer.singleShot(_HARD_EXIT_AFTER_QUIT_MS, self._hard_exit_for_install)
             app.quit()
+        else:
+            QTimer.singleShot(_HARD_EXIT_AFTER_QUIT_MS, self._hard_exit_for_install)
         self.accept()
+
+    @staticmethod
+    def _hard_exit_for_install() -> None:
+        logger.info("Hard-exiting process for update installer.")
+        os._exit(0)
 
     def _on_open_installer(self) -> None:
         if self._downloaded_path is None or not self._downloaded_path.exists():
