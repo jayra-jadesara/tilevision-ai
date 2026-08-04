@@ -39,8 +39,10 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, TYPE_CHECKING
 
+import cv2
 import numpy as np
 
 from src.ai.embedder import DINOv2Embedder
@@ -279,6 +281,69 @@ class FeatureExtractor:
         )
 
         return features
+
+    def extract_index_vectors(
+        self,
+        image_path: str,
+    ) -> tuple[TileFeatures, list[np.ndarray]]:
+        """
+        Index-time extract: primary TileFeatures plus optional aux FAISS vectors.
+
+        Wide catalog sheets get a secondary texture-panel embedding (same tile
+        id in FAISS) so a customer crop of the slab still retrieves the sheet.
+        """
+        features = self.extract(image_path, for_query=False)
+        aux: list[np.ndarray] = []
+
+        try:
+            # Detect the panel on the raw sheet. Do NOT trim/content-crop the
+            # full sheet first — that shifts the left/right split into the
+            # text column and destroys texture-crop recall (measured).
+            raw = ImagePreprocessor.load(image_path)
+            raw = ImagePreprocessor.to_rgb(raw)
+            panel = ImagePreprocessor.primary_texture_panel(raw)
+            if panel is None:
+                return features, aux
+
+            panel = ImagePreprocessor.normalize_lighting(panel)
+            panel = ImagePreprocessor.resize_letterbox(panel)
+            rgb = ImagePreprocessor.to_numpy(panel)
+            bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+            gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+            panel_image = PreprocessedImage(
+                pil=panel,
+                rgb=rgb,
+                bgr=bgr,
+                gray=gray,
+                width=raw.size[0],
+                height=raw.size[1],
+            )
+            panel_emb = np.asarray(
+                self._embedder.extract_from_preprocessed(panel_image, for_query=False),
+                dtype=np.float32,
+            )
+            # Skip near-duplicate aux vectors (ordinary tiles that slipped through).
+            primary = np.asarray(features.embedding, dtype=np.float32).ravel()
+            panel_v = panel_emb.ravel()
+            sim = float(
+                np.dot(primary, panel_v)
+                / (np.linalg.norm(primary) * np.linalg.norm(panel_v) + 1e-8)
+            )
+            if sim < 0.97:
+                aux.append(panel_emb)
+                logger.info(
+                    "Index aux texture-panel vector for %s (cos_vs_primary=%.3f)",
+                    Path(image_path).name,
+                    sim,
+                )
+        except Exception as exc:
+            logger.warning(
+                "Texture-panel aux embed skipped for %s: %s",
+                image_path,
+                exc,
+            )
+
+        return features, aux
 
     def extract_for_search(
         self,

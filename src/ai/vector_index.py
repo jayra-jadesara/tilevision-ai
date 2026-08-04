@@ -292,8 +292,10 @@ class FaissIndexManager:
         """
         Replace vectors for ids that may already exist in the index.
 
-        Removes any existing vector(s) for the given ids first so the index
-        always holds exactly one vector per id.
+        Removes any existing vector(s) for the given ids first, then adds the
+        provided vectors. The same id may appear more than once (e.g. full-sheet
+        + texture-panel embeddings for catalog marketing images). Search merges
+        duplicate ids by best score.
         """
         if self._index is None:
             self.load_index()
@@ -301,13 +303,14 @@ class FaissIndexManager:
         if not ids:
             return
 
+        unique_ids = list(dict.fromkeys(int(i) for i in ids))
         try:
             with synchronized_inference(timeout=DEFAULT_INDEX_LOCK_TIMEOUT_S, purpose="FAISS"):
-                self._index.remove_ids(np.array(ids, dtype=np.int64))
+                self._index.remove_ids(np.array(unique_ids, dtype=np.int64))
         except Exception as e:
             logger.debug(
                 "No pre-existing vector(s) to remove for ids %s (or removal failed): %s",
-                ids,
+                unique_ids,
                 e,
             )
 

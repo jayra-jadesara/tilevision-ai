@@ -316,6 +316,42 @@ class ImagePreprocessor:
         return float(np.linalg.norm(center_mean - border_mean)) >= 22.0
 
     @classmethod
+    def primary_texture_panel(cls, image: Image.Image) -> Image.Image | None:
+        """
+        For wide catalog/marketing sheets, return the dominant tile panel.
+
+        Showroom sheets often put a large slab on the left and text/grid on
+        the right. Indexing only the full sheet makes texture-only customer
+        crops (e.g. 600×600 from the slab) miss the parent image in FAISS.
+        Returning the left panel lets us store a second FAISS vector under
+        the same tile id. Ordinary square/portrait tiles return None.
+        """
+        image = image.convert("RGB")
+        width, height = image.size
+        if width < 480 or height < 320:
+            return None
+        if (width / max(height, 1)) < 1.12:
+            return None
+
+        # Take the left half, then content-crop inside it so white margins and
+        # any bleed from the info column are removed (slab-only panel).
+        split_x = max(1, int(width * 0.50))
+        left = image.crop((0, 0, split_x, height))
+        left = cls.trim_uniform_borders(left)
+        left = cls.crop_to_content_region(left, min_margin_ratio=0.02)
+        pw, ph = left.size
+        if pw < 64 or ph < 64:
+            return None
+        arr = np.asarray(left, dtype=np.float32)
+        if float(arr.std()) < 6.0:
+            return None
+        # Require the panel to differ from a resized full sheet (avoid noop).
+        full = np.asarray(image.resize(left.size), dtype=np.float32)
+        if float(np.mean(np.abs(arr - full))) < 4.0:
+            return None
+        return left
+
+    @classmethod
     def focus_center_region(
         cls,
         image: Image.Image,

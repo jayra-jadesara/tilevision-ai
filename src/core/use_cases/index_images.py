@@ -262,7 +262,9 @@ class IndexImagesUseCase:
         brand, category, color, size, product_code = parse_filename_metadata(resolved_path.stem)
 
         logger.info("Extracting AI features...")
-        features = self._feature_extractor.extract(str(resolved_path))
+        features, aux_vectors = self._feature_extractor.extract_index_vectors(
+            str(resolved_path)
+        )
         extract_timings = self._feature_extractor.last_timings
         timer.timings.record("preprocessing", extract_timings.preprocessing)
         timer.timings.record("dinov2", extract_timings.dinov2)
@@ -306,14 +308,22 @@ class IndexImagesUseCase:
 
             # 3. Reuse embedding already extracted above.
             # Do NOT run FeatureExtractor again.
+            # Wide catalog sheets may also carry an aux texture-panel vector
+            # under the same FAISS id so slab crops still retrieve the sheet.
             logger.info(
                 f"Indexing vector into FAISS for ID {db_id}: {file_name}"
             )
 
+            faiss_ids = [db_id]
+            faiss_vectors = [features.embedding]
+            for aux in aux_vectors:
+                faiss_ids.append(db_id)
+                faiss_vectors.append(aux)
+
             with timer.measure("faiss"):
                 self._index.update_vectors(
-                    [db_id],
-                    [features.embedding],
+                    faiss_ids,
+                    faiss_vectors,
                     persist=persist,
                 )
 

@@ -10,7 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 # Bump when the DINOv2 embedding pipeline changes (model, views, fusion).
-CURRENT_FEATURE_VERSION = 5
+# v6: index-time secondary texture-panel vector for wide catalog sheets so
+# customer crops of the slab still retrieve the parent sheet in FAISS.
+CURRENT_FEATURE_VERSION = 6
 
 # Bump when pattern descriptor layout or algorithm changes.
 CURRENT_PATTERN_FEATURE_VERSION = 3

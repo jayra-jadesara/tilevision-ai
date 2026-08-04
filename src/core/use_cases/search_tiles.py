@@ -130,12 +130,17 @@ class SearchTilesUseCase:
 
     @staticmethod
     def _compute_faiss_search_k(top_k: int, total_vectors: int) -> int:
-        """Return the unfiltered FAISS candidate pool size (Phase 7: 50–200)."""
-        return min(
+        """Return the unfiltered FAISS candidate pool size (Phase 7: 50–200).
+
+        Over-fetch by 2× so multi-vector tile ids (sheet + texture panel) do
+        not shrink unique-id recall below the historical target.
+        """
+        unique_target = min(
             max(top_k * 5, _FAISS_CANDIDATE_MIN),
             _FAISS_CANDIDATE_MAX,
             total_vectors,
         )
+        return min(unique_target * 2, total_vectors)
 
     def _search_faiss_multi_crop(
         self,

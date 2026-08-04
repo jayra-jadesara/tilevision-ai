@@ -4,10 +4,9 @@ patch:
 
 1. add_vectors() no longer forces a disk write on every call (persist=False
    lets callers batch writes during a folder scan).
-2. update_vectors() removes any pre-existing vector for an id before
-   re-adding, so re-indexing a changed file never leaves a duplicate/stale
-   vector under the same id (which previously caused the same tile to
-   appear twice in search results).
+2. update_vectors() removes any pre-existing vector(s) for an id before
+   re-adding, so re-indexing a changed file never leaves a stale vector.
+   The same id may be added more than once (catalog sheet + texture panel).
 """
 
 import sys
@@ -59,6 +58,19 @@ def test_update_vectors_replaces_rather_than_duplicates(manager):
 
     ids, scores = manager.search_vectors([0.0, 1.0, 0.0, 0.0], top_k=5)
     assert ids.count(1) == 1  # tile 1 appears exactly once in results, not twice
+
+
+@pytest.mark.faiss_search
+def test_update_vectors_can_store_sheet_and_panel_under_same_id(manager):
+    manager.update_vectors(
+        [1, 1],
+        [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]],
+        persist=False,
+    )
+    assert manager._index.ntotal == 2
+    # Fresh replace with a single vector clears both previous entries.
+    manager.update_vectors([1], [[0.0, 0.0, 1.0, 0.0]], persist=False)
+    assert manager._index.ntotal == 1
 
 
 def test_update_vectors_safe_for_brand_new_id(manager):
