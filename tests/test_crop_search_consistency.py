@@ -93,6 +93,27 @@ def test_primary_texture_panel_detects_wide_catalog_sheet(tmp_path):
     assert panel.size[0] >= 64 and panel.size[1] >= 64
 
 
+def test_primary_texture_panel_keeps_low_contrast_white_marble(tmp_path):
+    """Customer PGYS2319-class sheets: high-key white slab, std often < 6."""
+    h, w = 900, 1200
+    sheet = Image.new("RGB", (w, h), (255, 255, 255))
+    # Nearly flat white left slab with faint veins (std ~2–4).
+    slab = np.full((h - 20, w // 2 - 40, 3), 248, dtype=np.float32)
+    rng = np.random.default_rng(11)
+    slab += rng.normal(0, 2.5, slab.shape)
+    slab = np.clip(slab, 0, 255).astype(np.uint8)
+    sheet.paste(Image.fromarray(slab), (20, 10))
+    draw = ImageDraw.Draw(sheet)
+    draw.text((w // 2 + 40, 40), "ELEGANT", fill=(180, 150, 40))
+    draw.text((w // 2 + 40, 120), "PGYS2319 catalog sheet", fill=(0, 0, 0))
+    path = tmp_path / "white_sheet.jpg"
+    sheet.save(path, quality=95)
+
+    panel = ImagePreprocessor.primary_texture_panel(Image.open(path))
+    assert panel is not None
+    assert float(np.asarray(panel, dtype=np.float32).std()) < 6.0
+
+
 def test_primary_texture_panel_skips_square_tile(tmp_path):
     tile = _make_marble(600, 600, seed=3)
     path = tmp_path / "square.jpg"
@@ -165,6 +186,24 @@ def test_faiss_multi_vector_sheet_recovers_crop_in_top5(tmp_path):
     ordered = sorted(best, key=best.get, reverse=True)[:5]
     assert 1 in ordered
     assert ordered[0] == 1
+
+
+def test_faiss_aux_boost_promotes_layout_sheet_over_weak_hybrid():
+    """Rerank must not leave aux-retrieved sheets at ~27% display."""
+    from src.ai.similarity_score import calibrate_display_percent
+    from src.core.use_cases import search_tiles as st
+
+    faiss_cos = 0.94
+    hybrid_emb = 0.46
+    hybrid_final = 0.45
+    assert faiss_cos >= st._FAISS_AUX_BOOST_MIN
+    assert faiss_cos >= hybrid_emb + st._FAISS_AUX_BOOST_GAP
+    boosted = max(0.0, min(1.0, 0.72 * faiss_cos + 0.28 * hybrid_final))
+    final_score = max(hybrid_final, boosted)
+    display = calibrate_display_percent(final_score, exact_match=False)
+    # Without boost: ~27%. With boost: well above Top-5 usefulness band.
+    assert display >= 70.0
+    assert calibrate_display_percent(hybrid_final, exact_match=False) < 35.0
 
 
 @pytest.mark.slow

@@ -85,6 +85,12 @@ _WEAK_RESULT_ABSOLUTE_RAW_FLOOR = 0.38
 # high, treat it as the same catalog tile (100% match).
 _CROP_SOURCE_EMBEDDING_THRESHOLD = 0.78
 
+# When FAISS retrieves a tile via an aux texture-panel vector, FlatIP cosine
+# can be ≫ hybrid.embedding (which always uses the layout-heavy primary).
+# Trust the stronger FAISS hit so parent sheets stay in Top-5 for slab crops.
+_FAISS_AUX_BOOST_MIN = 0.80
+_FAISS_AUX_BOOST_GAP = 0.12
+
 
 class SearchTilesUseCase:
     """
@@ -146,14 +152,17 @@ class SearchTilesUseCase:
         self,
         embeddings: list,
         search_k: int,
-    ) -> List[int]:
+    ) -> tuple[List[int], dict[int, float]]:
         """
         Run FAISS for each query crop and merge by best similarity per tile id.
 
-        Improves room-photo recall when one crop is cleaner than another.
+        Returns ordered unique ids plus the best FAISS Inner-Product (cosine)
+        per id. Aux texture-panel vectors share a tile id with the primary
+        sheet embedding; the best score must flow into rerank or layout-heavy
+        primaries stay near ~27% after hybrid scoring.
         """
         if not embeddings:
-            return []
+            return [], {}
 
         best_score: dict[int, float] = {}
         for emb in embeddings:
@@ -170,7 +179,7 @@ class SearchTilesUseCase:
             len(embeddings),
             len(matching_ids),
         )
-        return matching_ids
+        return matching_ids, best_score
 
     def get_index_health(self):
         """Return feature-version compatibility status for the indexed catalog."""
@@ -422,6 +431,7 @@ class SearchTilesUseCase:
 
             candidates: List[TileImage] = []
             matching_ids: List[int] = []
+            faiss_scores: dict[int, float] = {}
 
             if filtered_ids is not None and len(filtered_ids) <= _FILTERED_FULL_RERANK_CAP:
                 logger.info(
@@ -454,7 +464,7 @@ class SearchTilesUseCase:
                     cache_status,
                 )
                 with timer.measure("faiss"):
-                    matching_ids = self._search_faiss_multi_crop(
+                    matching_ids, faiss_scores = self._search_faiss_multi_crop(
                         query_embeddings or [query_features.embedding],
                         search_k,
                     )
@@ -549,11 +559,35 @@ class SearchTilesUseCase:
                         query_dhash,
                     )
 
+                    faiss_cos = float(faiss_scores.get(tile.id, 0.0) or 0.0)
+                    # Aux texture-panel retrieval: FlatIP cosine ≫ primary-vs-query
+                    # cosine. Promote the FAISS hit so marketing sheets do not
+                    # collapse to ~27% after hybrid rerank on the layout primary.
                     if (
+                        not exact_match
+                        and faiss_cos >= _FAISS_AUX_BOOST_MIN
+                        and faiss_cos >= hybrid.embedding + _FAISS_AUX_BOOST_GAP
+                    ):
+                        boosted = max(
+                            0.0,
+                            min(1.0, 0.72 * faiss_cos + 0.28 * float(hybrid.final)),
+                        )
+                        final_score = max(float(hybrid.final), boosted)
+                        logger.info(
+                            "FAISS aux boost | %s | faiss=%.3f hybrid_emb=%.3f "
+                            "hybrid_final=%.3f → final=%.3f",
+                            tile.file_name,
+                            faiss_cos,
+                            hybrid.embedding,
+                            hybrid.final,
+                            final_score,
+                        )
+                    elif (
                         not exact_match
                         and catalog_source_tile is not None
                         and tile.id == catalog_source_tile.id
-                        and hybrid.embedding >= _CROP_SOURCE_EMBEDDING_THRESHOLD
+                        and max(hybrid.embedding, faiss_cos)
+                        >= _CROP_SOURCE_EMBEDDING_THRESHOLD
                     ):
                         exact_match = True
                         final_score = 1.0

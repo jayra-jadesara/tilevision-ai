@@ -341,14 +341,39 @@ class ImagePreprocessor:
         left = cls.crop_to_content_region(left, min_margin_ratio=0.02)
         pw, ph = left.size
         if pw < 64 or ph < 64:
+            logger.debug(
+                "primary_texture_panel: rejected small panel %sx%s",
+                pw,
+                ph,
+            )
             return None
         arr = np.asarray(left, dtype=np.float32)
-        if float(arr.std()) < 6.0:
+        # High-key white marble/onyx panels often have std ≈ 1–4. The old
+        # threshold of 6.0 rejected every Qingyu-style slab (customer PGYS2319).
+        panel_std = float(arr.std())
+        if panel_std < 0.85:
+            logger.info(
+                "primary_texture_panel: rejected near-blank panel (std=%.3f)",
+                panel_std,
+            )
             return None
         # Require the panel to differ from a resized full sheet (avoid noop).
         full = np.asarray(image.resize(left.size), dtype=np.float32)
-        if float(np.mean(np.abs(arr - full))) < 4.0:
+        mean_abs = float(np.mean(np.abs(arr - full)))
+        if mean_abs < 3.0:
+            logger.info(
+                "primary_texture_panel: rejected panel too similar to full "
+                "sheet (mean_abs=%.3f)",
+                mean_abs,
+            )
             return None
+        logger.info(
+            "primary_texture_panel: using left panel %sx%s (std=%.2f, Δfull=%.2f)",
+            pw,
+            ph,
+            panel_std,
+            mean_abs,
+        )
         return left
 
     @classmethod

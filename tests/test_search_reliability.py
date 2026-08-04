@@ -90,7 +90,7 @@ def test_faiss_ids_without_sqlite_raises(tmp_path):
     try:
         uc = SearchTilesUseCase(repo, extractor, index, str(tmp_path))
         # Bypass multi-crop helper by stubbing it
-        uc._search_faiss_multi_crop = MagicMock(return_value=[101, 102])
+        uc._search_faiss_multi_crop = MagicMock(return_value=([101, 102], {101: 0.9, 102: 0.8}))
         with pytest.raises(RuntimeError, match="out of sync|Rebuild FAISS"):
             uc.execute(str(query), top_k=5)
     finally:
