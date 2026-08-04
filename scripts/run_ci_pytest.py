@@ -2,12 +2,13 @@
 """
 CI pytest runner with Windows Qt/Git-Bash crash mitigation.
 
-PySide teardown under Git Bash on windows-latest frequently exits 127/139
-after a fully green suite. This wrapper:
-  1. Runs pytest with junitxml
-  2. Retries once on Windows when the process crashes
-  3. Treats 127/139 as success when junit shows a finished green suite
-  4. Hard-exits so the wrapper itself does not hit the same teardown
+PySide teardown under Git Bash on windows-latest frequently kills the
+pytest process with NTSTATUS access-violation (0xC0000005 → 3221225477)
+or Bash-mapped 127/139 — often after a fully green suite. This wrapper:
+  1. Runs pytest with junitxml in a subprocess
+  2. Treats known crash exit codes as success when junit is green
+  3. Retries once on Windows when junit is missing/incomplete
+  4. Hard-exits the wrapper with a clamped 0/1 code (no Qt loaded here)
 """
 
 from __future__ import annotations
@@ -20,6 +21,22 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 JUNIT = ROOT / "pytest-results.xml"
+
+# STATUS_ACCESS_VIOLATION and friends as returned by subprocess on Windows.
+_STATUS_ACCESS_VIOLATION = 0xC0000005
+
+
+def _is_windows_crash(code: int) -> bool:
+    if code in (127, 139):
+        return True
+    # subprocess may surface NTSTATUS as a large unsigned or negative signed int.
+    unsigned = code & 0xFFFFFFFF
+    if unsigned == _STATUS_ACCESS_VIOLATION:
+        return True
+    # Other NT failure statuses (0xCxxxxxxx)
+    if unsigned >= 0xC0000000:
+        return True
+    return False
 
 
 def _junit_green(path: Path) -> bool:
@@ -38,7 +55,7 @@ def _junit_green(path: Path) -> bool:
         failures += int(suite.attrib.get("failures", 0))
         errors += int(suite.attrib.get("errors", 0))
         tests += int(suite.attrib.get("tests", 0))
-    print(f"junit: tests={tests} failures={failures} errors={errors}")
+    print(f"junit: tests={tests} failures={failures} errors={errors}", flush=True)
     return tests > 0 and failures == 0 and errors == 0
 
 
@@ -68,24 +85,29 @@ def main() -> int:
         status = _run_pytest(markers)
         if status == 0:
             break
-        if is_windows and status in (127, 139) and _junit_green(JUNIT):
+        if is_windows and _is_windows_crash(status) and _junit_green(JUNIT):
             print(
-                f"Windows pytest exited {status} after green junit — treating as success",
+                f"Windows pytest exited {status} (0x{status & 0xFFFFFFFF:08X}) "
+                "after green junit — treating as success",
                 flush=True,
             )
             status = 0
             break
         if is_windows and attempt < attempts:
-            print(f"Windows pytest exited {status} — retrying once", flush=True)
+            print(
+                f"Windows pytest exited {status} (0x{status & 0xFFFFFFFF:08X}) — retrying once",
+                flush=True,
+            )
             continue
         break
 
-    # Avoid wrapper-process Qt teardown oddities on Windows Git Bash.
+    # Wrapper does not import Qt; clamp to 0/1 so os._exit never overflows.
+    final = 0 if status == 0 else 1
     if is_windows:
         sys.stdout.flush()
         sys.stderr.flush()
-        os._exit(status)
-    return status
+        os._exit(final)
+    return final
 
 
 if __name__ == "__main__":

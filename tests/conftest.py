@@ -78,24 +78,9 @@ def pytest_configure():
     _configure_faiss_runtime()
 
 
-@pytest.hookimpl(trylast=True)
-def pytest_sessionfinish(session, exitstatus):
-    """
-    On Windows, Qt/PySide interpreter teardown under Git Bash often reports
-    exit 127/139 after the suite finished. Hard-exit after junit/other
-    sessionfinish hooks (trylast) so the shell sees the real pytest code.
-    """
-    import os
-
-    if sys.platform != "win32":
-        return
-    try:
-        code = int(exitstatus)
-    except Exception:
-        code = 1 if exitstatus else 0
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(code)
+# NOTE: Do not os._exit from pytest_sessionfinish on Windows. With PySide
+# loaded, that path can itself access-violate (0xC0000005). CI uses
+# scripts/run_ci_pytest.py to recover green junit after crash exit codes.
 
 def simulate_platform(monkeypatch, platform: str, *, machine: str | None = None) -> None:
     """Pretend the app runs on win32 or darwin (for cross-platform UI tests)."""

@@ -97,3 +97,4 @@ ubuntu_logs.zip
 
 # Local pre-release installer downloads
 test_release/
+pytest-results.xml
