@@ -41,6 +41,26 @@ def _pump_until(condition, timeout=5.0):
     return False
 
 
+def _drain_worker(vm, timeout=3.0) -> None:
+    """Wait for SearchWorker QThread to finish so Windows teardown does not abort."""
+    def _idle() -> bool:
+        worker = getattr(vm, "_worker", None)
+        return worker is None or not worker.isRunning()
+
+    _pump_until(_idle, timeout=timeout)
+    # Let deleteLater / queued slots settle before the test returns.
+    for _ in range(10):
+        QCoreApplication.processEvents()
+        time.sleep(0.01)
+
+
+@pytest.fixture(autouse=True)
+def _qt_thread_settle(qapp):
+    yield
+    for _ in range(15):
+        QCoreApplication.processEvents()
+        time.sleep(0.01)
+
 def _write_query(path: Path, color=(120, 80, 40)) -> Path:
     """Write a tiny valid JPEG so ViewModel preflight validation passes."""
     from PIL import Image
@@ -98,6 +118,7 @@ def test_successful_search_transitions_to_results(qapp, tmp_path):
     assert vm.state == SearchState.SEARCHING
 
     assert _pump_until(lambda: vm.state == SearchState.RESULTS)
+    _drain_worker(vm)
     assert states == [SearchState.SEARCHING, SearchState.RESULTS]
     assert len(vm.last_results) == 1
     assert use_case.calls == [(str(query_file), 20, {})]
@@ -112,6 +133,7 @@ def test_empty_results_transitions_to_no_results_state(qapp, tmp_path):
 
     vm.search_by_image(str(query_file))
     assert _pump_until(lambda: vm.state == SearchState.NO_RESULTS)
+    _drain_worker(vm)
 
 
 def test_use_case_exception_transitions_to_error_state(qapp, tmp_path):
@@ -126,6 +148,7 @@ def test_use_case_exception_transitions_to_error_state(qapp, tmp_path):
 
     vm.search_by_image(str(query_file))
     assert _pump_until(lambda: vm.state == SearchState.ERROR)
+    _drain_worker(vm)
     assert errors and "model not loaded" in errors[0]
 
 
@@ -175,6 +198,7 @@ def test_corrupt_query_while_searching_is_not_queued(qapp, tmp_path):
     assert errors and "not a valid, readable image" in errors[0]
 
     assert _pump_until(lambda: vm.state == SearchState.RESULTS, timeout=3.0)
+    _drain_worker(vm)
     assert len(use_case.calls) == 1
     assert use_case.calls[0][0] == str(query_file)
 
@@ -195,6 +219,7 @@ def test_concurrent_search_request_is_queued_while_searching(qapp, tmp_path):
     vm.search_by_image(str(second))  # queued, not dropped
     assert _pump_until(lambda: len(use_case.calls) >= 2, timeout=5.0)
     assert _pump_until(lambda: vm.state == SearchState.RESULTS, timeout=3.0)
+    _drain_worker(vm)
     assert use_case.calls[0][0] == str(query_file)
     assert use_case.calls[1][0] == str(second)
 
@@ -207,6 +232,7 @@ def test_clear_results_resets_to_idle(qapp, tmp_path):
 
     vm.search_by_image(str(query_file))
     assert _pump_until(lambda: vm.state == SearchState.RESULTS)
+    _drain_worker(vm)
 
     vm.clear_results()
     assert vm.state == SearchState.IDLE
@@ -251,6 +277,7 @@ def test_successful_search_is_recorded_in_history(qapp, tmp_path):
 
     vm.search_by_image(str(query_file))
     assert _pump_until(lambda: vm.state == SearchState.RESULTS)
+    _drain_worker(vm)
 
     assert len(history_repo.recorded) == 1
     assert history_repo.recorded[0][0] == str(query_file)
@@ -267,6 +294,7 @@ def test_successful_search_is_recorded_in_activity_log(qapp, tmp_path):
 
     vm.search_by_image(str(query_file))
     assert _pump_until(lambda: vm.state == SearchState.RESULTS)
+    _drain_worker(vm)
 
     assert len(activity_repo.recorded) == 1
     assert activity_repo.recorded[0][0] == "search"
@@ -285,6 +313,7 @@ def test_search_stats_signal_carries_count_and_elapsed_time(qapp, tmp_path):
 
     vm.search_by_image(str(query_file))
     assert _pump_until(lambda: vm.state == SearchState.RESULTS)
+    _drain_worker(vm)
 
     assert len(captured) == 1
     assert captured[0][0] == 3
@@ -300,6 +329,7 @@ def test_repeat_search_reruns_with_existing_file(qapp, tmp_path):
 
     vm.repeat_search(str(query_file))
     assert _pump_until(lambda: vm.state == SearchState.RESULTS)
+    _drain_worker(vm)
     assert use_case.calls == [(str(query_file), 20, {})]
 
 
@@ -369,6 +399,7 @@ def test_search_notifies_busy_callback(qapp, tmp_path):
     vm.search_by_image(str(query_file))
     assert busy_events == [True]
     assert _pump_until(lambda: vm.state == SearchState.RESULTS)
+    _drain_worker(vm)
     assert busy_events == [True, False]
 
 
