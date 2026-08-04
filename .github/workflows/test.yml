@@ -45,26 +45,6 @@ jobs:
           VECLIB_MAXIMUM_THREADS: "1"
           KMP_DUPLICATE_LIB_OK: "TRUE"
           PYTHONFAULTHANDLER: "1"
+          TILEVISION_PYTEST_MARKERS: ${{ runner.os == 'macOS' && 'not slow and not faiss_search' || 'not slow' }}
         shell: bash
-        run: |
-          MARKERS="not slow"
-          if [ "${{ runner.os }}" = "macOS" ]; then
-            MARKERS="not slow and not faiss_search"
-          fi
-          # Windows + Qt under Git Bash can abort mid-suite or at teardown with
-          # exit 127 even when assertions passed (same class of flake as RV).
-          set +e
-          python -m pytest tests/ -q --tb=short -m "$MARKERS" --junitxml=pytest-results.xml
-          status=$?
-          if [ "${{ runner.os }}" = "Windows" ] && [ "$status" -ne 0 ]; then
-            echo "Windows pytest exited $status — retrying once"
-            python -m pytest tests/ -q --tb=short -m "$MARKERS" --junitxml=pytest-results.xml
-            status=$?
-          fi
-          if [ "${{ runner.os }}" = "Windows" ] && { [ "$status" -eq 127 ] || [ "$status" -eq 139 ]; }; then
-            if [ -f pytest-results.xml ]; then
-              python scripts/ci_junit_ok.py pytest-results.xml
-              status=$?
-            fi
-          fi
-          exit $status
+        run: python scripts/run_ci_pytest.py

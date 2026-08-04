@@ -78,18 +78,24 @@ def pytest_configure():
     _configure_faiss_runtime()
 
 
+@pytest.hookimpl(trylast=True)
 def pytest_sessionfinish(session, exitstatus):
     """
     On Windows, Qt/PySide interpreter teardown under Git Bash often reports
-    exit 127 after a fully green pytest run. Hard-exit skips that teardown.
+    exit 127/139 after the suite finished. Hard-exit after junit/other
+    sessionfinish hooks (trylast) so the shell sees the real pytest code.
     """
     import os
 
-    if sys.platform == "win32" and exitstatus == 0:
-        # Flush pytest output, then skip atexit/Qt destructor chaos.
-        sys.stdout.flush()
-        sys.stderr.flush()
-        os._exit(0)
+    if sys.platform != "win32":
+        return
+    try:
+        code = int(exitstatus)
+    except Exception:
+        code = 1 if exitstatus else 0
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
 
 def simulate_platform(monkeypatch, platform: str, *, machine: str | None = None) -> None:
     """Pretend the app runs on win32 or darwin (for cross-platform UI tests)."""
