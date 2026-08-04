@@ -148,6 +148,96 @@ def write_windows_apply_script(
     return script_path
 
 
+def build_windows_relaunch_script(
+    *,
+    wait_pid: int | None = None,
+    setup_exe_name: str,
+    exe_name: str = WINDOWS_EXE_NAME,
+) -> str:
+    """
+    Wait for the old app + elevated setup to finish, then relaunch TileVision.
+
+    Used with ShellExecuteEx(runas) because silent Inno builds use
+    ``skipifsilent`` and will not auto-start the app.
+    """
+    pid = int(wait_pid if wait_pid is not None else os.getpid())
+    setup_name = Path(setup_exe_name).name.replace('"', "")
+    exe_q = exe_name.replace('"', "")
+    return f"""@echo off
+setlocal
+set "WAIT_PID={pid}"
+set "SETUP_NAME={setup_name}"
+set "EXE_NAME={exe_q}"
+
+REM Wait for the running TileVision process to exit (Inno force-close).
+set /A _n=0
+:waitapp
+tasklist /FI "PID eq %WAIT_PID%" 2>NUL | find "%WAIT_PID%" >NUL
+if errorlevel 1 goto waitsetup
+timeout /T 1 /NOBREAK >NUL
+set /A _n+=1
+if %_n% GEQ 180 goto waitsetup
+goto waitapp
+
+:waitsetup
+REM Wait for the elevated setup.exe to finish installing.
+set /A _s=0
+:setuploop
+tasklist /FI "IMAGENAME eq %SETUP_NAME%" 2>NUL | find /I "%SETUP_NAME%" >NUL
+if errorlevel 1 goto relaunch
+timeout /T 2 /NOBREAK >NUL
+set /A _s+=1
+if %_s% GEQ 900 goto relaunch
+goto setuploop
+
+:relaunch
+timeout /T 2 /NOBREAK >NUL
+set "APP="
+if exist "%ProgramFiles%\\TileVision AI\\%EXE_NAME%" set "APP=%ProgramFiles%\\TileVision AI\\%EXE_NAME%"
+if not defined APP if exist "%ProgramFiles(x86)%\\TileVision AI\\%EXE_NAME%" set "APP=%ProgramFiles(x86)%\\TileVision AI\\%EXE_NAME%"
+if defined APP (
+  start "" "%APP%"
+)
+exit /B 0
+"""
+
+
+def write_windows_relaunch_script(
+    setup_exe: Path,
+    *,
+    wait_pid: int | None = None,
+    script_path: Path | None = None,
+) -> Path:
+    """Write the post-setup relaunch helper to a temp .cmd file."""
+    body = build_windows_relaunch_script(
+        wait_pid=wait_pid,
+        setup_exe_name=Path(setup_exe).name,
+    )
+    if script_path is None:
+        fd, name = tempfile.mkstemp(prefix="tilevision_relaunch_", suffix=".cmd")
+        os.close(fd)
+        script_path = Path(name)
+    script_path.write_text(body, encoding="utf-8", newline="\r\n")
+    return script_path
+
+
+def _spawn_detached_cmd(script: Path, *, cwd: Path) -> subprocess.Popen:
+    creationflags = 0
+    if sys.platform == "win32":
+        creationflags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+        creationflags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+        creationflags |= getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    return subprocess.Popen(
+        ["cmd.exe", "/c", str(script)],
+        cwd=str(cwd),
+        close_fds=True,
+        start_new_session=True,
+        creationflags=creationflags,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
 def launch_windows_elevated_setup(setup_exe: Path) -> None:
     """
     Start the Inno installer elevated with a **visible** UAC prompt.
@@ -155,6 +245,9 @@ def launch_windows_elevated_setup(setup_exe: Path) -> None:
     Must be called from the interactive GUI process. A detached CREATE_NO_WINDOW
     helper cannot display UAC and Windows then auto-denies elevation — install
     never runs and the UI stays on "Installing… will restart".
+
+    After UAC accepts, a detached relaunch helper waits for setup to finish and
+    starts TileVisionAI.exe (silent Inno uses skipifsilent).
     """
     setup_exe = Path(setup_exe)
     if not setup_exe.is_file():
@@ -189,6 +282,11 @@ def launch_windows_elevated_setup(setup_exe: Path) -> None:
     SEE_MASK_NOCLOSEPROCESS = 0x00000040
     SW_SHOWNORMAL = 1
 
+    # Schedule relaunch BEFORE elevation so it survives FORCECLOSEAPPLICATIONS.
+    relaunch = write_windows_relaunch_script(setup_exe, wait_pid=os.getpid())
+    logger.info("Scheduling Windows post-setup relaunch via %s", relaunch)
+    _spawn_detached_cmd(relaunch, cwd=setup_exe.resolve().parent)
+
     sei = SHELLEXECUTEINFOW()
     sei.cbSize = ctypes.sizeof(SHELLEXECUTEINFOW)
     sei.fMask = SEE_MASK_NOCLOSEPROCESS
@@ -212,8 +310,6 @@ def launch_windows_elevated_setup(setup_exe: Path) -> None:
             f"Could not start the Windows installer (error {err}).\n"
             "Use Open File… to run the installer manually."
         )
-    # Elevated setup is running. Inno /FORCECLOSEAPPLICATIONS will close us;
-    # [Run] postinstall relaunches TileVisionAI.exe.
 
 
 def launch_windows_silent_installer(setup_exe: Path) -> Any:

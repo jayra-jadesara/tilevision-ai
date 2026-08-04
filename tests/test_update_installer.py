@@ -94,6 +94,17 @@ def test_build_windows_apply_script_waits_and_relaunches(tmp_path):
     assert "GEQ 15" in script
 
 
+def test_build_windows_relaunch_script_waits_for_setup(tmp_path):
+    script = ui.build_windows_relaunch_script(
+        wait_pid=4242,
+        setup_exe_name="TileVisionAI-Setup-1.2.26.exe",
+    )
+    assert "WAIT_PID=4242" in script
+    assert "TileVisionAI-Setup-1.2.26.exe" in script
+    assert "TileVisionAI.exe" in script
+    assert "waitsetup" in script.lower() or "SETUP_NAME" in script
+
+
 def test_build_macos_apply_script_waits_and_replaces(tmp_path):
     dmg = tmp_path / "TileVisionAI-macOS-Intel-1.2.5.dmg"
     dmg.write_bytes(b"dmg")
