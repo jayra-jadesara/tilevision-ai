@@ -66,6 +66,10 @@ class AppSettings:
             "last_update_check_at": "",
             "last_update_check_ok": True,
             "last_seen_update_version": "",
+            # Remember a finished installer so a failed restart does not
+            # force another multi-GB download.
+            "pending_update_version": "",
+            "pending_update_installer_path": "",
             # Production FAISS backend is always flat_ip (exact). Customers cannot change it.
             # Optional ANN params remain for Developer Mode / internal tools only.
             "index_backend": "flat_ip",
@@ -392,6 +396,36 @@ class AppSettings:
     @last_seen_update_version.setter
     def last_seen_update_version(self, value: str) -> None:
         self._settings["last_seen_update_version"] = str(value)
+        self.save()
+
+    @property
+    def pending_update_version(self) -> str:
+        return str(self._settings.get("pending_update_version", ""))
+
+    @pending_update_version.setter
+    def pending_update_version(self, value: str) -> None:
+        self._settings["pending_update_version"] = str(value).strip()
+        self.save()
+
+    @property
+    def pending_update_installer_path(self) -> str:
+        return str(self._settings.get("pending_update_installer_path", ""))
+
+    @pending_update_installer_path.setter
+    def pending_update_installer_path(self, value: str) -> None:
+        self._settings["pending_update_installer_path"] = str(value).strip()
+        self.save()
+
+    def clear_pending_update(self) -> None:
+        """Drop a remembered installer path after a successful upgrade."""
+        self._settings["pending_update_version"] = ""
+        self._settings["pending_update_installer_path"] = ""
+        self.save()
+
+    def set_pending_update(self, version: str, installer_path: str) -> None:
+        """Remember a downloaded installer for install/restart retry."""
+        self._settings["pending_update_version"] = str(version).strip()
+        self._settings["pending_update_installer_path"] = str(installer_path).strip()
         self.save()
 
     @property

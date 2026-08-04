@@ -21,6 +21,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from src.config.settings import AppSettings
+from src.presentation.dialogs import message_box
 from src.presentation.workers.update_download_worker import UpdateDownloadWorker
 from src.theme.theme_manager import get_dialog_qss
 from src.utils.update_check import UpdateInfo, platform_download_label
@@ -30,11 +32,19 @@ from src.utils.update_downloader import (
     format_bytes,
     format_eta,
     format_speed,
+    resolve_cached_installer,
 )
-from src.utils.update_installer import UpdateInstallError, launch_update_installer
-from src.presentation.dialogs import message_box
+from src.utils.update_installer import (
+    UpdateInstallError,
+    begin_force_quit_for_update,
+    launch_update_installer,
+)
 
 logger = logging.getLogger("tilevision.presentation.views.update_dialog")
+
+# If quit stalls (indexing confirm / non-daemon threads), unlock the UI so the
+# customer is not trapped on "Installing…" forever.
+_INSTALL_WATCHDOG_MS = 90_000
 
 
 class UpdateAvailableDialog(QDialog):
@@ -48,14 +58,17 @@ class UpdateAvailableDialog(QDialog):
         parent=None,
         auto_start_download: bool = True,
         auto_install_after_download: bool = True,
+        settings: AppSettings | None = None,
     ) -> None:
         super().__init__(parent)
         self._info = info
         self._theme = theme if theme in ("light", "dark") else "light"
         self._auto_install_after_download = auto_install_after_download
+        self._settings = settings
         self._worker: Optional[UpdateDownloadWorker] = None
         self._downloaded_path: Optional[Path] = None
         self._installing = False
+        self._install_watchdog: Optional[QTimer] = None
 
         self.setWindowTitle("Update Available")
         self.setObjectName("UpdateAvailableDialog")
@@ -162,7 +175,7 @@ class UpdateAvailableDialog(QDialog):
         self._apply_styles()
 
         if auto_start_download:
-            QTimer.singleShot(0, self._on_download)
+            QTimer.singleShot(0, self._start_download_or_reuse_cache)
 
     def _apply_styles(self) -> None:
         """Match TileVision light/dark theme (not classic Windows chrome)."""
@@ -170,12 +183,53 @@ class UpdateAvailableDialog(QDialog):
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if self._installing:
+            # Never trap the user forever — allow close after watchdog unlocks.
             event.ignore()
             return
         if self._worker is not None and self._worker.isRunning():
             self._worker.cancel()
             self._worker.wait(2000)
         super().closeEvent(event)
+
+    def _preferred_cached_path(self) -> Optional[Path]:
+        if self._settings is None:
+            return None
+        if self._settings.pending_update_version != self._info.latest_version:
+            return None
+        raw = self._settings.pending_update_installer_path
+        return Path(raw) if raw else None
+
+    def _remember_downloaded_installer(self, path: Path) -> None:
+        if self._settings is None:
+            return
+        try:
+            self._settings.set_pending_update(self._info.latest_version, str(path))
+        except Exception:
+            logger.exception("Failed to remember pending update installer path")
+
+    def _start_download_or_reuse_cache(self) -> None:
+        """Reuse a completed installer when present; otherwise start download."""
+        preferred = self._preferred_cached_path()
+        cached: Optional[Path] = None
+        try:
+            cached = resolve_cached_installer(
+                self._info.download_url,
+                preferred_path=preferred,
+            )
+        except Exception:
+            logger.exception("Cache reuse probe failed; downloading again")
+
+        if cached is not None:
+            self._status.setText(
+                "Installer already downloaded.\n"
+                "Installing update and restarting TileVision AI…"
+            )
+            self._progress.setRange(0, 1000)
+            self._progress.setValue(1000)
+            self._on_download_ok(str(cached))
+            return
+
+        self._on_download()
 
     def _on_download(self) -> None:
         if self._worker is not None and self._worker.isRunning():
@@ -226,6 +280,7 @@ class UpdateAvailableDialog(QDialog):
 
     def _on_download_ok(self, path: str) -> None:
         self._downloaded_path = Path(path)
+        self._remember_downloaded_installer(self._downloaded_path)
         self._progress.setRange(0, 1000)
         self._progress.setValue(1000)
         self._cancel_btn.hide()
@@ -304,6 +359,62 @@ class UpdateAvailableDialog(QDialog):
             return
         QDesktopServices.openUrl(QUrl(self._info.download_url))
 
+    def _cancel_indexing_quietly(self) -> None:
+        """Stop folder indexing so quit is not blocked by a confirm dialog."""
+        parent = self.parent()
+        vm = getattr(parent, "_indexing_viewmodel", None) if parent is not None else None
+        if vm is None:
+            return
+        try:
+            cancel = getattr(vm, "cancel_indexing", None)
+            if callable(cancel):
+                logger.info("Cancelling indexing before update install/restart.")
+                cancel()
+        except Exception:
+            logger.exception("Failed to cancel indexing before update quit")
+
+    def _unlock_install_ui(self, message: str) -> None:
+        """Recover from a stalled install so the customer is not trapped."""
+        self._stop_install_watchdog()
+        self._installing = False
+        self._later_btn.show()
+        self._later_btn.setEnabled(True)
+        self._skip_btn.show()
+        self._skip_btn.setEnabled(True)
+        self._install_btn.show()
+        self._install_btn.setEnabled(True)
+        self._open_btn.show()
+        self._open_btn.setEnabled(True)
+        self._status.setText(message)
+
+    def _stop_install_watchdog(self) -> None:
+        if self._install_watchdog is not None:
+            self._install_watchdog.stop()
+            self._install_watchdog.deleteLater()
+            self._install_watchdog = None
+
+    def _on_install_watchdog(self) -> None:
+        if not self._installing:
+            return
+        logger.error(
+            "Update install/restart stalled; unlocking UI. installer=%s",
+            self._downloaded_path,
+        )
+        self._unlock_install_ui(
+            "Install did not finish restarting TileVision.\n\n"
+            "The installer is still saved on this computer — use "
+            "Install & Restart again, or Open File… to install manually.\n"
+            "You will not need to download again."
+        )
+        message_box.warning(
+            self,
+            "Restart Taking Too Long",
+            "TileVision could not finish installing and restarting automatically.\n\n"
+            "Click Install & Restart to try again, or Open File… to run the "
+            "installer yourself.\n\n"
+            "The file is already downloaded — no second download is required.",
+        )
+
     def _on_install_and_restart(self) -> None:
         if self._installing:
             return
@@ -322,17 +433,13 @@ class UpdateAvailableDialog(QDialog):
         self._status.setText("Installing update… TileVision AI will restart.")
 
         try:
+            # Cancel indexing BEFORE spawning the helper so MainWindow.closeEvent
+            # does not show a confirm dialog that blocks quit behind this modal.
+            self._cancel_indexing_quietly()
+            begin_force_quit_for_update()
             launch_update_installer(self._downloaded_path)
         except UpdateInstallError as exc:
-            self._installing = False
-            self._later_btn.show()
-            self._later_btn.setEnabled(True)
-            self._skip_btn.show()
-            self._skip_btn.setEnabled(True)
-            self._install_btn.show()
-            self._install_btn.setEnabled(True)
-            self._open_btn.show()
-            self._open_btn.setEnabled(True)
+            self._unlock_install_ui(f"Install failed: {exc}")
             logger.error("In-app install failed: %s", exc)
             message_box.warning(
                 self,
@@ -341,15 +448,7 @@ class UpdateAvailableDialog(QDialog):
             )
             return
         except Exception as exc:
-            self._installing = False
-            self._later_btn.show()
-            self._later_btn.setEnabled(True)
-            self._skip_btn.show()
-            self._skip_btn.setEnabled(True)
-            self._install_btn.show()
-            self._install_btn.setEnabled(True)
-            self._open_btn.show()
-            self._open_btn.setEnabled(True)
+            self._unlock_install_ui(f"Install failed: {exc}")
             logger.exception("Unexpected install failure")
             message_box.warning(
                 self,
@@ -359,16 +458,25 @@ class UpdateAvailableDialog(QDialog):
             )
             return
 
+        self._stop_install_watchdog()
+        self._install_watchdog = QTimer(self)
+        self._install_watchdog.setSingleShot(True)
+        self._install_watchdog.timeout.connect(self._on_install_watchdog)
+        self._install_watchdog.start(_INSTALL_WATCHDOG_MS)
+
         # Quit so Windows can overwrite Program Files / Mac helper can replace .app.
         QTimer.singleShot(400, self._quit_for_install)
 
     def _quit_for_install(self) -> None:
         logger.info("Quitting so the update installer can replace this build.")
+        begin_force_quit_for_update()
+        self._cancel_indexing_quietly()
+        # Allow the modal to dismiss so nested event loops do not trap quit.
+        self._installing = False
         app = QApplication.instance()
         if app is not None:
             app.quit()
-        else:
-            self.accept()
+        self.accept()
 
     def _on_open_installer(self) -> None:
         if self._downloaded_path is None or not self._downloaded_path.exists():
@@ -399,6 +507,11 @@ class UpdateAvailableDialog(QDialog):
         if self._worker is not None and self._worker.isRunning():
             self._worker.cancel()
             self._worker.wait(1500)
+        if self._settings is not None:
+            try:
+                self._settings.clear_pending_update()
+            except Exception:
+                logger.exception("Failed to clear pending update on skip")
         self.done(2)
 
     @staticmethod

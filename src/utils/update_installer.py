@@ -24,9 +24,31 @@ MAC_APP_BUNDLE_NAME = "TileVisionAI.app"
 MAC_APPLICATIONS_DIR = Path("/Applications")
 WINDOWS_EXE_NAME = "TileVisionAI.exe"
 
+# Set while quitting so MainWindow skips the indexing confirm prompt and
+# app.py can hard-exit after the Qt loop (non-daemon AI threads otherwise keep
+# the PID alive and the helper never installs / relaunches).
+_FORCE_QUIT_FOR_UPDATE = False
+
 
 class UpdateInstallError(RuntimeError):
     """Raised when the downloaded update cannot be applied."""
+
+
+def begin_force_quit_for_update() -> None:
+    """Mark the process as exiting for an in-app update install."""
+    global _FORCE_QUIT_FOR_UPDATE
+    _FORCE_QUIT_FOR_UPDATE = True
+
+
+def is_force_quit_for_update() -> bool:
+    """True when TileVision is quitting so a silent installer can replace files."""
+    return bool(_FORCE_QUIT_FOR_UPDATE)
+
+
+def reset_force_quit_for_update_for_tests() -> None:
+    """Test-only: clear the force-quit flag between cases."""
+    global _FORCE_QUIT_FOR_UPDATE
+    _FORCE_QUIT_FOR_UPDATE = False
 
 
 def installed_mac_app_path() -> Path:
@@ -38,7 +60,8 @@ def windows_silent_install_args(setup_exe: Path) -> list[str]:
     """Inno Setup flags for unattended upgrade (no postinstall GUI launch)."""
     return [
         str(setup_exe),
-        "/SILENT",
+        "/VERYSILENT",
+        "/SUPPRESSMSGBOXES",
         "/CLOSEAPPLICATIONS",
         "/FORCECLOSEAPPLICATIONS",
         "/NORESTART",
@@ -78,7 +101,7 @@ goto waitloop
 
 :runsetup
 timeout /T 1 /NOBREAK >NUL
-"%SETUP%" /SILENT /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS /NORESTART /SP-
+"%SETUP%" /VERYSILENT /SUPPRESSMSGBOXES /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS /NORESTART /SP-
 if errorlevel 1 exit /B %ERRORLEVEL%
 
 REM Prefer 64-bit Program Files, then x86.

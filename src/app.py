@@ -580,4 +580,18 @@ def build_application() -> int:
         logger.error("Failed to encrypt catalogue database on exit: %s", exc)
 
     logger.info(f"TileVision AI exiting with code: {exit_code}")
+
+    # In-app update: non-daemon AI / indexing threads can keep the process PID
+    # alive after Qt quits, which blocks the Windows helper from installing.
+    try:
+        from src.utils.update_installer import is_force_quit_for_update
+
+        if is_force_quit_for_update():
+            logger.info("Hard-exiting so the update installer can replace this build.")
+            import os
+
+            os._exit(0)
+    except Exception:
+        logger.exception("Failed during update hard-exit path")
+
     return exit_code

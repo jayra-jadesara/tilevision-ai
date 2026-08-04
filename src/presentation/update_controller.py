@@ -14,7 +14,7 @@ from PySide6.QtWidgets import QWidget
 from src.config.settings import AppSettings
 from src.presentation.views.update_dialog import UpdateAvailableDialog
 from src.presentation.workers.update_check_worker import UpdateCheckWorker
-from src.utils.update_check import DEFAULT_MANIFEST_URL, UpdateInfo
+from src.utils.update_check import DEFAULT_MANIFEST_URL, UpdateInfo, compare_versions
 from src.version import APP_VERSION
 from src.presentation.dialogs import message_box
 
@@ -32,6 +32,20 @@ class UpdateController:
         self._theme = theme
         self._worker: Optional[UpdateCheckWorker] = None
         self._parent: Optional[QWidget] = None
+        self._clear_stale_pending_update()
+
+    def _clear_stale_pending_update(self) -> None:
+        """If we already run the pending version, drop the remembered installer."""
+        pending_ver = self._settings.pending_update_version
+        if not pending_ver:
+            return
+        if compare_versions(APP_VERSION, pending_ver) >= 0:
+            logger.info(
+                "Clearing pending update installer (now running %s >= %s)",
+                APP_VERSION,
+                pending_ver,
+            )
+            self._settings.clear_pending_update()
 
     def schedule_startup_check(self, parent: QWidget) -> None:
         if not getattr(sys, "frozen", False):
@@ -120,7 +134,13 @@ class UpdateController:
         if parent is None:
             return
 
-        dialog = UpdateAvailableDialog(info, theme=self._theme, parent=parent)
+        dialog = UpdateAvailableDialog(
+            info,
+            theme=self._theme,
+            parent=parent,
+            settings=self._settings,
+        )
         result = dialog.exec()
         if result == 2:
             self._settings.skipped_update_version = info.latest_version
+            self._settings.clear_pending_update()

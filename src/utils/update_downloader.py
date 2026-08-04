@@ -303,6 +303,59 @@ def _download_range_to_part(
     )
 
 
+def installer_file_reusable(path: Path, expected_size: Optional[int]) -> bool:
+    """True when ``path`` exists and matches the remote Content-Length."""
+    if expected_size is None or int(expected_size) <= 0:
+        return False
+    try:
+        candidate = Path(path)
+        return candidate.is_file() and candidate.stat().st_size == int(expected_size)
+    except OSError:
+        return False
+
+
+def resolve_cached_installer(
+    url: str,
+    dest_dir: Optional[Path] = None,
+    *,
+    preferred_path: Optional[Path] = None,
+) -> Optional[Path]:
+    """
+    Return a local installer that already matches the remote size, or None.
+
+    Used so a completed download is not repeated when install/restart failed.
+    """
+    if not url or not str(url).strip():
+        return None
+    try:
+        info = probe_remote_file(url)
+    except Exception as exc:
+        logger.warning("Could not probe update URL for cache reuse: %s", exc)
+        return None
+
+    out_name = info.filename or filename_from_url(url)
+    out_dir = Path(dest_dir) if dest_dir is not None else default_download_dir()
+    candidates: list[Path] = []
+    if preferred_path is not None:
+        candidates.append(Path(preferred_path))
+    candidates.append(out_dir / out_name)
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate.resolve()) if candidate.exists() else str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        if installer_file_reusable(candidate, info.size):
+            logger.info(
+                "Reusing cached update installer: %s (%s bytes)",
+                candidate,
+                info.size,
+            )
+            return candidate
+    return None
+
+
 def download_update_file(
     url: str,
     dest_dir: Optional[Path] = None,
@@ -317,6 +370,9 @@ def download_update_file(
 
     Resolves GitHub→Azure CDN once, then uses parallel HTTP Range requests on
     the direct CDN URL. Returns the final file path.
+
+    If the destination file already matches the remote size, it is reused
+    (no second multi-GB download).
     """
     if not url or not str(url).strip():
         raise DownloadError("Missing download URL.")
@@ -330,6 +386,16 @@ def download_update_file(
     partial = out_dir / f".{out_name}.partial"
 
     _raise_if_cancelled(cancel_event)
+
+    if installer_file_reusable(dest, info.size):
+        assert info.size is not None
+        logger.info(
+            "Skipping update download; reusable file already present: %s",
+            dest,
+        )
+        if progress is not None:
+            progress(info.size, info.size, float(info.size))
+        return dest
 
     use_parallel = (
         info.accept_ranges

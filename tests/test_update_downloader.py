@@ -73,20 +73,29 @@ def test_probe_remote_file_detects_ranges(range_server):
     assert info.filename in {"update.bin", "TileVisionAI-Setup-test.bin"}
 
 
-def test_parallel_download_matches_payload(range_server, tmp_path):
+def test_download_reuses_existing_matching_file(range_server, tmp_path):
     url, payload = range_server
-    progress_events = []
-
+    dest = tmp_path / "update.bin"
+    dest.write_bytes(payload)
+    events = []
     path = ud.download_update_file(
         url,
         tmp_path,
-        connections=4,
-        progress=lambda r, t, s: progress_events.append((r, t, s)),
+        connections=8,
+        progress=lambda r, t, s: events.append((r, t)),
+        filename="update.bin",
     )
-    assert path.exists()
+    assert path == dest
     assert path.read_bytes() == payload
-    assert progress_events
-    assert progress_events[-1][0] == len(payload)
+    assert events and events[-1] == (len(payload), len(payload))
+
+
+def test_resolve_cached_installer_prefers_matching_local_file(range_server, tmp_path):
+    url, payload = range_server
+    preferred = tmp_path / "already.exe"
+    preferred.write_bytes(payload)
+    found = ud.resolve_cached_installer(url, preferred_path=preferred)
+    assert found == preferred
 
 
 def test_single_stream_download(range_server, tmp_path, monkeypatch):

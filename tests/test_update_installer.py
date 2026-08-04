@@ -25,7 +25,8 @@ def test_windows_silent_install_args_include_close_and_silent(tmp_path):
     setup.write_bytes(b"MZ")
     args = ui.windows_silent_install_args(setup)
     assert args[0] == str(setup)
-    assert "/SILENT" in args
+    assert "/VERYSILENT" in args
+    assert "/SUPPRESSMSGBOXES" in args
     assert "/CLOSEAPPLICATIONS" in args
     assert "/FORCECLOSEAPPLICATIONS" in args
     assert "/NORESTART" in args
@@ -54,7 +55,7 @@ def test_launch_windows_silent_installer_spawns_detached(tmp_path, monkeypatch):
     script = Path(args[0][2])
     assert script.suffix.lower() == ".cmd"
     body = script.read_text(encoding="utf-8")
-    assert "/SILENT" in body
+    assert "/VERYSILENT" in body
     assert "TileVision AI" in body
     assert kwargs.get("start_new_session") is True
 
@@ -64,7 +65,8 @@ def test_build_windows_apply_script_waits_and_relaunches(tmp_path):
     setup.write_bytes(b"MZ")
     script = ui.build_windows_apply_script(setup, wait_pid=9999)
     assert "WAIT_PID=9999" in script
-    assert "/SILENT" in script
+    assert "/VERYSILENT" in script
+    assert "/SUPPRESSMSGBOXES" in script
     assert "FORCECLOSEAPPLICATIONS" in script
     assert "TileVisionAI.exe" in script
 
@@ -132,6 +134,128 @@ def test_launch_update_installer_dispatches_mac(tmp_path, monkeypatch):
     assert called["path"] == dmg
 
 
+def test_force_quit_for_update_flag():
+    ui.reset_force_quit_for_update_for_tests()
+    assert ui.is_force_quit_for_update() is False
+    ui.begin_force_quit_for_update()
+    assert ui.is_force_quit_for_update() is True
+    ui.reset_force_quit_for_update_for_tests()
+    assert ui.is_force_quit_for_update() is False
+
+
+def test_update_dialog_reuses_cached_installer(qapp, tmp_path, monkeypatch):
+    from src.config.settings import AppSettings
+    from src.presentation.views.update_dialog import UpdateAvailableDialog
+    from src.utils.update_check import UpdateInfo
+
+    installer = tmp_path / "TileVisionAI-Setup-9.9.9.exe"
+    installer.write_bytes(b"MZ" + b"0" * 100)
+
+    settings = AppSettings(config_dir=tmp_path / "cfg")
+    settings.set_pending_update("9.9.9", str(installer))
+
+    info = UpdateInfo(
+        current_version="1.0.0",
+        latest_version="9.9.9",
+        release_notes="test",
+        download_url="https://example.com/TileVisionAI-Setup-9.9.9.exe",
+    )
+    launched = {}
+
+    monkeypatch.setattr(
+        "src.presentation.views.update_dialog.resolve_cached_installer",
+        lambda url, preferred_path=None: installer,
+    )
+    monkeypatch.setattr(
+        "src.presentation.views.update_dialog.launch_update_installer",
+        lambda path: launched.setdefault("path", path),
+    )
+    monkeypatch.setattr(
+        "src.presentation.views.update_dialog.begin_force_quit_for_update",
+        lambda: None,
+    )
+
+    class _App:
+        def quit(self):
+            launched["quit"] = True
+
+    monkeypatch.setattr(
+        "src.presentation.views.update_dialog.QApplication.instance",
+        lambda: _App(),
+    )
+
+    dialog = UpdateAvailableDialog(
+        info,
+        theme="light",
+        auto_start_download=True,
+        auto_install_after_download=True,
+        settings=settings,
+    )
+    from PySide6.QtCore import QCoreApplication
+
+    QCoreApplication.processEvents()
+    dialog._start_download_or_reuse_cache()
+    assert dialog._downloaded_path == installer
+    assert settings.pending_update_installer_path == str(installer)
+    dialog._on_install_and_restart()
+    assert launched["path"] == installer
+    dialog.close()
+
+
+def test_update_dialog_cancels_indexing_before_quit(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QWidget
+
+    from src.presentation.views.update_dialog import UpdateAvailableDialog
+    from src.utils.update_check import UpdateInfo
+
+    installer = tmp_path / "setup.exe"
+    installer.write_bytes(b"MZ")
+    info = UpdateInfo(
+        current_version="1.0.0",
+        latest_version="9.9.9",
+        release_notes="test",
+        download_url="https://example.com/setup.exe",
+    )
+
+    class FakeVM:
+        def __init__(self):
+            self.cancelled = False
+
+        def cancel_indexing(self):
+            self.cancelled = True
+
+    parent = QWidget()
+    parent._indexing_viewmodel = FakeVM()  # type: ignore[attr-defined]
+    force_calls = {"n": 0}
+
+    monkeypatch.setattr(
+        "src.presentation.views.update_dialog.launch_update_installer",
+        lambda path: None,
+    )
+    monkeypatch.setattr(
+        "src.presentation.views.update_dialog.begin_force_quit_for_update",
+        lambda: force_calls.__setitem__("n", force_calls["n"] + 1),
+    )
+    monkeypatch.setattr(
+        "src.presentation.views.update_dialog.QApplication.instance",
+        lambda: type("A", (), {"quit": staticmethod(lambda: None)})(),
+    )
+
+    dialog = UpdateAvailableDialog(
+        info,
+        theme="light",
+        parent=parent,
+        auto_start_download=False,
+        auto_install_after_download=False,
+    )
+    dialog._downloaded_path = installer
+    dialog._on_install_and_restart()
+    assert parent._indexing_viewmodel.cancelled is True  # type: ignore[attr-defined]
+    assert force_calls["n"] >= 1
+    dialog.close()
+    parent.close()
+
+
 def test_update_dialog_auto_installs_after_download(qapp, tmp_path, monkeypatch):
     from src.presentation.views.update_dialog import UpdateAvailableDialog
     from src.utils.update_check import UpdateInfo
@@ -150,6 +274,10 @@ def test_update_dialog_auto_installs_after_download(qapp, tmp_path, monkeypatch)
     monkeypatch.setattr(
         "src.presentation.views.update_dialog.launch_update_installer",
         lambda path: launched.setdefault("path", path),
+    )
+    monkeypatch.setattr(
+        "src.presentation.views.update_dialog.begin_force_quit_for_update",
+        lambda: None,
     )
 
     class _App:

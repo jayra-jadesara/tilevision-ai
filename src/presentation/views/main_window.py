@@ -748,7 +748,27 @@ class MainWindow(QMainWindow):
         Args:
             event: The Qt close event.
         """
+        from src.utils.update_installer import is_force_quit_for_update
+
         vm = self._indexing_viewmodel
+
+        # In-app update path: never block quit with the indexing confirm dialog
+        # (that trapped customers on "Installing…" forever behind the modal).
+        if is_force_quit_for_update():
+            if vm.state in (
+                IndexingState.RUNNING,
+                IndexingState.PAUSED,
+                IndexingState.CANCELLING,
+            ):
+                logger.warning(
+                    "Force-quitting for update install; cancelling active indexing."
+                )
+                try:
+                    vm.cancel_indexing()
+                except Exception:
+                    logger.exception("Failed to cancel indexing during update quit")
+            event.accept()
+            return
 
         if vm.state in (IndexingState.RUNNING, IndexingState.PAUSED, IndexingState.CANCELLING):
             reply = message_box.question(
