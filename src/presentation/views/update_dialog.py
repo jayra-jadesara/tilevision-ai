@@ -49,7 +49,8 @@ logger = logging.getLogger("tilevision.presentation.views.update_dialog")
 _INSTALL_WATCHDOG_MS = 90_000
 # Hard process exit so the Windows/macOS helper can replace files even when
 # Qt quit is blocked by a modal closeEvent or a non-daemon worker thread.
-_HARD_EXIT_AFTER_QUIT_MS = 1_500
+# Keep this short: Windows ShellExecuteEx already waited for UAC consent.
+_HARD_EXIT_AFTER_QUIT_MS = 400
 
 
 class UpdateAvailableDialog(QDialog):
@@ -440,8 +441,9 @@ class UpdateAvailableDialog(QDialog):
         self._browser_btn.hide()
         self._cancel_btn.hide()
         self._status.setText(
-            "Installing update… TileVision AI will close and restart.\n"
-            "If Windows asks for permission (UAC), click Yes."
+            "Starting installer…\n"
+            "Windows: click Yes on the permission (UAC) prompt if shown.\n"
+            "Mac: TileVision will quit, then reopen on the new version."
         )
 
         try:
@@ -449,7 +451,12 @@ class UpdateAvailableDialog(QDialog):
             # does not show a confirm dialog that blocks quit behind this modal.
             self._cancel_indexing_quietly()
             begin_force_quit_for_update()
+            # Windows: ShellExecuteEx(runas) blocks until UAC Yes/No, then Inno
+            # force-closes us and [Run] relaunches. Mac: helper waits/kills PID.
             launch_update_installer(self._downloaded_path)
+            self._status.setText(
+                "Installer started.\nTileVision AI is closing to finish the update…"
+            )
         except UpdateInstallError as exc:
             self._unlock_install_ui(f"Install failed: {exc}")
             logger.error("In-app install failed: %s", exc)

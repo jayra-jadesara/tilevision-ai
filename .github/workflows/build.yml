@@ -95,6 +95,9 @@ jobs:
             "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$target"
           ) -Wait -PassThru
           if ($proc.ExitCode -ne 0) { throw "Installer failed with exit code $($proc.ExitCode)" }
+          # Silent [Run] may have launched the GUI — stop it before verify.
+          Get-Process -Name "TileVisionAI" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 1
           ./scripts/verify_frozen_windows.ps1 -AppDir $target
           $adminInstaller = Get-ChildItem dist/installer/TileVisionAI-Admin-VENDOR-ONLY-*.exe | Select-Object -First 1
           if (-not $adminInstaller) { throw "Vendor admin installer not found in dist/installer/" }

@@ -114,6 +114,8 @@ if ($InstallerPath -and (Test-Path $InstallerPath) -and -not $SkipInstall) {
             "/DIR=$InstallDir"
         ) -Wait -PassThru
         if ($proc.ExitCode -ne 0) { throw "Installer exit code $($proc.ExitCode)" }
+        Get-Process -Name "TileVisionAI" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
         Record-Result "Silent install Windows build" $true $InstallDir
     } catch {
         Record-Result "Silent install Windows build" $false $_.Exception.Message

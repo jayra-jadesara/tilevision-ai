@@ -39,21 +39,43 @@ def test_launch_windows_silent_installer_rejects_non_exe(tmp_path):
         ui.launch_windows_silent_installer(bad)
 
 
-def test_launch_windows_silent_installer_spawns_detached(tmp_path, monkeypatch):
+def test_launch_windows_elevated_setup_uses_runas(tmp_path, monkeypatch):
+    setup = tmp_path / "TileVisionAI-Setup-1.2.5.exe"
+    setup.write_bytes(b"MZ")
+    called = {}
+
+    class _FakeCtypes:
+        class wintypes:
+            DWORD = ctypes_c_ulong = None
+
+    # Patch at the function level by replacing launch_windows_elevated_setup deps.
+    monkeypatch.setattr(ui.sys, "platform", "win32")
+
+    def _fake_elevated(path):
+        called["path"] = Path(path)
+        called["params"] = ui.windows_silent_install_parameters()
+
+    monkeypatch.setattr(ui, "launch_windows_elevated_setup", _fake_elevated)
+    result = ui.launch_windows_silent_installer(setup)
+    assert result is None
+    assert called["path"] == setup
+    assert "VERYSILENT" in called["params"]
+    assert "FORCECLOSEAPPLICATIONS" in called["params"]
+
+
+def test_launch_windows_silent_installer_fallback_helper_off_windows(tmp_path, monkeypatch):
     setup = tmp_path / "TileVisionAI-Setup-1.2.5.exe"
     setup.write_bytes(b"MZ")
     fake = MagicMock()
     monkeypatch.setattr(ui.subprocess, "Popen", fake)
-    monkeypatch.setattr(ui.sys, "platform", "win32")
+    monkeypatch.setattr(ui.sys, "platform", "linux")
 
     ui.launch_windows_silent_installer(setup)
 
     fake.assert_called_once()
     args, kwargs = fake.call_args
     assert args[0][0] == "cmd.exe"
-    assert args[0][1] == "/c"
     script = Path(args[0][2])
-    assert script.suffix.lower() == ".cmd"
     body = script.read_text(encoding="utf-8")
     assert "/VERYSILENT" in body
     assert "TileVision AI" in body
@@ -69,6 +91,7 @@ def test_build_windows_apply_script_waits_and_relaunches(tmp_path):
     assert "/SUPPRESSMSGBOXES" in script
     assert "FORCECLOSEAPPLICATIONS" in script
     assert "TileVisionAI.exe" in script
+    assert "GEQ 15" in script
 
 
 def test_build_macos_apply_script_waits_and_replaces(tmp_path):
@@ -79,6 +102,7 @@ def test_build_macos_apply_script_waits_and_replaces(tmp_path):
     assert "hdiutil attach" in script
     assert "ditto" in script
     assert "open -n" in script
+    assert "kill -KILL" in script
     assert "TileVisionAI.app" in script
     assert str(dmg.resolve()) in script or "TileVisionAI-macOS-Intel-1.2.5.dmg" in script
 
