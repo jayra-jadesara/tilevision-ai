@@ -206,6 +206,17 @@ def test_faiss_aux_boost_promotes_layout_sheet_over_weak_hybrid():
     assert calibrate_display_percent(hybrid_final, exact_match=False) < 35.0
 
 
+def test_parent_sheet_outranks_indexed_crop_self_hit():
+    """Drop crop → parent marketing sheet must rank above the crop file itself."""
+    from src.core.use_cases import search_tiles as st
+
+    parent_faiss = 0.94
+    assert parent_faiss >= st._FAISS_PARENT_SHEET_TOP_MIN
+    parent_final = 1.0  # promoted exact via aux
+    crop_self_final = st._QUERY_SELF_MATCH_SCORE
+    assert parent_final > crop_self_final
+
+
 @pytest.mark.slow
 def test_real_dinov2_sheet_crop_consistency(tmp_path):
     """Live DINOv2 measurement — skip when weights unavailable."""

@@ -90,6 +90,10 @@ _CROP_SOURCE_EMBEDDING_THRESHOLD = 0.78
 # Trust the stronger FAISS hit so parent sheets stay in Top-5 for slab crops.
 _FAISS_AUX_BOOST_MIN = 0.80
 _FAISS_AUX_BOOST_GAP = 0.12
+# Strong aux hit = this IS the parent product for a dropped texture crop.
+# Rank it above an indexed copy of the crop file itself (same-path 100%).
+_FAISS_PARENT_SHEET_TOP_MIN = 0.88
+_QUERY_SELF_MATCH_SCORE = 0.97
 
 
 class SearchTilesUseCase:
@@ -535,6 +539,7 @@ class SearchTilesUseCase:
                     )
 
             reranked = []
+            query_resolved = str(query_path.resolve())
 
             with timer.measure("reranking"):
                 for tile in candidates:
@@ -558,12 +563,33 @@ class SearchTilesUseCase:
                         query_sha256,
                         query_dhash,
                     )
+                    same_query_file = False
+                    try:
+                        same_query_file = (
+                            Path(tile.file_path).resolve() == Path(query_resolved)
+                        )
+                    except OSError:
+                        same_query_file = False
 
                     faiss_cos = float(faiss_scores.get(tile.id, 0.0) or 0.0)
-                    # Aux texture-panel retrieval: FlatIP cosine ≫ primary-vs-query
-                    # cosine. Promote the FAISS hit so marketing sheets do not
-                    # collapse to ~27% after hybrid rerank on the layout primary.
+                    # Dropped texture crop of a marketing sheet: aux FAISS hit on
+                    # the parent sheet must rank ABOVE the crop file itself when
+                    # that crop was also saved into the catalogue folder.
                     if (
+                        not same_query_file
+                        and faiss_cos >= _FAISS_PARENT_SHEET_TOP_MIN
+                        and faiss_cos >= hybrid.embedding + _FAISS_AUX_BOOST_GAP
+                    ):
+                        exact_match = True
+                        final_score = 1.0
+                        logger.info(
+                            "Parent sheet Top-1 via FAISS aux | %s | faiss=%.3f "
+                            "hybrid_emb=%.3f",
+                            tile.file_name,
+                            faiss_cos,
+                            hybrid.embedding,
+                        )
+                    elif (
                         not exact_match
                         and faiss_cos >= _FAISS_AUX_BOOST_MIN
                         and faiss_cos >= hybrid.embedding + _FAISS_AUX_BOOST_GAP
@@ -591,6 +617,10 @@ class SearchTilesUseCase:
                     ):
                         exact_match = True
                         final_score = 1.0
+                    elif exact_match and same_query_file:
+                        # Keep self-hit visible, but below a parent-sheet aux hit.
+                        final_score = _QUERY_SELF_MATCH_SCORE
+                        exact_match = False
                     else:
                         final_score = 1.0 if exact_match else hybrid.final
 
