@@ -96,6 +96,13 @@ class FakeFeatureExtractor:
         embedding = self._embedder.extract(image_path)
         return make_tile_features(embedding)
 
+    def extract_index_vectors(
+        self,
+        image_path: str,
+    ) -> tuple[TileFeatures, list]:
+        """Match FeatureExtractor: primary features + optional aux FAISS vectors."""
+        return self.extract(image_path, for_query=False), []
+
     def extract_batch(
         self,
         image_paths: list[str],
