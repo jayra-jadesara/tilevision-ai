@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
-    QMessageBox,
     QPushButton,
     QTextEdit,
     QVBoxLayout,
@@ -38,6 +37,7 @@ from src.utils.dependency_check import (
     install_step_packages,
     step_is_complete,
 )
+from src.presentation.dialogs import message_box
 
 logger = logging.getLogger("tilevision.presentation.views.setup_wizard")
 
@@ -276,7 +276,7 @@ class SetupWizardDialog(QDialog):
         ok, message = install_step_packages(step)
         self._log_output.append(message)
         if not ok:
-            QMessageBox.warning(
+            message_box.warning(
                 self,
                 "Install Failed",
                 f"Could not install all packages for this step.\n\n{message}",
@@ -290,7 +290,7 @@ class SetupWizardDialog(QDialog):
 
     def _on_finish_clicked(self) -> None:
         if not all_dependencies_satisfied():
-            QMessageBox.warning(
+            message_box.warning(
                 self,
                 "Setup Incomplete",
                 "Some required packages are still missing. Install all steps before continuing.",

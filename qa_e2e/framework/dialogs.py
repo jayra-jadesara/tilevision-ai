@@ -57,6 +57,17 @@ def install_dialog_auto_dismiss(app: QApplication) -> None:
         _wrap("question", QMessageBox.StandardButton.Yes)
     )
 
+    # Production uses themed message_box helpers (not native QMessageBox).
+    try:
+        from src.presentation.dialogs import message_box as themed_mb
+
+        themed_mb.information = _wrap("information", QMessageBox.StandardButton.Ok)  # type: ignore[method-assign]
+        themed_mb.warning = _wrap("warning", QMessageBox.StandardButton.Ok)  # type: ignore[method-assign]
+        themed_mb.critical = _wrap("critical", QMessageBox.StandardButton.Ok)  # type: ignore[method-assign]
+        themed_mb.question = _wrap("question", QMessageBox.StandardButton.Yes)  # type: ignore[method-assign]
+    except Exception as exc:
+        logger.warning("Could not patch themed message_box for QA: %s", exc)
+
     def _close_stray_modals() -> None:
         for widget in list(app.topLevelWidgets()):
             if not isinstance(widget, QDialog):

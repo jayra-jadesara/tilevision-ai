@@ -40,7 +40,6 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QSizePolicy,
     QStatusBar,
-    QMessageBox,
     QSpacerItem,
     QApplication,
 )
@@ -62,6 +61,7 @@ from src.utils.brand_assets import (
     nav_icon,
     nav_icon_size,
 )
+from src.presentation.dialogs import message_box
 
 logger = logging.getLogger("tilevision.presentation.views.main_window")
 
@@ -681,6 +681,7 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app is not None:
             app.setStyleSheet(get_app_stylesheet(theme))
+            app.setProperty("tilevision_theme", theme)
         self._apply_styles()
 
         for view_attr in ("_indexing_view", "_search_view", "_dashboard_view", "_settings_view"):
@@ -750,16 +751,16 @@ class MainWindow(QMainWindow):
         vm = self._indexing_viewmodel
 
         if vm.state in (IndexingState.RUNNING, IndexingState.PAUSED, IndexingState.CANCELLING):
-            reply = QMessageBox.question(
+            reply = message_box.question(
                 self,
                 "Indexing in Progress",
                 "An indexing operation is currently active.\n\n"
                 "Closing now will cancel it. Any tiles already processed will be saved.\n\n"
                 "Are you sure you want to quit?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
+                message_box.StandardButton.Yes | message_box.StandardButton.No,
+                message_box.StandardButton.No,
             )
-            if reply == QMessageBox.StandardButton.Yes:
+            if reply == message_box.StandardButton.Yes:
                 logger.warning("User force-closed the application during active indexing. Cancelling worker.")
                 vm.cancel_indexing()
                 event.accept()

@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
-    QMessageBox,
     QProgressBar,
     QPushButton,
     QTextEdit,
@@ -33,6 +32,7 @@ from src.utils.update_downloader import (
     format_speed,
 )
 from src.utils.update_installer import UpdateInstallError, launch_update_installer
+from src.presentation.dialogs import message_box
 
 logger = logging.getLogger("tilevision.presentation.views.update_dialog")
 
@@ -256,7 +256,7 @@ class UpdateAvailableDialog(QDialog):
         self._status.show()
         self._status.setText(f"Download failed: {message}")
         self._progress.hide()
-        QMessageBox.warning(
+        message_box.warning(
             self,
             "Download Failed",
             "Could not download the update in the app.\n\n"
@@ -290,17 +290,17 @@ class UpdateAvailableDialog(QDialog):
             self._worker.cancel()
 
     def _on_open_browser(self) -> None:
-        reply = QMessageBox.warning(
+        reply = message_box.warning(
             self,
             "Browser download is very slow",
             "Browser downloads from GitHub are often limited to "
             "~100–200 KB/s.\n\n"
             "Use Download & Install inside TileVision instead.\n\n"
             "Open the slow browser link anyway?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            message_box.StandardButton.Yes | message_box.StandardButton.No,
+            message_box.StandardButton.No,
         )
-        if reply != QMessageBox.StandardButton.Yes:
+        if reply != message_box.StandardButton.Yes:
             return
         QDesktopServices.openUrl(QUrl(self._info.download_url))
 
@@ -308,7 +308,7 @@ class UpdateAvailableDialog(QDialog):
         if self._installing:
             return
         if self._downloaded_path is None or not self._downloaded_path.exists():
-            QMessageBox.warning(self, "File Missing", "Downloaded installer not found.")
+            message_box.warning(self, "File Missing", "Downloaded installer not found.")
             return
 
         self._installing = True
@@ -334,7 +334,7 @@ class UpdateAvailableDialog(QDialog):
             self._open_btn.show()
             self._open_btn.setEnabled(True)
             logger.error("In-app install failed: %s", exc)
-            QMessageBox.warning(
+            message_box.warning(
                 self,
                 "Install Failed",
                 f"{exc}\n\nYou can use Open File… to install manually.",
@@ -351,7 +351,7 @@ class UpdateAvailableDialog(QDialog):
             self._open_btn.show()
             self._open_btn.setEnabled(True)
             logger.exception("Unexpected install failure")
-            QMessageBox.warning(
+            message_box.warning(
                 self,
                 "Install Failed",
                 f"Could not start the installer:\n{exc}\n\n"
@@ -372,7 +372,7 @@ class UpdateAvailableDialog(QDialog):
 
     def _on_open_installer(self) -> None:
         if self._downloaded_path is None or not self._downloaded_path.exists():
-            QMessageBox.warning(self, "File Missing", "Downloaded installer not found.")
+            message_box.warning(self, "File Missing", "Downloaded installer not found.")
             return
         path = self._downloaded_path
         try:
@@ -388,7 +388,7 @@ class UpdateAvailableDialog(QDialog):
                 QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
         except Exception as exc:
             logger.error("Failed to open installer: %s", exc)
-            QMessageBox.information(
+            message_box.information(
                 self,
                 "Open Manually",
                 f"Could not launch the installer automatically.\n\n"

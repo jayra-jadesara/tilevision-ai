@@ -31,12 +31,12 @@ from PySide6.QtWidgets import (
     QPushButton,
     QFrame,
     QWidget,
-    QMessageBox,
 )
 
 from src.core.use_cases.validate_license import ValidateLicenseUseCase
 from src.theme.theme_manager import get_palette, get_shared_view_qss
 from src.utils.brand_assets import logo_pixmap
+from src.presentation.dialogs import message_box
 
 logger = logging.getLogger("tilevision.presentation.views.license_view")
 
@@ -298,7 +298,7 @@ class LicenseView(QDialog):
             logger.info("License successfully activated.")
             self._is_activated = True
             self._show_status("License activated successfully! Welcome to TileVision AI.", error=False)
-            QMessageBox.information(
+            message_box.information(
                 self,
                 "License Activated",
                 "Your license has been successfully activated.\n\nTileVision AI is now unlocked.",

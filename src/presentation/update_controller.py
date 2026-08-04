@@ -8,13 +8,15 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QMessageBox, QWidget
+from PySide6.QtWidgets import QWidget
+
 
 from src.config.settings import AppSettings
 from src.presentation.views.update_dialog import UpdateAvailableDialog
 from src.presentation.workers.update_check_worker import UpdateCheckWorker
 from src.utils.update_check import DEFAULT_MANIFEST_URL, UpdateInfo
 from src.version import APP_VERSION
+from src.presentation.dialogs import message_box
 
 logger = logging.getLogger("tilevision.update_controller")
 
@@ -88,7 +90,7 @@ class UpdateController:
             self._mark_checked(success=False)
             logger.warning("Update check failed (silent=%s): %s", silent, error)
             if not silent and parent is not None:
-                QMessageBox.information(
+                message_box.information(
                     parent,
                     "No Update Found",
                     "Could not reach the update server.\n\n"
@@ -101,7 +103,7 @@ class UpdateController:
 
         if info is None:
             if not silent and parent is not None:
-                QMessageBox.information(
+                message_box.information(
                     parent,
                     "Up to Date",
                     f"TileVision AI {APP_VERSION} is the latest version.",

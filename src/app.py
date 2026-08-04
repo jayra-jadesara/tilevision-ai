@@ -21,9 +21,10 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtCore import QTimer
+
 
 from src.version import APP_VERSION
 from src.utils.logger import setup_logger
@@ -52,6 +53,7 @@ from src.presentation.auto_index_notifier import AutoIndexNotifier
 from src.presentation.update_controller import UpdateController
 from src.utils.platform_info import app_icon_path, default_ui_font_family
 from src.core.use_cases.monitor_folder import AutoIndexAction
+from src.presentation.dialogs import message_box
 
 _app_logger = logging.getLogger("tilevision.app")
 
@@ -130,6 +132,7 @@ def build_application() -> int:
     default_font = QFont(default_ui_font_family(), 10)
     app.setFont(default_font)
     app.setStyleSheet(get_app_stylesheet(settings.theme))
+    app.setProperty("tilevision_theme", settings.theme)
 
     # ── 3b. First-run dependency setup wizard ─────────────────────────────────
     from src.presentation.views.setup_wizard import SetupWizardDialog, should_show_setup_wizard
@@ -175,7 +178,7 @@ def build_application() -> int:
 
         if not license_dialog.is_activated:
             logger.warning("License activation skipped or failed. Exiting.")
-            QMessageBox.critical(
+            message_box.critical(
                 None,
                 "License Required",
                 "TileVision AI requires a valid license key to run.\n\n"

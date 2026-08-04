@@ -38,7 +38,6 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QAbstractItemView,
     QMenu,
-    QMessageBox,
     QProgressBar,
     QComboBox,
     QApplication,
@@ -51,6 +50,7 @@ from src.presentation.workers.tile_crop_worker import TileCropWorker
 from src.theme.theme_manager import get_palette, get_shared_view_qss
 from src.utils.query_image_hints import confidence_message, should_suggest_crop
 from src.utils.image_utils import validate_image
+from src.presentation.dialogs import message_box
 
 logger = logging.getLogger("tilevision.presentation.views.search_view")
 
@@ -496,11 +496,11 @@ class SearchView(QWidget):
         except Exception as exc:
             traceback.print_exc()
             raise
-            # QMessageBox.critical(self, "Export Error", f"Missing export modules:\n{exc}")
+            # message_box.critical(self, "Export Error", f"Missing export modules:\n{exc}")
             # return
 
         if not self._current_results:
-            QMessageBox.information(self, "Export Catalogue", "No results to export yet.")
+            message_box.information(self, "Export Catalogue", "No results to export yet.")
             return
 
         dialog = ExportCatalogDialog(
@@ -522,7 +522,7 @@ class SearchView(QWidget):
         if options.include_selected_only:
             selected_indices = sorted({index.row() for index in self._results_table.selectionModel().selectedRows()})
             if not selected_indices:
-                QMessageBox.information(self, "Export Catalogue", "Select one or more results first.")
+                message_box.information(self, "Export Catalogue", "Select one or more results first.")
                 return
 
         service = PDFExportService()
@@ -535,10 +535,10 @@ class SearchView(QWidget):
                 selected_indices=selected_indices,
             )
         except Exception as exc:
-            QMessageBox.critical(self, "Export Failed", str(exc))
+            message_box.critical(self, "Export Failed", str(exc))
             return
 
-        QMessageBox.information(self, "Export Complete", f"Catalogue saved to:\n{created}")
+        message_box.information(self, "Export Complete", f"Catalogue saved to:\n{created}")
         
     @Slot(dict)
     def _on_filters_available(self, options: dict) -> None:
@@ -692,7 +692,7 @@ class SearchView(QWidget):
         self._status_label.setText(reason)
         self._empty_state_label.setText(reason)
         self._empty_state_widget.setVisible(True)
-        QMessageBox.information(self, "Cannot Search This File", reason)
+        message_box.information(self, "Cannot Search This File", reason)
 
     def _on_crop_clicked(self) -> None:
         if not self._current_query_image_path:
@@ -769,14 +769,14 @@ class SearchView(QWidget):
         self._refresh_crop_controls()
         logger.error("%s crop failed: %s", mode, message)
         if mode == "precise":
-            QMessageBox.warning(
+            message_box.warning(
                 self,
                 "Precise Crop Failed",
                 "Could not run precise crop on this photo.\n\n"
                 "Try Auto Crop & Search or manual Crop and Search.",
             )
         else:
-            QMessageBox.warning(
+            message_box.warning(
                 self,
                 "Auto Crop Failed",
                 "Could not auto-crop this photo.\n\n"
@@ -899,7 +899,7 @@ class SearchView(QWidget):
 
     @Slot(str)
     def _on_search_error(self, message: str) -> None:
-        QMessageBox.warning(self, "Search Failed", message)
+        message_box.warning(self, "Search Failed", message)
 
     @Slot(int, float)
     def _on_search_stats_ready(self, result_count: int, elapsed_seconds: float) -> None:
@@ -1049,7 +1049,7 @@ class SearchView(QWidget):
             return
         path = Path(self._current_results[row].tile.file_path)
         if not path.exists():
-            QMessageBox.warning(self, "File Not Found", f"This image no longer exists:\n{path}")
+            message_box.warning(self, "File Not Found", f"This image no longer exists:\n{path}")
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
@@ -1059,7 +1059,7 @@ class SearchView(QWidget):
         path = Path(self._current_results[row].tile.file_path)
         folder = path.parent
         if not folder.exists():
-            QMessageBox.warning(self, "Folder Not Found", f"This folder no longer exists:\n{folder}")
+            message_box.warning(self, "Folder Not Found", f"This folder no longer exists:\n{folder}")
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 

@@ -29,7 +29,6 @@ from PySide6.QtWidgets import (
     QRadioButton,
     QButtonGroup,
     QProgressBar,
-    QMessageBox,
 )
 
 from src.core.models import TileImage
@@ -37,6 +36,7 @@ from src.core.use_cases.find_duplicates import FindDuplicatesUseCase
 from src.presentation.workers.duplicates_worker import DuplicatesWorker
 from src.theme.theme_manager import get_palette, get_shared_view_qss
 from src.utils.brand_assets import APP_ICON_PATH
+from src.presentation.dialogs import message_box
 
 logger = logging.getLogger("tilevision.presentation.views.duplicates_view")
 
@@ -139,21 +139,21 @@ class _DuplicateGroupWidget(QFrame):
         return card
 
     def _on_delete_clicked(self, tile: TileImage, card: QWidget) -> None:
-        confirm = QMessageBox.question(
+        confirm = message_box.question(
             self,
             "Delete Duplicate",
             f"Permanently delete this file?\n\n{tile.file_path}\n\n"
             "This removes it from disk and from the search index. This cannot be undone.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            message_box.StandardButton.Yes | message_box.StandardButton.No,
+            message_box.StandardButton.No,
         )
-        if confirm != QMessageBox.StandardButton.Yes:
+        if confirm != message_box.StandardButton.Yes:
             return
 
         try:
             self._use_case.delete_duplicate(tile)
         except RuntimeError as e:
-            QMessageBox.critical(self, "Delete Failed", str(e))
+            message_box.critical(self, "Delete Failed", str(e))
             return
 
         self._tiles = [t for t in self._tiles if t.id != tile.id]
@@ -175,14 +175,14 @@ class _DuplicateGroupWidget(QFrame):
         if path.exists():
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
         else:
-            QMessageBox.warning(self, "File Not Found", f"This image no longer exists:\n{path}")
+            message_box.warning(self, "File Not Found", f"This image no longer exists:\n{path}")
 
     def _open_folder(self, tile: TileImage) -> None:
         folder = Path(tile.file_path).parent
         if folder.exists():
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
         else:
-            QMessageBox.warning(self, "Folder Not Found", f"This folder no longer exists:\n{folder}")
+            message_box.warning(self, "Folder Not Found", f"This folder no longer exists:\n{folder}")
 
 
 class DuplicatesView(QDialog):
@@ -288,7 +288,7 @@ class DuplicatesView(QDialog):
         self._scan_button.setEnabled(True)
         self._progress_bar.setVisible(False)
         self._status_label.setText(f"Scan failed: {message}")
-        QMessageBox.warning(self, "Scan Failed", message)
+        message_box.warning(self, "Scan Failed", message)
 
     def _clear_results(self) -> None:
         while self._results_layout.count() > 1:

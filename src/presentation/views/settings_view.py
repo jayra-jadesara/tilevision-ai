@@ -32,7 +32,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QGroupBox,
     QFormLayout,
-    QMessageBox,
     QProgressDialog,
     QTabWidget,
     QScrollArea,
@@ -52,6 +51,7 @@ from src.presentation.workers.rebuild_index_worker import RebuildIndexWorker
 from src.utils.logger import get_log_file_path
 from src.presentation.views.catalogue_profiles_panel import CatalogueProfilesPanel
 from src.theme.theme_manager import get_shared_view_qss, get_settings_view_qss
+from src.presentation.dialogs import message_box
 
 logger = logging.getLogger("tilevision.presentation.views.settings_view")
 
@@ -317,10 +317,10 @@ class SettingsView(QWidget):
     def _on_copy_machine_id(self) -> None:
         machine_id = self._machine_id_edit.text().strip()
         if not machine_id:
-            QMessageBox.warning(self, "Unavailable", "Machine ID could not be read on this PC.")
+            message_box.warning(self, "Unavailable", "Machine ID could not be read on this PC.")
             return
         QGuiApplication.clipboard().setText(machine_id)
-        QMessageBox.information(
+        message_box.information(
             self,
             "Copied",
             "Machine ID copied to clipboard. Send it to your vendor to receive a license key.",
@@ -695,7 +695,7 @@ class SettingsView(QWidget):
         current = self._settings.watch_folders
         resolved = str(Path(folder).resolve())
         if resolved in current:
-            QMessageBox.information(self, "Already Added", "This folder is already being watched.")
+            message_box.information(self, "Already Added", "This folder is already being watched.")
             return
 
         current.append(resolved)
@@ -709,7 +709,7 @@ class SettingsView(QWidget):
         if self._on_watch_folders_changed is not None:
             self._on_watch_folders_changed()
         if self._settings.watch_folders and not is_watchdog_available():
-            QMessageBox.warning(
+            message_box.warning(
                 self,
                 "Folder Monitoring Unavailable",
                 "The watchdog package is not installed, so folders cannot be watched yet.\n\n"
@@ -750,7 +750,7 @@ class SettingsView(QWidget):
             return
         db_path = self._db_path_provider()
         if not db_path.exists():
-            QMessageBox.warning(self, "No Database Found", f"Database file not found:\n{db_path}")
+            message_box.warning(self, "No Database Found", f"Database file not found:\n{db_path}")
             return
 
         default_name = f"tilevision_backup_{db_path.stem}.db"
@@ -762,16 +762,16 @@ class SettingsView(QWidget):
 
         try:
             shutil.copy2(db_path, dest_str)
-            QMessageBox.information(self, "Backup Complete", f"Database backed up to:\n{dest_str}")
+            message_box.information(self, "Backup Complete", f"Database backed up to:\n{dest_str}")
             logger.info(f"Database backed up to {dest_str}")
         except OSError as e:
-            QMessageBox.critical(self, "Backup Failed", f"Could not back up database:\n{e}")
+            message_box.critical(self, "Backup Failed", f"Could not back up database:\n{e}")
             logger.error(f"Database backup failed: {e}")
 
     def _on_export_logs(self) -> None:
         log_path = get_log_file_path()
         if not log_path.exists():
-            QMessageBox.information(self, "No Logs Found", f"No log file found yet at:\n{log_path}")
+            message_box.information(self, "No Logs Found", f"No log file found yet at:\n{log_path}")
             return
 
         dest_str, _ = QFileDialog.getSaveFileName(
@@ -782,10 +782,10 @@ class SettingsView(QWidget):
 
         try:
             shutil.copy2(log_path, dest_str)
-            QMessageBox.information(self, "Logs Exported", f"Logs exported to:\n{dest_str}")
+            message_box.information(self, "Logs Exported", f"Logs exported to:\n{dest_str}")
             logger.info(f"Logs exported to {dest_str}")
         except OSError as e:
-            QMessageBox.critical(self, "Export Failed", f"Could not export logs:\n{e}")
+            message_box.critical(self, "Export Failed", f"Could not export logs:\n{e}")
             logger.error(f"Log export failed: {e}")
 
     def _on_export_diagnostics(self) -> None:
@@ -804,13 +804,13 @@ class SettingsView(QWidget):
             if self._diagnostics_info_provider is not None:
                 info = dict(self._diagnostics_info_provider() or {})
             path = export_diagnostics_json(dest_str, info)
-            QMessageBox.information(
+            message_box.information(
                 self,
                 "Diagnostics Exported",
                 f"Diagnostics report exported to:\n{path}",
             )
         except Exception as e:
-            QMessageBox.critical(
+            message_box.critical(
                 self, "Export Failed", f"Could not export diagnostics:\n{e}"
             )
             logger.error("Diagnostics export failed: %s", e)
@@ -818,38 +818,38 @@ class SettingsView(QWidget):
     def offer_guided_rebuild(self, summary: str) -> None:
         """Prompt the user to rebuild after an incompatible upgrade."""
         if self._indexing_use_case is None or self._indexed_folders_provider is None:
-            QMessageBox.warning(
+            message_box.warning(
                 self,
                 "Rebuild Recommended",
                 f"{summary}\n\nOpen Settings when folders are configured, then "
                 "use Rebuild Search Index.",
             )
             return
-        reply = QMessageBox.question(
+        reply = message_box.question(
             self,
             "Guided Rebuild",
             f"{summary}\n\nStart Rebuild Search Index now?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
+            message_box.StandardButton.Yes | message_box.StandardButton.No,
+            message_box.StandardButton.Yes,
         )
-        if reply == QMessageBox.StandardButton.Yes:
+        if reply == message_box.StandardButton.Yes:
             self._on_rebuild_faiss()
 
     def _on_clear_cache(self) -> None:
         thumb_dir = Path(self._settings.thumbnail_dir)
         if not thumb_dir.exists():
-            QMessageBox.information(self, "Nothing to Clear", "No thumbnail cache found.")
+            message_box.information(self, "Nothing to Clear", "No thumbnail cache found.")
             return
 
-        confirm = QMessageBox.question(
+        confirm = message_box.question(
             self,
             "Clear Cache",
             "Delete all cached thumbnails? They'll be regenerated automatically the "
             "next time you view search results or the catalog.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            message_box.StandardButton.Yes | message_box.StandardButton.No,
+            message_box.StandardButton.No,
         )
-        if confirm != QMessageBox.StandardButton.Yes:
+        if confirm != message_box.StandardButton.Yes:
             return
 
         deleted = 0
@@ -865,7 +865,7 @@ class SettingsView(QWidget):
         message = f"Cleared {deleted} cached thumbnail(s)."
         if errors:
             message += f" ({errors} could not be deleted.)"
-        QMessageBox.information(self, "Cache Cleared", message)
+        message_box.information(self, "Cache Cleared", message)
         logger.info(f"Cleared thumbnail cache: {deleted} deleted, {errors} errors")
 
     def _on_rebuild_faiss(self) -> None:
@@ -874,19 +874,19 @@ class SettingsView(QWidget):
 
         folders = self._indexed_folders_provider()
         if not folders:
-            QMessageBox.information(self, "Nothing to Rebuild", "No indexed folders found.")
+            message_box.information(self, "Nothing to Rebuild", "No indexed folders found.")
             return
 
-        confirm = QMessageBox.question(
+        confirm = message_box.question(
             self,
             "Rebuild Search Index",
             f"This will re-analyze every image in {len(folders)} indexed folder(s) and "
             "rebuild search from scratch. This can take a while for large "
             "catalogs and cannot be cancelled once started.\n\nContinue?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            message_box.StandardButton.Yes | message_box.StandardButton.No,
+            message_box.StandardButton.No,
         )
-        if confirm != QMessageBox.StandardButton.Yes:
+        if confirm != message_box.StandardButton.Yes:
             return
 
         self._start_rebuild(
@@ -977,7 +977,7 @@ class SettingsView(QWidget):
         message = f"Rebuild complete. {total_reembedded} image(s) re-indexed."
         if total_failed:
             message += f" {total_failed} failed."
-        QMessageBox.information(self, "Rebuild Complete", message)
+        message_box.information(self, "Rebuild Complete", message)
 
     def _on_rebuild_failed(self, error_message: str) -> None:
         self._rebuild_button.setEnabled(True)
@@ -985,7 +985,7 @@ class SettingsView(QWidget):
             self._rebuild_progress_dialog.close()
             self._rebuild_progress_dialog = None
         self._rebuild_worker = None
-        QMessageBox.critical(self, "Rebuild Failed", error_message)
+        message_box.critical(self, "Rebuild Failed", error_message)
 
     def set_theme(self, theme: str) -> None:
         """Re-skin this view for a newly-selected theme (called by MainWindow)."""

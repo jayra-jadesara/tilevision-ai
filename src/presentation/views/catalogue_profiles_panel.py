@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QFormLayout,
     QFileDialog,
-    QMessageBox,
     QSplitter,
     QGroupBox,
     QCheckBox,
@@ -36,6 +35,7 @@ from src.utils.profile_validation import (
     validate_profile_name,
     validate_website,
 )
+from src.presentation.dialogs import message_box
 
 
 class CatalogueProfilesPanel(QWidget):
@@ -517,19 +517,19 @@ class CatalogueProfilesPanel(QWidget):
 
     def _on_delete(self) -> None:
         if not self._editing_id:
-            QMessageBox.information(self, "Select Profile", "Select a profile to delete.")
+            message_box.information(self, "Select Profile", "Select a profile to delete.")
             return
         master = self._service.get(self._editing_id)
         if master is None:
             return
-        reply = QMessageBox.question(
+        reply = message_box.question(
             self,
             "Delete Profile",
             f"Delete profile \"{master.display_name}\"?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            message_box.StandardButton.Yes | message_box.StandardButton.No,
+            message_box.StandardButton.No,
         )
-        if reply != QMessageBox.StandardButton.Yes:
+        if reply != message_box.StandardButton.Yes:
             return
         self._service.delete(self._editing_id)
         self._editing_id = None

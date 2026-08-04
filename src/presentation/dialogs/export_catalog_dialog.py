@@ -17,12 +17,12 @@ from PySide6.QtWidgets import (
     QPushButton,
     QVBoxLayout,
     QFileDialog,
-    QMessageBox,
 )
 
 from src.services.catalogue_master_service import CatalogueMaster
 from src.services.pdf_export_service import PdfExportOptions
 from src.theme.theme_manager import get_palette, get_shared_view_qss
+from src.presentation.dialogs import message_box
 
 
 class ExportCatalogDialog(QDialog):
@@ -261,14 +261,14 @@ class ExportCatalogDialog(QDialog):
 
     def _on_export_clicked(self) -> None:
         if self._current_master is None:
-            QMessageBox.information(
+            message_box.information(
                 self,
                 "Select Profile",
                 "Choose a company profile first, or create one in Settings → Export Profiles.",
             )
             return
         if not self._output_path:
-            QMessageBox.warning(self, "Output Path", "Choose where to save the PDF.")
+            message_box.warning(self, "Output Path", "Choose where to save the PDF.")
             return
         self.accept()
 
