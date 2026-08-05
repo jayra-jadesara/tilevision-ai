@@ -11,7 +11,7 @@
 ;   iscc packaging\tilevision_setup.iss
 
 #define MyAppName "TileVision AI"
-#define MyAppVersion "1.2.27"
+#define MyAppVersion "1.2.28"
 #define MyAppPublisher "JD Software"
 #define MyAppExeName "TileVisionAI.exe"
 #define BuildSource "..\dist\TileVisionAI"
@@ -62,7 +62,7 @@ Name: "{commonappdata}\TileVisionAI\.lic"; Permissions: users-modify
 [Run]
 ; Interactive installs only. Silent CI verify and in-app upgrades must NOT
 ; launch the GUI here — without skipifsilent, Windows Build hung ~2h on
-; Start-Process -Wait (v1.2.23–1.2.27). In-app updates relaunch via
+; Start-Process -Wait (v1.2.23–1.2.28). In-app updates relaunch via
 ; src/utils/update_installer.py after the elevated setup exits.
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
 

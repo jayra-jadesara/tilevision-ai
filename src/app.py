@@ -573,25 +573,32 @@ def build_application() -> int:
         logger.info("Stopping folder monitor before shutdown...")
         folder_monitor.stop_monitoring()
 
+    from src.utils.update_installer import is_force_quit_for_update
+
+    updating = False
     try:
-        seal_database(db_context.db_path)
-        logger.info("Catalogue database encrypted at rest.")
-    except Exception as exc:
-        logger.error("Failed to encrypt catalogue database on exit: %s", exc)
+        updating = is_force_quit_for_update()
+    except Exception:
+        logger.exception("Could not read update force-quit flag")
+
+    # During in-app update we must not seal (encrypt) the DB: a hard os._exit
+    # can interrupt AES write and leave a corrupt .enc that crashes next launch.
+    # AppData is not replaced by Inno; plaintext working DB is fine across upgrade.
+    if not updating:
+        try:
+            seal_database(db_context.db_path)
+            logger.info("Catalogue database encrypted at rest.")
+        except Exception as exc:
+            logger.error("Failed to encrypt catalogue database on exit: %s", exc)
+    else:
+        logger.info("Skipping DB seal — quitting for in-app update installer.")
 
     logger.info(f"TileVision AI exiting with code: {exit_code}")
 
-    # In-app update: non-daemon AI / indexing threads can keep the process PID
-    # alive after Qt quits, which blocks the Windows helper from installing.
-    try:
-        from src.utils.update_installer import is_force_quit_for_update
+    if updating:
+        logger.info("Hard-exiting so the update installer can replace this build.")
+        import os
 
-        if is_force_quit_for_update():
-            logger.info("Hard-exiting so the update installer can replace this build.")
-            import os
-
-            os._exit(0)
-    except Exception:
-        logger.exception("Failed during update hard-exit path")
+        os._exit(0)
 
     return exit_code

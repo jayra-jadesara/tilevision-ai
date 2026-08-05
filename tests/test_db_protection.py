@@ -42,3 +42,14 @@ def test_prepare_and_seal_database(tmp_path, monkeypatch):
     prepare_working_database(db_path)
     assert db_path.exists()
     assert db_path.read_bytes() == b"catalogue-data"
+
+
+def test_prepare_recovers_from_corrupt_encrypted_db(tmp_path, monkeypatch):
+    db_path = tmp_path / "tiles.db"
+    enc = encrypted_db_path(db_path)
+    enc.write_bytes(b"not-a-valid-aes-payload")
+    monkeypatch.setenv("TILEVISION_DB_PASSWORD", "site-password")
+
+    prepare_working_database(db_path)
+    assert not db_path.exists()  # starts empty; SQLite creates on connect
+    assert enc.with_suffix(enc.suffix + ".corrupt").exists()

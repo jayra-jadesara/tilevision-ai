@@ -49,8 +49,10 @@ logger = logging.getLogger("tilevision.presentation.views.update_dialog")
 _INSTALL_WATCHDOG_MS = 90_000
 # Hard process exit so the Windows/macOS helper can replace files even when
 # Qt quit is blocked by a modal closeEvent or a non-daemon worker thread.
-# Keep this short: Windows ShellExecuteEx already waited for UAC consent.
-_HARD_EXIT_AFTER_QUIT_MS = 400
+# Prefer a clean app.quit() path (app.py hard-exits after shutdown). This
+# timer is only a last resort — keep it long enough that Inno can start and
+# app.py can finish without a mid-seal kill.
+_HARD_EXIT_AFTER_QUIT_MS = 8_000
 
 
 class UpdateAvailableDialog(QDialog):

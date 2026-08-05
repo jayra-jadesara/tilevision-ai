@@ -77,6 +77,9 @@ def prepare_working_database(db_path: Path, password: str | None = None) -> None
 
     If only the encrypted file exists, decrypt it. If neither exists, SQLite
     will create a new database on first connection.
+
+    A corrupt ``.enc`` (interrupted seal during update hard-exit) must not
+    prevent startup — fall back to an existing plaintext DB or start fresh.
     """
     db_path = Path(db_path)
     enc_path = encrypted_db_path(db_path)
@@ -87,8 +90,20 @@ def prepare_working_database(db_path: Path, password: str | None = None) -> None
 
     if enc_path.exists():
         logger.info("Decrypting protected database: %s", enc_path.name)
-        decrypt_file(enc_path, db_path, key)
-        return
+        try:
+            decrypt_file(enc_path, db_path, key)
+            return
+        except Exception:
+            logger.exception(
+                "Failed to decrypt %s — moving aside and starting a recoverable DB.",
+                enc_path.name,
+            )
+            try:
+                corrupt = enc_path.with_suffix(enc_path.suffix + ".corrupt")
+                enc_path.replace(corrupt)
+            except OSError:
+                logger.exception("Could not quarantine corrupt encrypted database")
+            return
 
     logger.debug("No existing database — a new encrypted catalogue DB will be created.")
 
