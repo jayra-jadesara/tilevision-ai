@@ -15,7 +15,9 @@ from dataclasses import dataclass
 #     (e.g. PGYS2319) actually receive an aux FAISS vector; rebuild required.
 # v8: multi-scale center-50% aux for large tiles + skip scene auto-crop on
 #     catalog marketing sheets (index/query preprocess alignment); rebuild.
-CURRENT_FEATURE_VERSION = 8
+# v9: Strategy E heuristic multi-view indexer (image analysis gates panel /
+#     center aux). Golden bakeoff winner vs primary-only; rebuild required.
+CURRENT_FEATURE_VERSION = 9
 
 # Bump when pattern descriptor layout or algorithm changes.
 CURRENT_PATTERN_FEATURE_VERSION = 3

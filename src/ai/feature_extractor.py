@@ -352,76 +352,53 @@ class FeatureExtractor:
         """
         Index-time extract: primary TileFeatures plus optional aux FAISS vectors.
 
-        Aux vectors (same tile id in FAISS) cover failure modes measured in
-        ranking eval:
-
-        * Wide catalog sheets → left texture-panel (slab crops vs layout/text)
-        * Large square/portrait tiles → center-50% crop (600×600 / deep crops)
+        View selection follows Strategy E (golden-dataset bakeoff winner):
+        heuristic image analysis decides whether a texture panel and/or center
+        crop add retrieval coverage. Near-duplicate aux vectors are dropped.
         """
+        from src.ai.search_quality.image_analysis import analyze_image
+        from src.ai.search_quality.views import (
+            IndexStrategy,
+            IndexViewType,
+            build_index_views,
+        )
+
         features = self.extract(image_path, for_query=False)
         aux: list[np.ndarray] = []
         primary = np.asarray(features.embedding, dtype=np.float32).ravel()
         image_name = Path(image_path).name
 
         try:
-            # Detect panels on the raw sheet. Do NOT trim/content-crop the full
-            # sheet first — that shifts the left/right split into the text
-            # column and destroys texture-crop recall (measured).
+            # Analyze / crop on the raw sheet. Do NOT trim the full sheet before
+            # panel detection — that shifts the split into the text column.
             raw = ImagePreprocessor.load(image_path)
             raw = ImagePreprocessor.to_rgb(raw)
-            orig_size = raw.size
-
-            panel = ImagePreprocessor.primary_texture_panel(raw)
-            if panel is not None:
-                panel_emb = self._embed_index_view(panel, original_size=orig_size)
+            analysis = analyze_image(raw)
+            views = build_index_views(
+                raw,
+                IndexStrategy.E_HEURISTIC_MULTIVIEW,
+                analysis=analysis,
+            )
+            logger.info(
+                "Index view plan for %s: kind=%s views=%s "
+                "panel=%s center=%s",
+                image_name,
+                analysis.kind.value,
+                [v.view_type.value for v in views],
+                analysis.left_panel_beneficial,
+                analysis.center_crop_beneficial,
+            )
+            for view in views:
+                if view.view_type == IndexViewType.PRIMARY:
+                    continue  # primary already embedded via extract()
+                emb = self._embed_index_view(view.image, original_size=raw.size)
                 self._maybe_append_aux(
                     aux,
                     primary,
-                    panel_emb,
-                    label="texture-panel",
+                    emb,
+                    label=view.view_type.value,
                     image_name=image_name,
                 )
-                # Second scale on the slab panel — helps 600×600 customer crops
-                # that cover only part of a tall marketing-sheet slab.
-                if min(panel.size) >= 200:
-                    panel_focus = ImagePreprocessor.focus_center_region(
-                        panel, ratio=0.72
-                    )
-                    focus_emb = self._embed_index_view(
-                        panel_focus, original_size=orig_size
-                    )
-                    self._maybe_append_aux(
-                        aux,
-                        primary,
-                        focus_emb,
-                        label="texture-panel-center",
-                        image_name=image_name,
-                    )
-
-            # Multi-scale center crop for ordinary tiles (no sheet panel).
-            # Measured: square-tile texture_600 vs primary ≈ 0.87;
-            # vs center-50% aux ≈ 0.95. Skip when a sheet panel already covers
-            # texture retrieval — full-sheet center-50 includes layout/text.
-            # Use 0.40 when 0.50 is nearly identical to primary (uniform tiles).
-            width, height = raw.size
-            if panel is None and min(width, height) >= 400:
-                for ratio, label in ((0.50, "center-50"), (0.40, "center-40")):
-                    center = ImagePreprocessor.focus_center_region(raw, ratio=ratio)
-                    if center.size[0] * center.size[1] >= width * height * 0.85:
-                        continue
-                    center_emb = self._embed_index_view(
-                        center, original_size=orig_size
-                    )
-                    before = len(aux)
-                    self._maybe_append_aux(
-                        aux,
-                        primary,
-                        center_emb,
-                        label=label,
-                        image_name=image_name,
-                    )
-                    if len(aux) > before:
-                        break
         except Exception as exc:
             logger.warning(
                 "Index aux embed skipped for %s: %s",
