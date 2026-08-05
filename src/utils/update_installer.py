@@ -151,52 +151,94 @@ def write_windows_apply_script(
 def build_windows_relaunch_script(
     *,
     wait_pid: int | None = None,
-    setup_exe_name: str,
+    setup_pid: int | None = None,
+    setup_exe_name: str = "",
     exe_name: str = WINDOWS_EXE_NAME,
 ) -> str:
     """
     Wait for the old app + elevated setup to finish, then relaunch TileVision.
 
-    Used with ShellExecuteEx(runas) because silent Inno builds use
-    ``skipifsilent`` and will not auto-start the app.
+    Prefer ``setup_pid`` from ShellExecuteEx. Matching the full setup image
+    name with ``tasklist /FI IMAGENAME`` fails for long names like
+    ``TileVisionAI-Setup-1.2.26.exe`` (Windows truncates image names), which
+    caused the helper to relaunch too early or never wait — app never opened.
     """
     pid = int(wait_pid if wait_pid is not None else os.getpid())
-    setup_name = Path(setup_exe_name).name.replace('"', "")
+    setup_pid_i = int(setup_pid) if setup_pid else 0
+    setup_token = Path(setup_exe_name).stem[:20].replace('"', "") if setup_exe_name else "TileVisionAI-Setup"
     exe_q = exe_name.replace('"', "")
+    log_q = "%TEMP%\\tilevision_relaunch.log"
     return f"""@echo off
-setlocal
+setlocal EnableExtensions
 set "WAIT_PID={pid}"
-set "SETUP_NAME={setup_name}"
+set "SETUP_PID={setup_pid_i}"
+set "SETUP_TOKEN={setup_token}"
 set "EXE_NAME={exe_q}"
+set "LOG={log_q}"
 
-REM Wait for the running TileVision process to exit (Inno force-close).
+echo TileVision relaunch helper started > "%LOG%"
+echo WAIT_PID=%WAIT_PID% SETUP_PID=%SETUP_PID% >> "%LOG%"
+
+REM 1) Wait for the running TileVision process to exit.
 set /A _n=0
 :waitapp
 tasklist /FI "PID eq %WAIT_PID%" 2>NUL | find "%WAIT_PID%" >NUL
-if errorlevel 1 goto waitsetup
+if errorlevel 1 (
+  echo App PID exited >> "%LOG%"
+  goto waitsetup
+)
 timeout /T 1 /NOBREAK >NUL
 set /A _n+=1
-if %_n% GEQ 180 goto waitsetup
+if %_n% GEQ 180 (
+  echo App wait timeout >> "%LOG%"
+  goto waitsetup
+)
 goto waitapp
 
 :waitsetup
-REM Wait for the elevated setup.exe to finish installing.
+REM 2) Wait for elevated setup to finish (PID preferred; token fallback).
 set /A _s=0
 :setuploop
-tasklist /FI "IMAGENAME eq %SETUP_NAME%" 2>NUL | find /I "%SETUP_NAME%" >NUL
-if errorlevel 1 goto relaunch
+if not "%SETUP_PID%"=="0" (
+  tasklist /FI "PID eq %SETUP_PID%" 2>NUL | find "%SETUP_PID%" >NUL
+  if errorlevel 1 (
+    echo Setup PID exited >> "%LOG%"
+    goto relaunch
+  )
+) else (
+  tasklist 2>NUL | find /I "%SETUP_TOKEN%" >NUL
+  if errorlevel 1 (
+    echo Setup token gone >> "%LOG%"
+    goto relaunch
+  )
+)
 timeout /T 2 /NOBREAK >NUL
 set /A _s+=1
-if %_s% GEQ 900 goto relaunch
+if %_s% GEQ 900 (
+  echo Setup wait timeout >> "%LOG%"
+  goto relaunch
+)
 goto setuploop
 
 :relaunch
-timeout /T 2 /NOBREAK >NUL
+timeout /T 3 /NOBREAK >NUL
 set "APP="
-if exist "%ProgramFiles%\\TileVision AI\\%EXE_NAME%" set "APP=%ProgramFiles%\\TileVision AI\\%EXE_NAME%"
-if not defined APP if exist "%ProgramFiles(x86)%\\TileVision AI\\%EXE_NAME%" set "APP=%ProgramFiles(x86)%\\TileVision AI\\%EXE_NAME%"
+set "APPDIR="
+if exist "%ProgramFiles%\\TileVision AI\\%EXE_NAME%" (
+  set "APP=%ProgramFiles%\\TileVision AI\\%EXE_NAME%"
+  set "APPDIR=%ProgramFiles%\\TileVision AI"
+)
+if not defined APP if exist "%ProgramFiles(x86)%\\TileVision AI\\%EXE_NAME%" (
+  set "APP=%ProgramFiles(x86)%\\TileVision AI\\%EXE_NAME%"
+  set "APPDIR=%ProgramFiles(x86)%\\TileVision AI"
+)
 if defined APP (
-  start "" "%APP%"
+  echo Launching %APP% >> "%LOG%"
+  start "" /D "%APPDIR%" "%APP%"
+  echo start exit=%ERRORLEVEL% >> "%LOG%"
+) else (
+  echo ERROR: TileVisionAI.exe not found under Program Files >> "%LOG%"
+  exit /B 1
 )
 exit /B 0
 """
@@ -206,11 +248,13 @@ def write_windows_relaunch_script(
     setup_exe: Path,
     *,
     wait_pid: int | None = None,
+    setup_pid: int | None = None,
     script_path: Path | None = None,
 ) -> Path:
     """Write the post-setup relaunch helper to a temp .cmd file."""
     body = build_windows_relaunch_script(
         wait_pid=wait_pid,
+        setup_pid=setup_pid,
         setup_exe_name=Path(setup_exe).name,
     )
     if script_path is None:
@@ -246,8 +290,8 @@ def launch_windows_elevated_setup(setup_exe: Path) -> None:
     helper cannot display UAC and Windows then auto-denies elevation — install
     never runs and the UI stays on "Installing… will restart".
 
-    After UAC accepts, a detached relaunch helper waits for setup to finish and
-    starts TileVisionAI.exe (silent Inno uses skipifsilent).
+    After UAC accepts, a detached relaunch helper waits for the setup PID to
+    exit and then starts TileVisionAI.exe (silent Inno uses skipifsilent).
     """
     setup_exe = Path(setup_exe)
     if not setup_exe.is_file():
@@ -281,10 +325,22 @@ def launch_windows_elevated_setup(setup_exe: Path) -> None:
 
     SEE_MASK_NOCLOSEPROCESS = 0x00000040
     SW_SHOWNORMAL = 1
+    app_pid = os.getpid()
 
-    # Schedule relaunch BEFORE elevation so it survives FORCECLOSEAPPLICATIONS.
-    relaunch = write_windows_relaunch_script(setup_exe, wait_pid=os.getpid())
-    logger.info("Scheduling Windows post-setup relaunch via %s", relaunch)
+    # Spawn relaunch BEFORE elevation. Inno may FORCECLOSEAPPLICATIONS so
+    # quickly that a helper started after ShellExecuteEx never gets created.
+    # setup_pid is unknown yet — helper matches "TileVisionAI-Setup" by token
+    # (full IMAGENAME filters break on long setup filenames).
+    relaunch = write_windows_relaunch_script(
+        setup_exe,
+        wait_pid=app_pid,
+        setup_pid=None,
+    )
+    logger.info(
+        "Scheduling Windows post-setup relaunch via %s (app_pid=%s)",
+        relaunch,
+        app_pid,
+    )
     _spawn_detached_cmd(relaunch, cwd=setup_exe.resolve().parent)
 
     sei = SHELLEXECUTEINFOW()
@@ -310,6 +366,15 @@ def launch_windows_elevated_setup(setup_exe: Path) -> None:
             f"Could not start the Windows installer (error {err}).\n"
             "Use Open File… to run the installer manually."
         )
+
+    # Best-effort: if we still have a setup handle, rewrite helper is too late
+    # (already running). Log PID for support diagnostics.
+    try:
+        if sei.hProcess:
+            setup_pid = int(ctypes.windll.kernel32.GetProcessId(sei.hProcess) or 0)
+            logger.info("Elevated setup PID=%s", setup_pid)
+    except Exception:
+        logger.exception("Could not read elevated setup PID")
 
 
 def launch_windows_silent_installer(setup_exe: Path) -> Any:

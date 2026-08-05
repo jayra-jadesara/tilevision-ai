@@ -97,12 +97,16 @@ def test_build_windows_apply_script_waits_and_relaunches(tmp_path):
 def test_build_windows_relaunch_script_waits_for_setup(tmp_path):
     script = ui.build_windows_relaunch_script(
         wait_pid=4242,
+        setup_pid=7777,
         setup_exe_name="TileVisionAI-Setup-1.2.26.exe",
     )
     assert "WAIT_PID=4242" in script
-    assert "TileVisionAI-Setup-1.2.26.exe" in script
+    assert "SETUP_PID=7777" in script
     assert "TileVisionAI.exe" in script
-    assert "waitsetup" in script.lower() or "SETUP_NAME" in script
+    assert "tilevision_relaunch.log" in script
+    assert 'start "" /D' in script
+    # Must not rely on full long IMAGENAME (Windows truncates).
+    assert "IMAGENAME eq TileVisionAI-Setup-1.2.26.exe" not in script
 
 
 def test_build_macos_apply_script_waits_and_replaces(tmp_path):
