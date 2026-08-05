@@ -121,6 +121,25 @@ def test_primary_texture_panel_skips_square_tile(tmp_path):
     assert ImagePreprocessor.primary_texture_panel(Image.open(path)) is None
 
 
+def test_preprocess_for_query_skips_scene_crop_on_catalog_sheet(tmp_path, monkeypatch):
+    """Marketing sheets must not take the room-photo isolation path."""
+    sheet_path, _ = _make_catalog_sheet(tmp_path)
+    called = {"n": 0}
+
+    def _boom(_image):
+        called["n"] += 1
+        raise AssertionError("catalog sheet must not scene-isolate")
+
+    monkeypatch.setattr(
+        ImagePreprocessor,
+        "_isolate_query_tile",
+        classmethod(lambda cls, image: _boom(image)),
+    )
+    processed = ImagePreprocessor.preprocess_for_query(sheet_path)
+    assert processed.pil.size[0] == processed.pil.size[1]
+    assert called["n"] == 0
+
+
 def test_update_vectors_allows_multi_vector_same_id(tmp_path):
     mgr = FaissIndexManager(index_path=str(tmp_path / "t.index"), dimension=4)
     mgr.load_index()
@@ -261,21 +280,25 @@ def test_real_dinov2_sheet_crop_consistency(tmp_path):
     sheet_feat, aux = fx.extract_index_vectors(str(sheet_path))
     assert aux, "wide catalog sheet must produce a texture-panel aux vector"
     crop_q, _ = fx.extract_for_search(str(crop_path))
+    # Same-file query must stay aligned with index primary (no scene auto-crop).
+    sheet_q, _ = fx.extract_for_search(str(sheet_path))
 
     def cos(a, b):
         a = np.asarray(a, dtype=np.float32).ravel()
         b = np.asarray(b, dtype=np.float32).ravel()
         return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8))
 
-    # Aux panel must be at least as aligned to the crop as the full sheet.
-    assert cos(aux[0], crop_q.embedding) >= cos(sheet_feat.embedding, crop_q.embedding) - 0.02
-    assert cos(aux[0], crop_q.embedding) > 0.80
+    assert cos(sheet_feat.embedding, sheet_q.embedding) > 0.90
+    # Best aux (panel or center) must beat full-sheet primary for texture crops.
+    best_aux = max(cos(a, crop_q.embedding) for a in aux)
+    assert best_aux >= cos(sheet_feat.embedding, crop_q.embedding) - 0.02
+    assert best_aux > 0.80
 
     dim = len(sheet_feat.embedding)
     mgr = FaissIndexManager(index_path=str(tmp_path / "live.index"), dimension=dim)
     mgr.load_index()
-    ids = [1, 1]
-    vecs = [sheet_feat.embedding, aux[0]]
+    ids = [1] * (1 + len(aux))
+    vecs = [sheet_feat.embedding, *aux]
     for i in range(6):
         f = fx.extract(str(tmp_path / f"d{i}.jpg"), for_query=False)
         ids.append(10 + i)
@@ -290,3 +313,37 @@ def test_real_dinov2_sheet_crop_consistency(tmp_path):
     top5 = sorted(best, key=best.get, reverse=True)[:5]
     assert 1 in top5
     assert top5[0] == 1
+
+
+@pytest.mark.slow
+def test_real_dinov2_square_tile_center_aux_helps_deep_crop(tmp_path):
+    """Center-50% aux must improve 600×600 crop cosine on square tiles."""
+    weights = Path("model_weights/dinov2-large/config.json")
+    if not weights.is_file():
+        pytest.skip("DINOv2 weights not bundled in this environment")
+
+    pytest.importorskip("torch")
+    from src.ai.embedder import DINOv2Embedder
+    from src.ai.feature_extractor import FeatureExtractor
+
+    tile = _make_marble(1200, 1200, seed=99)
+    tile_path = tmp_path / "tile.jpg"
+    crop_path = tmp_path / "crop600.jpg"
+    tile.save(tile_path, quality=95)
+    tile.crop((300, 300, 900, 900)).save(crop_path, quality=95)
+
+    emb = DINOv2Embedder()
+    emb.load_model()
+    fx = FeatureExtractor(embedder=emb)
+    feat, aux = fx.extract_index_vectors(str(tile_path))
+    assert aux, "large square tile must produce center-50 aux"
+    crop_q, _ = fx.extract_for_search(str(crop_path))
+
+    def cos(a, b):
+        a = np.asarray(a, dtype=np.float32).ravel()
+        b = np.asarray(b, dtype=np.float32).ravel()
+        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8))
+
+    best_aux = max(cos(a, crop_q.embedding) for a in aux)
+    assert best_aux >= cos(feat.embedding, crop_q.embedding) - 0.01
+    assert best_aux > 0.90

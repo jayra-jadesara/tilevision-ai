@@ -13,7 +13,9 @@ from dataclasses import dataclass
 # v6: index-time secondary texture-panel vector for wide catalog sheets.
 # v7: lower panel contrast gate so high-key white marble/onyx sheets
 #     (e.g. PGYS2319) actually receive an aux FAISS vector; rebuild required.
-CURRENT_FEATURE_VERSION = 7
+# v8: multi-scale center-50% aux for large tiles + skip scene auto-crop on
+#     catalog marketing sheets (index/query preprocess alignment); rebuild.
+CURRENT_FEATURE_VERSION = 8
 
 # Bump when pattern descriptor layout or algorithm changes.
 CURRENT_PATTERN_FEATURE_VERSION = 3

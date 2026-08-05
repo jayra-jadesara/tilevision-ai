@@ -282,6 +282,69 @@ class FeatureExtractor:
 
         return features
 
+    @staticmethod
+    def _cosine_sim(a: np.ndarray, b: np.ndarray) -> float:
+        av = np.asarray(a, dtype=np.float32).ravel()
+        bv = np.asarray(b, dtype=np.float32).ravel()
+        return float(
+            np.dot(av, bv) / (np.linalg.norm(av) * np.linalg.norm(bv) + 1e-8)
+        )
+
+    def _embed_index_view(
+        self,
+        view: Image.Image,
+        *,
+        original_size: tuple[int, int],
+    ) -> np.ndarray:
+        """Letterbox + DINOv2 for an index-time aux crop (same path as primary)."""
+        view = ImagePreprocessor.normalize_lighting(view)
+        view = ImagePreprocessor.resize_letterbox(view)
+        rgb = ImagePreprocessor.to_numpy(view)
+        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        preprocessed = PreprocessedImage(
+            pil=view,
+            rgb=rgb,
+            bgr=bgr,
+            gray=gray,
+            width=original_size[0],
+            height=original_size[1],
+        )
+        return np.asarray(
+            self._embedder.extract_from_preprocessed(preprocessed, for_query=False),
+            dtype=np.float32,
+        )
+
+    # Skip near-duplicates of primary. 0.97 was too strict for center-50 on
+    # low-contrast marble (measured primary↔center-50 ≈ 0.957 still helps
+    # deep crops at ~0.95 vs primary ~0.87).
+    _AUX_PRIMARY_MAX_SIM = 0.985
+    _AUX_PAIR_MAX_SIM = 0.99
+
+    def _maybe_append_aux(
+        self,
+        aux: list[np.ndarray],
+        primary: np.ndarray,
+        candidate: np.ndarray,
+        *,
+        label: str,
+        image_name: str,
+    ) -> None:
+        """Keep aux vectors that add retrieval coverage (not near-duplicates)."""
+        sim_primary = self._cosine_sim(primary, candidate)
+        if sim_primary >= self._AUX_PRIMARY_MAX_SIM:
+            return
+        for existing in aux:
+            if self._cosine_sim(existing, candidate) >= self._AUX_PAIR_MAX_SIM:
+                return
+        aux.append(candidate)
+        logger.info(
+            "Index aux %s vector for %s (cos_vs_primary=%.3f)",
+            label,
+            image_name,
+            sim_primary,
+        )
+
     def extract_index_vectors(
         self,
         image_path: str,
@@ -289,56 +352,79 @@ class FeatureExtractor:
         """
         Index-time extract: primary TileFeatures plus optional aux FAISS vectors.
 
-        Wide catalog sheets get a secondary texture-panel embedding (same tile
-        id in FAISS) so a customer crop of the slab still retrieves the sheet.
+        Aux vectors (same tile id in FAISS) cover failure modes measured in
+        ranking eval:
+
+        * Wide catalog sheets → left texture-panel (slab crops vs layout/text)
+        * Large square/portrait tiles → center-50% crop (600×600 / deep crops)
         """
         features = self.extract(image_path, for_query=False)
         aux: list[np.ndarray] = []
+        primary = np.asarray(features.embedding, dtype=np.float32).ravel()
+        image_name = Path(image_path).name
 
         try:
-            # Detect the panel on the raw sheet. Do NOT trim/content-crop the
-            # full sheet first — that shifts the left/right split into the
-            # text column and destroys texture-crop recall (measured).
+            # Detect panels on the raw sheet. Do NOT trim/content-crop the full
+            # sheet first — that shifts the left/right split into the text
+            # column and destroys texture-crop recall (measured).
             raw = ImagePreprocessor.load(image_path)
             raw = ImagePreprocessor.to_rgb(raw)
-            panel = ImagePreprocessor.primary_texture_panel(raw)
-            if panel is None:
-                return features, aux
+            orig_size = raw.size
 
-            panel = ImagePreprocessor.normalize_lighting(panel)
-            panel = ImagePreprocessor.resize_letterbox(panel)
-            rgb = ImagePreprocessor.to_numpy(panel)
-            bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-            gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-            panel_image = PreprocessedImage(
-                pil=panel,
-                rgb=rgb,
-                bgr=bgr,
-                gray=gray,
-                width=raw.size[0],
-                height=raw.size[1],
-            )
-            panel_emb = np.asarray(
-                self._embedder.extract_from_preprocessed(panel_image, for_query=False),
-                dtype=np.float32,
-            )
-            # Skip near-duplicate aux vectors (ordinary tiles that slipped through).
-            primary = np.asarray(features.embedding, dtype=np.float32).ravel()
-            panel_v = panel_emb.ravel()
-            sim = float(
-                np.dot(primary, panel_v)
-                / (np.linalg.norm(primary) * np.linalg.norm(panel_v) + 1e-8)
-            )
-            if sim < 0.97:
-                aux.append(panel_emb)
-                logger.info(
-                    "Index aux texture-panel vector for %s (cos_vs_primary=%.3f)",
-                    Path(image_path).name,
-                    sim,
+            panel = ImagePreprocessor.primary_texture_panel(raw)
+            if panel is not None:
+                panel_emb = self._embed_index_view(panel, original_size=orig_size)
+                self._maybe_append_aux(
+                    aux,
+                    primary,
+                    panel_emb,
+                    label="texture-panel",
+                    image_name=image_name,
                 )
+                # Second scale on the slab panel — helps 600×600 customer crops
+                # that cover only part of a tall marketing-sheet slab.
+                if min(panel.size) >= 200:
+                    panel_focus = ImagePreprocessor.focus_center_region(
+                        panel, ratio=0.72
+                    )
+                    focus_emb = self._embed_index_view(
+                        panel_focus, original_size=orig_size
+                    )
+                    self._maybe_append_aux(
+                        aux,
+                        primary,
+                        focus_emb,
+                        label="texture-panel-center",
+                        image_name=image_name,
+                    )
+
+            # Multi-scale center crop for ordinary tiles (no sheet panel).
+            # Measured: square-tile texture_600 vs primary ≈ 0.87;
+            # vs center-50% aux ≈ 0.95. Skip when a sheet panel already covers
+            # texture retrieval — full-sheet center-50 includes layout/text.
+            # Use 0.40 when 0.50 is nearly identical to primary (uniform tiles).
+            width, height = raw.size
+            if panel is None and min(width, height) >= 400:
+                for ratio, label in ((0.50, "center-50"), (0.40, "center-40")):
+                    center = ImagePreprocessor.focus_center_region(raw, ratio=ratio)
+                    if center.size[0] * center.size[1] >= width * height * 0.85:
+                        continue
+                    center_emb = self._embed_index_view(
+                        center, original_size=orig_size
+                    )
+                    before = len(aux)
+                    self._maybe_append_aux(
+                        aux,
+                        primary,
+                        center_emb,
+                        label=label,
+                        image_name=image_name,
+                    )
+                    if len(aux) > before:
+                        break
         except Exception as exc:
             logger.warning(
-                "Texture-panel aux embed skipped for %s: %s",
+                "Index aux embed skipped for %s: %s",
                 image_path,
                 exc,
             )

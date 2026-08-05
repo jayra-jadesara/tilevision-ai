@@ -333,9 +333,9 @@ class ImagePreprocessor:
         if (width / max(height, 1)) < 1.12:
             return None
 
-        # Take the left half, then content-crop inside it so white margins and
-        # any bleed from the info column are removed (slab-only panel).
-        split_x = max(1, int(width * 0.50))
+        # Take the left ~45% (not a full half) so the text/grid column does not
+        # bleed into the panel. Then trim + content-crop for slab-only pixels.
+        split_x = max(1, int(width * 0.45))
         left = image.crop((0, 0, split_x, height))
         left = cls.trim_uniform_borders(left)
         left = cls.crop_to_content_region(left, min_margin_ratio=0.02)
@@ -493,10 +493,23 @@ class ImagePreprocessor:
         image = cls.crop_to_content_region(image, min_margin_ratio=0.05)
 
         already_cropped = "tilevision_crops" in path.as_posix().lower()
+        is_catalog_sheet = False
         if not already_cropped and cls._looks_like_scene_photo(image):
-            image = cls._isolate_query_tile(image)
+            # Wide marketing sheets also trip the aspect heuristic. Isolating a
+            # "tile region" or perspective-straightening them diverges from
+            # index preprocess (measured cosine ~0.53–0.80 vs same-file index
+            # embedding) and destroys self-hit + crop ranking.
+            is_catalog_sheet = cls.primary_texture_panel(image) is not None
+            if is_catalog_sheet:
+                logger.info(
+                    "Query catalog marketing sheet detected — skipping scene "
+                    "auto-crop and perspective straighten"
+                )
+            else:
+                image = cls._isolate_query_tile(image)
 
-        image = cls._maybe_straighten(image)
+        if not is_catalog_sheet:
+            image = cls._maybe_straighten(image)
         image = cls.normalize_lighting(image)
         image = cls.resize_letterbox(image)
 

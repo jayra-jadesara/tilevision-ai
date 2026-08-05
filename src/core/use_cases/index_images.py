@@ -308,8 +308,8 @@ class IndexImagesUseCase:
 
             # 3. Reuse embedding already extracted above.
             # Do NOT run FeatureExtractor again.
-            # Wide catalog sheets may also carry an aux texture-panel vector
-            # under the same FAISS id so slab crops still retrieve the sheet.
+            # Aux FAISS vectors (same id): texture-panel for marketing sheets
+            # and/or center-50% for large tiles so customer crops still hit.
             logger.info(
                 f"Indexing vector into FAISS for ID {db_id}: {file_name}"
             )
