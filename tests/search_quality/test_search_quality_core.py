@@ -77,6 +77,17 @@ def test_fusion_max_groups_by_tile_id():
     assert fused[1][0] == 2
 
 
+def test_fusion_softmax_groups_by_tile_id():
+    hits = [
+        ScoredHit(1, 0.9, 1.0, 1),
+        ScoredHit(1, 0.8, 1.0, 2),
+        ScoredHit(2, 0.95, 1.0, 3),
+    ]
+    fused = fuse_hits(hits, FusionMethod.SOFTMAX)
+    assert {tid for tid, _ in fused} == {1, 2}
+    assert fused[0][1] >= fused[1][1]
+
+
 def test_fusion_rrf_prefers_multi_list_support():
     hits = [
         ScoredHit(1, 0.99, 1.0, 5),
