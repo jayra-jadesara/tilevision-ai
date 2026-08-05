@@ -765,11 +765,26 @@ class OptimizationStudy:
             f"  weighted_max_tuned w={best_w}: R@1={tuned['recall@1']} R@5={tuned['recall@5']}",
             flush=True,
         )
+        # Prefer Recall@5, then Recall@1. Reject candidates that lose >1pp R@1
+        # vs MAX (production default) even if R@5 is slightly higher.
+        max_r1 = results.get("max", {}).get("recall@1", 0.0)
+        eligible = []
+        for k, v in results.items():
+            if not isinstance(v, dict) or "recall@5" not in v:
+                continue
+            if k != "max" and v["recall@1"] + 0.01 < max_r1:
+                continue
+            eligible.append((k, v))
+        if not eligible:
+            eligible = [("max", results["max"])]
         winner = max(
-            ((k, v) for k, v in results.items() if "recall@5" in v),
+            eligible,
             key=lambda kv: (kv[1]["recall@5"], kv[1]["recall@1"]),
         )
         results["winner"] = winner[0]
+        results["winner_rule"] = (
+            "maximize Recall@5 then Recall@1; reject methods losing >1pp R@1 vs MAX"
+        )
         (self.reports / "fusion_bakeoff.json").write_text(json.dumps(results, indent=2))
         return results
 
