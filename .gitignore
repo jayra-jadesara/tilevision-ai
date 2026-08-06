@@ -98,3 +98,6 @@ ubuntu_logs.zip
 # Local pre-release installer downloads
 test_release/
 pytest-results.xml
+
+# Real customer photos for bakeoff (manifest schema is committed; images are not)
+eval/real_queries/
