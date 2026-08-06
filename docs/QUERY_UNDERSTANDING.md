@@ -42,8 +42,23 @@ python3 dev_tools/search_quality/run_query_understanding_benchmark.py \
   --out /opt/cursor/artifacts/query_understanding
 ```
 
-Reuses the existing 320-tile catalog embedding cache; only query embeddings
-are recomputed.
+Reuses the existing 320-tile catalog embedding cache; only room/phone query
+embeddings are recomputed (other variants keep the classic single-pass path).
+
+### Measured (Linux CPU, index unchanged, 1062 vectors)
+
+| Metric | v1.2.31 query | v1.2.32 query | Δ |
+|--------|---------------|---------------|---|
+| Recall@1 | 0.5045 | 0.5144 | +0.99pp |
+| Recall@5 | 0.7253 | 0.7421 | +1.68pp |
+| Room-scene R@5 | 0.0781 | 0.3844 | **+30.63pp** |
+| Phone R@5 | 0.7219 | 0.7688 | +4.69pp |
+| Catalogue R@5 | 0.8469 | 0.8469 | 0 |
+| Original R@5 | 0.8719 | 0.8719 | 0 |
+
+Production path: multi-crop only for `room_scene` / `phone_screenshot`; all
+other query kinds keep the v1.2.31 single-pass preprocess (with the fixed
+catalogue-sheet gate).
 
 ## Platforms
 
