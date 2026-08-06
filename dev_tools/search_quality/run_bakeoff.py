@@ -63,6 +63,7 @@ class StageTimings:
     embed_s: float = 0.0
     faiss_s: float = 0.0
     fuse_s: float = 0.0
+    rerank_s: float = 0.0
     total_s: float = 0.0
 
 
@@ -164,11 +165,25 @@ class BakeoffEngine:
         fusion: FusionMethod = FusionMethod.MAX,
         aux_weight: float = 1.0,
         search_k: int = 100,
+        orb_verification: bool = False,
+        catalog_by_id: dict[int, CatalogItem] | None = None,
     ) -> Metrics:
         metrics = Metrics(vectors=mgr.get_total_count())
-        total_embed = total_faiss = total_fuse = 0.0
+        total_embed = total_faiss = total_fuse = total_rerank = 0.0
         ntotal = mgr.get_total_count()
         k = min(search_k, max(1, ntotal))
+        catalog_by_id = catalog_by_id or {}
+
+        orb = None
+        if orb_verification:
+            from src.ai.verification.orb_verifier import OrbVerifier
+            from src.core.use_cases.search_tiles import (
+                ORB_BOOST_MAX,
+                ORB_MAX_CANDIDATES,
+                ORB_VERIFICATION_BAND,
+            )
+
+            orb = OrbVerifier()
 
         for q in queries:
             qemb, embed_s = self.embed_query(q.path)
@@ -194,6 +209,19 @@ class BakeoffEngine:
             fused = fuse_hits(hits, fusion)
             fuse_s = time.perf_counter() - t2
             total_fuse += fuse_s
+
+            t3 = time.perf_counter()
+            if orb is not None and fused:
+                fused = self._orb_nudge_fused(
+                    q.path,
+                    fused,
+                    catalog_by_id,
+                    orb,
+                    ORB_VERIFICATION_BAND,
+                    ORB_MAX_CANDIDATES,
+                    ORB_BOOST_MAX,
+                )
+            total_rerank += time.perf_counter() - t3
 
             ranks = {tid: i + 1 for i, (tid, _) in enumerate(fused)}
             rank = ranks.get(q.tile_id)
@@ -229,9 +257,68 @@ class BakeoffEngine:
             embed_s=total_embed / n,
             faiss_s=total_faiss / n,
             fuse_s=total_fuse / n,
-            total_s=(total_embed + total_faiss + total_fuse) / n,
+            rerank_s=total_rerank / n,
+            total_s=(total_embed + total_faiss + total_fuse + total_rerank) / n,
         )
         return metrics
+
+    @staticmethod
+    def _orb_nudge_fused(
+        query_path: Path,
+        fused: list[tuple[int, float]],
+        catalog_by_id: dict[int, CatalogItem],
+        orb,
+        band: float,
+        max_candidates: int,
+        boost_max: float,
+    ) -> list[tuple[int, float]]:
+        """Apply ORB boost to near-tie fused scores (bakeoff mirror of production)."""
+        if len(fused) < 2:
+            return fused
+        try:
+            q_pil = ImagePreprocessor.load(query_path)
+            q_rgb = ImagePreprocessor.to_rgb(q_pil)
+            import cv2
+
+            query_gray = cv2.cvtColor(np.asarray(q_rgb), cv2.COLOR_RGB2GRAY)
+        except Exception:
+            return fused
+
+        top = float(fused[0][1])
+        band_idxs: list[int] = []
+        for i, (_tid, sc) in enumerate(fused):
+            if top - float(sc) > band:
+                break
+            band_idxs.append(i)
+            if len(band_idxs) >= max_candidates:
+                break
+        if len(band_idxs) < 2:
+            return fused
+
+        updated = list(fused)
+        changed = False
+        for i in band_idxs:
+            tid, sc = updated[i]
+            item = catalog_by_id.get(int(tid))
+            if item is None:
+                continue
+            try:
+                c_pil = ImagePreprocessor.load(item.path)
+                c_rgb = ImagePreprocessor.to_rgb(c_pil)
+                import cv2
+
+                cand_gray = cv2.cvtColor(np.asarray(c_rgb), cv2.COLOR_RGB2GRAY)
+            except Exception:
+                continue
+            orb_score = float(orb.score(query_gray, cand_gray))
+            if orb_score <= 0.0:
+                continue
+            updated[i] = (tid, min(1.0, float(sc) + boost_max * orb_score))
+            changed = True
+        if not changed:
+            return fused
+        updated.sort(key=lambda item: item[1], reverse=True)
+        return updated
 
 
 def metrics_to_dict(m: Metrics) -> dict:
@@ -249,6 +336,7 @@ def metrics_to_dict(m: Metrics) -> dict:
             "embed_s": round(m.timings.embed_s, 4),
             "faiss_s": round(m.timings.faiss_s, 5),
             "fuse_s": round(m.timings.fuse_s, 5),
+            "rerank_ms": round(m.timings.rerank_s * 1000.0, 3),
             "total_s": round(m.timings.total_s, 4),
         },
         "stage_fail": m.stage_fail,
@@ -337,7 +425,13 @@ def embedding_drift_report(engine: BakeoffEngine, items: list[CatalogItem], out:
     return report
 
 
-def run(out_dir: Path, n_tiles: int, n_sheets: int) -> dict:
+def run(
+    out_dir: Path,
+    n_tiles: int,
+    n_sheets: int,
+    *,
+    orb_verification: bool = True,
+) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     weights = Path("model_weights/dinov2-large/config.json")
     if not weights.is_file():
@@ -348,6 +442,8 @@ def run(out_dir: Path, n_tiles: int, n_sheets: int) -> dict:
         out_dir / "golden", n_tiles=n_tiles, n_sheets=n_sheets
     )
     print(f"Catalog={len(items)} queries={len(queries)}")
+    print(f"ORB verification: {'on' if orb_verification else 'off'}")
+    catalog_by_id = {item.tile_id: item for item in items}
 
     emb = DINOv2Embedder()
     emb.load_model()
@@ -370,7 +466,13 @@ def run(out_dir: Path, n_tiles: int, n_sheets: int) -> dict:
         mgr, index_s, meta = engine.index_strategy(
             items, strategy, out_dir / f"idx_{strategy.value}.index"
         )
-        metrics = engine.evaluate(mgr, queries, fusion=FusionMethod.MAX)
+        metrics = engine.evaluate(
+            mgr,
+            queries,
+            fusion=FusionMethod.MAX,
+            orb_verification=orb_verification,
+            catalog_by_id=catalog_by_id,
+        )
         metrics.mean_views = meta.mean_views
         metrics.vectors = meta.vectors
         payload = metrics_to_dict(metrics)
@@ -420,7 +522,14 @@ def run(out_dir: Path, n_tiles: int, n_sheets: int) -> dict:
     )
     fusion_results = {}
     for method in FusionMethod:
-        m = engine.evaluate(mgr, queries, fusion=method, aux_weight=1.0)
+        m = engine.evaluate(
+            mgr,
+            queries,
+            fusion=method,
+            aux_weight=1.0,
+            orb_verification=orb_verification,
+            catalog_by_id=catalog_by_id,
+        )
         m.vectors = meta.vectors
         m.mean_views = meta.mean_views
         payload = metrics_to_dict(m)
@@ -449,7 +558,12 @@ def run(out_dir: Path, n_tiles: int, n_sheets: int) -> dict:
         "val_recall@1": round(tuned_r1, 4),
     }
     m = engine.evaluate(
-        mgr, queries, fusion=FusionMethod.WEIGHTED_MAX, aux_weight=best_w
+        mgr,
+        queries,
+        fusion=FusionMethod.WEIGHTED_MAX,
+        aux_weight=best_w,
+        orb_verification=orb_verification,
+        catalog_by_id=catalog_by_id,
     )
     m.vectors = meta.vectors
     tuned_payload = metrics_to_dict(m)
@@ -473,6 +587,7 @@ def run(out_dir: Path, n_tiles: int, n_sheets: int) -> dict:
         "goal": "production Recall@1 / Recall@5 on golden auto-labeled queries",
         "catalog_size": len(items),
         "n_queries": len(queries),
+        "orb_verification": bool(orb_verification),
         "variants": list(VARIANT_SPECS),
         "embedding_drift_sample": drift,
         "strategies": strategy_results,
@@ -519,11 +634,24 @@ def main() -> int:
     )
     parser.add_argument("--tiles", type=int, default=24)
     parser.add_argument("--sheets", type=int, default=12)
+    parser.add_argument(
+        "--orb-verification",
+        choices=("on", "off"),
+        default="on",
+        help="Enable ORB near-tie geometric verification (default: on).",
+    )
     args = parser.parse_args()
-    report = run(args.out, n_tiles=args.tiles, n_sheets=args.sheets)
+    orb_on = args.orb_verification == "on"
+    report = run(
+        args.out,
+        n_tiles=args.tiles,
+        n_sheets=args.sheets,
+        orb_verification=orb_on,
+    )
     print(json.dumps({
         "winning_strategy": report["winning_strategy"],
         "winning_fusion": report["winning_fusion"],
+        "orb_verification": report["orb_verification"],
         "delta_vs_primary_only": report["delta_vs_primary_only"],
         "acceptance": report["acceptance"],
     }, indent=2))
