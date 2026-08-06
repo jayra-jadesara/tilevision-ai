@@ -132,5 +132,35 @@ Golden set: 24 images × 16 auto-labeled variants = 384 queries.
 
 Fusion winner: **MAX** (Average/RRF rejected — Recall@1 regression).
 
-Full report: bakeoff artifacts / `SEARCH_ACCURACY_REPORT.md`.
+## 12. Optimization study (v1.2.31 / feature_v10)
+
+Harness: `dev_tools/search_quality/run_optimization_study.py`
+
+Catalog: **320** synthetic production-representative tiles × **21** query
+variants = **6720** queries (real customer volumes were not mounted in the
+cloud study environment; reports label
+`catalog_source=synthetic_production_representative`).
+
+| Config | R@1 | R@5 | Cat R@5 | Vec/tile |
+|--------|-----|-----|---------|----------|
+| Primary only | 0.467 | 0.692 | 0.756 | 1.00 |
+| Strategy E (v9) | 0.491 | 0.705 | 0.838 | 2.08 |
+| **E + force adaptive** | **0.503** | **0.721** | **0.847** | **2.22** |
+| All cached views | 0.505 | 0.725 | 0.847 | 3.32 |
+
+Rejected (measured):
+
+- Always-on **texture** alone: +0.73pp R@5 (<1pp keep threshold)
+- Always-on texture with E+adaptive: +3.19 vec/tile for only +0.38pp vs E+adaptive
+- Fusion **Average / WAvg / RRF / Softmax**: Recall@1 regressions vs **MAX**
+- Index changes for **room scene**: R@5 ≈ 0.07 under every index config;
+  RCA shows **70%** `embedding_drift_query_far_from_all_views` (query-side;
+  single-pass `extract_for_search`, weak scene crop). No index change until a
+  measured query-path fix.
+
+Shipped change: Strategy E always attempts adaptive content crop (near-dup
+aux still dropped). Customer must **Rebuild Search Index**.
+
+Cross-platform (Windows / macOS Intel / Apple Silicon): not fabricated here —
+validate via existing CI/search gates.
 

@@ -352,9 +352,10 @@ class FeatureExtractor:
         """
         Index-time extract: primary TileFeatures plus optional aux FAISS vectors.
 
-        View selection follows Strategy E (golden-dataset bakeoff winner):
-        heuristic image analysis decides whether a texture panel and/or center
-        crop add retrieval coverage. Near-duplicate aux vectors are dropped.
+        View selection follows Strategy E + force adaptive (v1.2.31 /
+        feature_v10): heuristic image analysis gates panel/center crops, and
+        an adaptive content crop is always attempted. Near-duplicate aux
+        vectors are dropped.
         """
         from src.ai.search_quality.image_analysis import analyze_image
         from src.ai.search_quality.views import (
