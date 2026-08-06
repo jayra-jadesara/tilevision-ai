@@ -281,6 +281,7 @@ def build_application() -> int:
         feature_extractor=feature_extractor,
         vector_index=vector_index,
         thumbnail_dir=settings.thumbnail_dir,
+        enable_orb_verification=settings.enable_orb_verification,
     )
     find_duplicates_use_case = FindDuplicatesUseCase(image_repository=image_repository, vector_index=vector_index)
 

@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -201,3 +202,84 @@ def test_speckled_query_prefers_higher_embedding_over_texture_color():
     ).final
 
     assert speckled_score > cream_score
+
+
+def _make_tile(tile_id: int, name: str, path: str) -> "TileImage":
+    from src.core.models import TileImage
+
+    return TileImage(
+        file_path=path,
+        file_name=name,
+        file_size=1,
+        dimensions="64x64",
+        id=tile_id,
+    )
+
+
+def test_orb_near_tie_band_reorders_with_inlier_support(tmp_path, monkeypatch):
+    """Near-identical hybrid scores: ORB inliers promote the true match."""
+    import cv2
+    from src.core.use_cases import search_tiles as st
+
+    rng = np.random.default_rng(42)
+    true_match = np.full((160, 160), 190, dtype=np.uint8)
+    for _ in range(60):
+        x0, y0 = int(rng.integers(0, 160)), int(rng.integers(0, 160))
+        x1, y1 = int(rng.integers(0, 160)), int(rng.integers(0, 160))
+        cv2.line(true_match, (x0, y0), (x1, y1), int(rng.integers(40, 160)), 2)
+
+    distractor = rng.integers(0, 255, size=(160, 160), dtype=np.uint8)
+    query = true_match.copy()
+
+    true_path = tmp_path / "true.jpg"
+    bad_path = tmp_path / "bad.jpg"
+    Image.fromarray(true_match).save(true_path)
+    Image.fromarray(distractor).save(bad_path)
+
+    tile_true = _make_tile(1, "true.jpg", str(true_path))
+    tile_bad = _make_tile(2, "bad.jpg", str(bad_path))
+
+    # Deliberately close hybrid scores within the ORB band.
+    reranked = [
+        (0.72, tile_bad, False),
+        (0.71, tile_true, False),
+        (0.50, _make_tile(3, "far.jpg", str(bad_path)), False),
+    ]
+
+    usecase = object.__new__(st.SearchTilesUseCase)
+    from src.ai.verification.orb_verifier import OrbVerifier
+
+    usecase._orb_verifier = OrbVerifier()
+    usecase._enable_orb_verification = True
+
+    updated, applied = usecase._apply_orb_verification(reranked, query)
+    assert applied >= 1
+    assert updated[0][1].id == 1
+
+
+def test_orb_skips_when_hybrid_scores_well_separated():
+    """Regression: ORB must not fire when #1 is already clearly ahead."""
+    from src.core.use_cases import search_tiles as st
+    from src.ai.verification.orb_verifier import OrbVerifier
+
+    tiles = [
+        _make_tile(1, "a.jpg", "/tmp/a.jpg"),
+        _make_tile(2, "b.jpg", "/tmp/b.jpg"),
+        _make_tile(3, "c.jpg", "/tmp/c.jpg"),
+    ]
+    reranked = [
+        (0.90, tiles[0], False),
+        (0.70, tiles[1], False),  # gap 0.20 ≫ ORB_VERIFICATION_BAND
+        (0.55, tiles[2], False),
+    ]
+
+    usecase = object.__new__(st.SearchTilesUseCase)
+    usecase._orb_verifier = OrbVerifier()
+    usecase._enable_orb_verification = True
+
+    query = np.full((64, 64), 128, dtype=np.uint8)
+    updated, applied = usecase._apply_orb_verification(reranked, query)
+    assert applied == 0
+    assert updated is reranked or [t.id for _, t, _ in updated] == [1, 2, 3]
+    assert [t.id for _, t, _ in updated] == [1, 2, 3]
+

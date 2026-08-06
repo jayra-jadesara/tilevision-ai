@@ -38,6 +38,7 @@ from src.utils.search_stages import (
     STAGE_EMBEDDING_NORMALIZED,
     STAGE_FAISS_SEARCH,
     STAGE_HEALTH_OK,
+    STAGE_ORB_VERIFICATION,
     STAGE_IMAGE_DECODED,
     STAGE_PREPROCESS_COMPLETE,
     STAGE_RERANK_COMPLETE,
@@ -95,6 +96,12 @@ _FAISS_AUX_BOOST_GAP = 0.12
 _FAISS_PARENT_SHEET_TOP_MIN = 0.88
 _QUERY_SELF_MATCH_SCORE = 0.97
 
+# ORB geometric verification — only near-ties after hybrid scoring.
+# Nudges ranking within the band; never replaces DINOv2/hybrid dominance.
+ORB_VERIFICATION_BAND = 0.03
+ORB_MAX_CANDIDATES = 5
+ORB_BOOST_MAX = 0.05
+
 
 class SearchTilesUseCase:
     """
@@ -107,6 +114,8 @@ class SearchTilesUseCase:
         feature_extractor: FeatureExtractor,
         vector_index: FaissIndexManager,
         thumbnail_dir: str,
+        *,
+        enable_orb_verification: bool = True,
     ) -> None:
         """
         Initialize the search use case.
@@ -116,13 +125,21 @@ class SearchTilesUseCase:
             embedder: CLIP model embedder wrapper.
             vector_index: FAISS index manager wrapper.
             thumbnail_dir: Folder path where thumbnails are cached.
+            enable_orb_verification: When True, apply ORB geometric
+                verification to near-tie hybrid scores (query-time only).
         """
         self._repo = image_repository
         self._feature_extractor = feature_extractor
         self._index = vector_index
         self._thumbnail_dir = Path(thumbnail_dir)
+        self._enable_orb_verification = bool(enable_orb_verification)
 
         self._reranker = HybridReRanker()
+        self._orb_verifier = None
+        if self._enable_orb_verification:
+            from src.ai.verification.orb_verifier import OrbVerifier
+
+            self._orb_verifier = OrbVerifier()
 
     def get_filter_options(self) -> Dict[str, List[str]]:
         """
@@ -657,6 +674,16 @@ class SearchTilesUseCase:
                     "Rebuild FAISS Index or re-index the catalogue folder."
                 )
 
+            if self._enable_orb_verification and self._orb_verifier is not None:
+                with timer.measure("orb_verification"):
+                    query_gray = self._resolve_query_gray(
+                        query_path, preloaded_image
+                    )
+                    reranked, orb_n = self._apply_orb_verification(
+                        reranked, query_gray
+                    )
+                stage(STAGE_ORB_VERIFICATION, f"{orb_n} candidates")
+
             reranked = self._filter_weak_results(reranked, top_k)
             stage(STAGE_WEAK_FILTER, f"kept {len(reranked)}")
 
@@ -759,6 +786,97 @@ class SearchTilesUseCase:
             if Path(tile.file_name).stem.lower() == target:
                 return tile
         return None
+
+    @staticmethod
+    def _resolve_query_gray(query_path: Path, preloaded_image) -> np.ndarray | None:
+        """Prefer in-memory PreprocessedImage.gray; otherwise decode lazily."""
+        if preloaded_image is not None:
+            gray = getattr(preloaded_image, "gray", None)
+            if gray is not None:
+                return gray
+        try:
+            pil = ImagePreprocessor.load(query_path)
+            rgb = ImagePreprocessor.to_rgb(pil)
+            import cv2
+
+            return cv2.cvtColor(np.asarray(rgb), cv2.COLOR_RGB2GRAY)
+        except Exception as exc:
+            logger.debug("Could not load query gray for ORB: %s", exc)
+            return None
+
+    @staticmethod
+    def _load_candidate_gray(file_path: str) -> np.ndarray | None:
+        try:
+            pil = ImagePreprocessor.load(Path(file_path))
+            rgb = ImagePreprocessor.to_rgb(pil)
+            import cv2
+
+            return cv2.cvtColor(np.asarray(rgb), cv2.COLOR_RGB2GRAY)
+        except Exception as exc:
+            logger.debug("Could not load candidate gray for ORB (%s): %s", file_path, exc)
+            return None
+
+    def _apply_orb_verification(
+        self,
+        reranked: List[tuple[float, TileImage, bool]],
+        query_gray: np.ndarray | None,
+    ) -> tuple[List[tuple[float, TileImage, bool]], int]:
+        """
+        Nudge near-tie hybrid scores with ORB inlier ratios.
+
+        Only candidates within ORB_VERIFICATION_BAND of #1 (capped at
+        ORB_MAX_CANDIDATES) are verified. Exact matches and candidates
+        outside the band are left unchanged.
+        """
+        if (
+            not reranked
+            or query_gray is None
+            or self._orb_verifier is None
+        ):
+            return reranked, 0
+
+        top_score = float(reranked[0][0])
+        band_idxs: list[int] = []
+        for i, (score, _tile, exact_match) in enumerate(reranked):
+            if exact_match:
+                continue
+            if top_score - float(score) > ORB_VERIFICATION_BAND:
+                break
+            band_idxs.append(i)
+            if len(band_idxs) >= ORB_MAX_CANDIDATES:
+                break
+
+        if len(band_idxs) < 2:
+            # Need at least two near-ties to make reordering meaningful.
+            return reranked, 0
+
+        updated = list(reranked)
+        applied = 0
+        for i in band_idxs:
+            score, tile, exact_match = updated[i]
+            cand_gray = self._load_candidate_gray(tile.file_path)
+            if cand_gray is None:
+                continue
+            orb_score = float(self._orb_verifier.score(query_gray, cand_gray))
+            if orb_score <= 0.0:
+                continue
+            boosted = min(1.0, float(score) + ORB_BOOST_MAX * orb_score)
+            updated[i] = (boosted, tile, exact_match)
+            applied += 1
+            logger.debug(
+                "ORB boost | %s | hybrid=%.4f orb=%.3f → final=%.4f",
+                tile.file_name,
+                score,
+                orb_score,
+                boosted,
+            )
+
+        if applied == 0:
+            return reranked, 0
+
+        # Re-sort only: exact matches keep their scores; band nudges may reorder.
+        updated.sort(key=lambda item: item[0], reverse=True)
+        return updated, applied
 
     @staticmethod
     def _filter_weak_results(
