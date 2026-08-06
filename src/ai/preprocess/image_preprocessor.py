@@ -514,8 +514,13 @@ class ImagePreprocessor:
                 "room_scene",
                 "phone_screenshot",
             } or (
+                # Rotation-expand / perspective white frames: isolate the face.
+                qanalysis.white_border_ratio >= 0.25
+                and qanalysis.kind != QueryKind.CATALOG_SHEET
+            ) or (
                 cls._looks_like_scene_photo(image)
-                and qanalysis.kind != QueryKind.CLEAN_TILE
+                and qanalysis.kind
+                not in {QueryKind.CLEAN_TILE, QueryKind.CATALOG_SHEET}
             ):
                 if qanalysis.kind.value == "phone_screenshot":
                     from src.ai.search_quality.query_views import strip_phone_ui

@@ -32,10 +32,22 @@ def _catalog_sheet():
     sheet = Image.new("RGB", (1200, 900), (255, 255, 255))
     sheet.paste(_marble(880, 500, seed=9), (20, 10))
     draw = ImageDraw.Draw(sheet)
-    draw.text((560, 40), "COLLECTION SKU", fill=(20, 20, 20))
+    # Dense text-like strokes so text_region_score matches real sheets.
+    for i, line in enumerate(
+        [
+            "COLLECTION",
+            "SKU-PGYS2319",
+            "Ceramic porcelain",
+            "600x1200mm",
+            "Indoor / Outdoor",
+            "Polished finish",
+        ]
+    ):
+        draw.text((560, 36 + i * 28), line, fill=(20, 20, 20))
     for i in range(6):
         x, y = 560 + (i % 3) * 100, 300 + (i // 3) * 160
         draw.rectangle((x, y, x + 80, y + 140), outline=(0, 0, 0), width=2)
+        draw.line((x + 5, y + 10, x + 75, y + 130), fill=(40, 40, 40), width=1)
     return sheet
 
 

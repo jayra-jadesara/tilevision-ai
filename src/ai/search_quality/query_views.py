@@ -211,11 +211,30 @@ def collect_query_crop_pils(
         if len(crops) < plan.max_views:
             crops.append(_center_crop(working, 0.55))
     else:
-        # Clean / partial: content crop only, preserve aspect.
-        content = ImagePreprocessor.crop_to_content_region(
-            working, min_margin_ratio=0.05
-        )
-        crops.append(content)
+        # Clean / partial. Rotation-expand and perspective fills create large
+        # white corners (white_border_ratio ≫ 0) — aggressive content crop
+        # alone regressed Recall@5 by ~30pp on ±10° rotations. Prefer
+        # OpenCV isolation of the face inside the white frame (same idea as
+        # the v1.2.31 looks_like_scene path), fall back to content crop.
+        from src.ai.search_quality.query_analyzer import QueryKind as _QK
+
+        high_frame = analysis.white_border_ratio >= 0.25
+        if high_frame or (
+            analysis.kind in {_QK.UNKNOWN, _QK.PARTIAL_CROP}
+            and ImagePreprocessor._looks_like_scene_photo(working)
+        ):
+            iso = isolate_tile_region(working)
+            crops.append(iso.image)
+            if plan.max_views >= 2:
+                content = ImagePreprocessor.crop_to_content_region(
+                    working, min_margin_ratio=0.05
+                )
+                crops.append(content)
+        else:
+            content = ImagePreprocessor.crop_to_content_region(
+                working, min_margin_ratio=0.05
+            )
+            crops.append(content)
 
     # Deduplicate near-identical sizes / boxes
     unique: list[Image.Image] = []

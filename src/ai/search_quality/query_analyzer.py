@@ -123,22 +123,29 @@ def _is_catalog_sheet(
     white_border: float,
     text_score: float,
     band_delta: float,
+    has_preview_grid: bool,
 ) -> bool:
     """
-    True catalogue marketing sheets — NOT wide room photos.
+    True catalogue marketing sheets — NOT wide room photos and NOT
+    rotation/brightness frames that merely inflate white_border_ratio.
 
     Measured (320-tile study):
-      sheet: border≈0.41, text≈0.11, band_delta≈10
+      sheet: border≈0.41, text≈0.11, band_delta≈10, aspect≈1.33
       room:  border≈0.00, text≈0.03, band_delta≈98
-    Grid Hough alone is rejected (rooms produce many line segments).
+      rotation expand-fill: border≈0.76 but aspect≈1.0 (not a sheet)
     """
     if width < 480 or height < 320 or aspect < 1.12:
         return False
-    # Strong white margins are the most reliable sheet signal.
-    if white_border >= 0.15 and band_delta < 40.0:
+    if band_delta >= 40.0:
+        return False
+    # Prefer text/grid + white margin. White margins alone are not enough —
+    # bright ceramic faces and rotate-expand fill inflate border on squares
+    # (aspect gate already excludes those).
+    if text_score >= 0.10 and white_border >= 0.08:
         return True
-    # Text column + some margin, still flat page (low ceiling/floor delta).
-    if text_score >= 0.10 and white_border >= 0.05 and band_delta < 35.0:
+    if has_preview_grid and white_border >= 0.20:
+        return True
+    if white_border >= 0.30 and text_score >= 0.08:
         return True
     return False
 
@@ -178,6 +185,7 @@ def analyze_query(image: Image.Image) -> QueryAnalysis:
         white_border=catalog.white_border_ratio,
         text_score=catalog.text_region_score,
         band_delta=band_delta,
+        has_preview_grid=bool(catalog.has_preview_grid),
     )
     is_phone = ui and (aspect < 0.85 or height >= 1000)
 
