@@ -85,8 +85,8 @@ _WEAK_RESULT_ABSOLUTE_RAW_FLOOR = 0.38
 # high, treat it as the same catalog tile (100% match).
 _CROP_SOURCE_EMBEDDING_THRESHOLD = 0.78
 # When crop lineage is known from the temp filename (auto/precise/manual crop),
-# a lower bar is enough — the user explicitly cropped from that catalog file.
-_CROP_LINEAGE_EMBEDDING_THRESHOLD = 0.35
+# the source catalog tile is always promoted — embedding gaps on marketing
+# sheets can fall well below 0.35 even for a correct manual crop.
 
 # When FAISS retrieves a tile via an aux texture-panel vector, FlatIP cosine
 # can be ≫ hybrid.embedding (which always uses the layout-heavy primary).
@@ -540,6 +540,14 @@ class SearchTilesUseCase:
                         "Crop search linked to catalog tile: %s",
                         catalog_source_tile.file_name,
                     )
+                    if catalog_source_tile.features is not None:
+                        present = {t.id for t in candidates if t.id is not None}
+                        if catalog_source_tile.id not in present:
+                            candidates.append(catalog_source_tile)
+                            logger.info(
+                                "Injected crop source tile into candidates: %s",
+                                catalog_source_tile.file_name,
+                            )
 
             reranked = []
             query_resolved = str(query_path.resolve())
@@ -624,15 +632,14 @@ class SearchTilesUseCase:
                         if lineage_sim >= _CROP_SOURCE_EMBEDDING_THRESHOLD:
                             exact_match = True
                             final_score = 1.0
-                        elif lineage_sim >= _CROP_LINEAGE_EMBEDDING_THRESHOLD:
+                        else:
+                            # Filename lineage: user cropped from this catalog file.
                             final_score = _QUERY_SELF_MATCH_SCORE
                             logger.info(
-                                "Crop lineage boost | %s | lineage=%.3f",
+                                "Crop lineage boost | %s | lineage=%.3f (forced)",
                                 tile.file_name,
                                 lineage_sim,
                             )
-                        else:
-                            final_score = float(hybrid.final)
                     elif exact_match and same_query_file:
                         # Keep self-hit visible, but below a parent-sheet aux hit.
                         final_score = _QUERY_SELF_MATCH_SCORE

@@ -36,6 +36,24 @@ def test_resolve_crop_source_stem_from_precise_file():
     assert SearchTilesUseCase._resolve_crop_source_stem(path) == "xx.jpg"
 
 
+def test_resolve_crop_source_stem_from_pgys_catalog_crop():
+    """PGYS2319 marketing sheet manual crop (customer report)."""
+    path = Path(
+        r"C:\Users\HP\AppData\Local\Temp\tilevision_crops"
+        r"\crop_PGYS2319.jpg_1887012845248.jpg"
+    )
+    assert SearchTilesUseCase._resolve_crop_source_stem(path) == "pgys2319.jpg"
+
+
+def test_crop_lineage_self_match_score_displays_high_confidence():
+    """Forced lineage uses _QUERY_SELF_MATCH_SCORE when embedding gap is large."""
+    from src.ai.similarity_score import calibrate_display_percent
+    from src.core.use_cases import search_tiles as st
+
+    display = calibrate_display_percent(st._QUERY_SELF_MATCH_SCORE, exact_match=False)
+    assert display >= 95.0
+
+
 def test_filter_weak_results_drops_low_scores():
     tiles = [
         TileImage(
