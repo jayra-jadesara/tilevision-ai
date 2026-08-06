@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable, Sequence
 
+import numpy as np
+
 
 class FusionMethod(str, Enum):
     MAX = "max"
@@ -18,6 +20,7 @@ class FusionMethod(str, Enum):
     AVERAGE = "average"
     WEIGHTED_AVERAGE = "weighted_average"
     RRF = "rrf"
+    SOFTMAX = "softmax"
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +88,19 @@ def fuse_hits(
         for h in hits:
             scores[h.tile_id] += 1.0 / (rrf_k + max(1, int(h.rank_in_list)))
         return sorted(scores.items(), key=lambda x: x[1], reverse=True)
+
+    if method == FusionMethod.SOFTMAX:
+        # Soft-max / log-sum-exp per tile (numerically stable). Does not reward
+        # tiles merely for having more vectors the way raw sum(exp) would.
+        by_tile: dict[int, list[float]] = defaultdict(list)
+        for h in hits:
+            by_tile[h.tile_id].append(float(h.score) * max(0.05, float(h.view_weight)))
+        fused: dict[int, float] = {}
+        for tid, vals in by_tile.items():
+            arr = np.asarray(vals, dtype=np.float64)
+            m = float(arr.max())
+            fused[tid] = float(m + np.log(np.exp(arr - m).sum()))
+        return sorted(fused.items(), key=lambda x: x[1], reverse=True)
 
     raise ValueError(f"Unknown fusion method: {method}")
 

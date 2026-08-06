@@ -352,9 +352,10 @@ class FeatureExtractor:
         """
         Index-time extract: primary TileFeatures plus optional aux FAISS vectors.
 
-        View selection follows Strategy E (golden-dataset bakeoff winner):
-        heuristic image analysis decides whether a texture panel and/or center
-        crop add retrieval coverage. Near-duplicate aux vectors are dropped.
+        View selection follows Strategy E + force adaptive (v1.2.31 /
+        feature_v10): heuristic image analysis gates panel/center crops, and
+        an adaptive content crop is always attempted. Near-duplicate aux
+        vectors are dropped.
         """
         from src.ai.search_quality.image_analysis import analyze_image
         from src.ai.search_quality.views import (
@@ -415,22 +416,54 @@ class FeatureExtractor:
         preloaded: Image.Image | None = None,
     ) -> tuple[TileFeatures, list[np.ndarray]]:
         """
-        Query-only: one preprocess + one DINOv2 vector (reliable on Mac CPU).
+        Query-only adaptive extract (index unchanged).
 
-        Multi-crop OpenCV recall is available via Auto Crop / Precise Crop.
-        Drop-search must stay single-pass so results always return.
+        Room / phone queries: isolate + capped multi-crop (Query Analyzer).
+        All other queries: classic ``preprocess_for_query`` single embedding
+        (v1.2.31 path) with the fixed catalogue-sheet gate so room photos are
+        no longer mistaken for marketing sheets.
 
-        Pass ``preloaded`` so the search use-case can decode the query once
-        and reuse it for dHash + embedding.
+        FAISS merges crops by MAX per tile_id in SearchTilesUseCase.
         """
         total_start = time.perf_counter()
         t0 = time.perf_counter()
-        # Always one view — never stack multi-crop DINOv2 on the drop path.
-        views = ImagePreprocessor.prepare_query_views(
-            image_path,
-            max_views=1,
-            preloaded=preloaded,
+        path = Path(image_path)
+        image = ImagePreprocessor.to_rgb(
+            preloaded if preloaded is not None else ImagePreprocessor.load(path)
         )
+
+        from src.ai.search_quality.query_analyzer import QueryKind, analyze_query
+        from src.ai.search_quality.query_views import collect_query_crop_pils
+
+        analysis = analyze_query(image)
+        use_multi = (
+            analysis.kind in {QueryKind.ROOM_SCENE, QueryKind.PHONE_SCREENSHOT}
+            and "tilevision_crops" not in path.as_posix().lower()
+        )
+
+        if use_multi:
+            max_cap = ImagePreprocessor._capped_query_max_views(3)
+            _, crop_pils = collect_query_crop_pils(
+                image, analysis=analysis, max_views_cap=max_cap
+            )
+            original_width, original_height = image.size
+            views = [
+                ImagePreprocessor._finalize_query_pil(
+                    crop,
+                    original_width=original_width,
+                    original_height=original_height,
+                )
+                for crop in crop_pils
+            ]
+        else:
+            # Preserve v1.2.31 single-pass behavior for clean/partial/catalogue
+            # (rotation, crops, originals). Only the sheet-vs-room gate changed.
+            views = ImagePreprocessor.prepare_query_views(
+                path,
+                max_views=1,
+                preloaded=image,
+            )
+
         preprocess_elapsed = time.perf_counter() - t0
 
         embeddings: list[np.ndarray] = []
@@ -444,17 +477,22 @@ class FeatureExtractor:
             dinov2_elapsed += time.perf_counter() - t1
             embeddings.append(emb)
 
-        features = self._fuse_query_embeddings(views[0], embeddings, dinov2_elapsed)
+        features = self._fuse_query_embeddings(
+            views[0], [embeddings[0]], dinov2_elapsed
+        )
         self._last_timings = ExtractTimings(
             preprocessing=preprocess_elapsed,
-            dinov2=self._last_timings.dinov2,
+            dinov2=dinov2_elapsed,
             descriptors=self._last_timings.descriptors,
             total=time.perf_counter() - total_start,
         )
         logger.info(
-            "Search extract (single-pass): preprocess=%.2fs dinov2=%.2fs total=%.2fs",
+            "Search extract (adaptive query): kind=%s views=%d "
+            "preprocess=%.2fs dinov2=%.2fs total=%.2fs",
+            analysis.kind.value,
+            len(embeddings),
             preprocess_elapsed,
-            self._last_timings.dinov2,
+            dinov2_elapsed,
             self._last_timings.total,
         )
         return features, embeddings

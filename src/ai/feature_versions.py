@@ -17,7 +17,9 @@ from dataclasses import dataclass
 #     catalog marketing sheets (index/query preprocess alignment); rebuild.
 # v9: Strategy E heuristic multi-view indexer (image analysis gates panel /
 #     center aux). Golden bakeoff winner vs primary-only; rebuild required.
-CURRENT_FEATURE_VERSION = 9
+# v10: Strategy E + force adaptive content crop (320-tile optimization study:
+#      +1.57pp R@5 / +1.19pp R@1 vs E at +0.13 vectors/tile); rebuild required.
+CURRENT_FEATURE_VERSION = 10
 
 # Bump when pattern descriptor layout or algorithm changes.
 CURRENT_PATTERN_FEATURE_VERSION = 3

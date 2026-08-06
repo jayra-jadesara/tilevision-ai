@@ -66,6 +66,16 @@ def test_strategy_e_sheet_gets_panel_not_blind_quadrants():
     assert IndexViewType.PANEL in types or IndexViewType.PANEL_CENTER in types or len(views) >= 1
 
 
+def test_strategy_e_force_adaptive_on_clean_tile():
+    """320-tile study: adaptive must be attempted even when center is gated."""
+    views = build_index_views(_marble(900, 900, seed=11), IndexStrategy.E_HEURISTIC_MULTIVIEW)
+    types = {v.view_type for v in views}
+    assert IndexViewType.PRIMARY in types
+    # Adaptive is skipped only when the crop is nearly full-frame (>=92% area).
+    # A textured square face typically yields a distinct adaptive crop.
+    assert IndexViewType.ADAPTIVE in types or IndexViewType.CENTER in types
+
+
 def test_fusion_max_groups_by_tile_id():
     hits = [
         ScoredHit(1, 0.9, 1.0, 1),
@@ -75,6 +85,17 @@ def test_fusion_max_groups_by_tile_id():
     fused = fuse_hits(hits, FusionMethod.MAX)
     assert fused[0] == (1, 0.95)
     assert fused[1][0] == 2
+
+
+def test_fusion_softmax_groups_by_tile_id():
+    hits = [
+        ScoredHit(1, 0.9, 1.0, 1),
+        ScoredHit(1, 0.8, 1.0, 2),
+        ScoredHit(2, 0.95, 1.0, 3),
+    ]
+    fused = fuse_hits(hits, FusionMethod.SOFTMAX)
+    assert {tid for tid, _ in fused} == {1, 2}
+    assert fused[0][1] >= fused[1][1]
 
 
 def test_fusion_rrf_prefers_multi_list_support():

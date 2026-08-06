@@ -220,18 +220,27 @@ def build_index_views(
                 add(IndexViewType.CENTER, image.crop(box), box, conf)
                 if len(views) > before:
                     break
-        elif analysis.kind.value == "bordered_tile":
-            crop, box = _adaptive_content_crop(image)
-            add(IndexViewType.ADAPTIVE, crop, box, 0.75)
-            # If borders were trimmed, still add a center texture view when
-            # the face is large and textured (customer 600×600 crops).
-            if analysis.texture_richness >= 0.15 and min(image.size) >= 400:
-                for ratio, conf in ((0.50, 0.80), (0.40, 0.75)):
-                    cbox = _center_box(image, ratio)
-                    before = len(views)
-                    add(IndexViewType.CENTER, image.crop(cbox), cbox, conf)
-                    if len(views) > before:
-                        break
+        elif (
+            analysis.kind.value == "bordered_tile"
+            and analysis.texture_richness >= 0.15
+            and min(image.size) >= 400
+        ):
+            # Bordered face: keep a center texture view for 600×600-style crops.
+            for ratio, conf in ((0.50, 0.80), (0.40, 0.75)):
+                cbox = _center_box(image, ratio)
+                before = len(views)
+                add(IndexViewType.CENTER, image.crop(cbox), cbox, conf)
+                if len(views) > before:
+                    break
+
+        # Always attempt an adaptive content crop when it differs enough from
+        # the full frame. 320-tile optimization study (2026-08): E+force_adaptive
+        # gained +1.57pp Recall@5 / +1.19pp Recall@1 vs Strategy E at only
+        # +0.13 vectors/tile. Always-on texture was rejected (alone <1pp R@5
+        # and expensive in combination). Near-dup aux vectors are still dropped
+        # downstream in FeatureExtractor._maybe_append_aux.
+        crop, box = _adaptive_content_crop(image)
+        add(IndexViewType.ADAPTIVE, crop, box, 0.75)
         return views
 
     if strategy == IndexStrategy.PRODUCTION_V8:
