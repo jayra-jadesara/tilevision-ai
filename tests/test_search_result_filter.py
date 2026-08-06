@@ -20,6 +20,22 @@ def test_resolve_crop_source_stem_from_temp_file():
     )
 
 
+def test_resolve_crop_source_stem_from_autocrop_file():
+    path = Path(
+        r"C:\Users\HP\AppData\Local\Temp\tilevision_crops"
+        r"\autocrop_xx.jpg_1886531936448.jpg"
+    )
+    assert SearchTilesUseCase._resolve_crop_source_stem(path) == "xx.jpg"
+
+
+def test_resolve_crop_source_stem_from_precise_file():
+    path = Path(
+        r"C:\Users\HP\AppData\Local\Temp\tilevision_crops"
+        r"\precise_xx.jpg_1887012676096.jpg"
+    )
+    assert SearchTilesUseCase._resolve_crop_source_stem(path) == "xx.jpg"
+
+
 def test_filter_weak_results_drops_low_scores():
     tiles = [
         TileImage(
