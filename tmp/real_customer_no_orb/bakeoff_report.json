@@ -1,0 +1,905 @@
+{
+  "goal": "production Recall@1 / Recall@5 on golden auto-labeled queries",
+  "catalog_size": 3,
+  "n_queries": 3,
+  "catalog_source": "real_customer",
+  "orb_verification": false,
+  "variants": [
+    "original",
+    "crop_95",
+    "crop_90",
+    "crop_75",
+    "crop_60",
+    "crop_50",
+    "center",
+    "random_crop",
+    "corner",
+    "rotated",
+    "brightness",
+    "contrast",
+    "jpeg30",
+    "phone_screenshot",
+    "catalogue_page",
+    "room_scene"
+  ],
+  "embedding_drift_sample": {
+    "tile_1": {
+      "analysis": {
+        "kind": "bordered_tile",
+        "left_panel_beneficial": false,
+        "center_crop_beneficial": true,
+        "texture_richness": 0.869
+      }
+    }
+  },
+  "strategies": {
+    "A_primary_only": {
+      "n_queries": 3,
+      "recall@1": 1.0,
+      "recall@5": 1.0,
+      "recall@10": 1.0,
+      "mrr": 1.0,
+      "ndcg@5": 1.0,
+      "index_vectors": 3,
+      "mean_views_per_tile": 1.0,
+      "latency": {
+        "embed_s": 4.4903,
+        "faiss_s": 0.00152,
+        "fuse_s": 2e-05,
+        "rerank_ms": 0.001,
+        "total_s": 4.4919
+      },
+      "stage_fail": {
+        "faiss_miss_100": 0,
+        "in100_not_top5": 0,
+        "in5_not_top1": 0
+      },
+      "by_variant": {
+        "catalogue_page": {
+          "n": 1,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "original": {
+          "n": 2,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "index_build_s": 20.5,
+      "catalog_source": "real_customer",
+      "by_query_kind": {
+        "catalogue_page": {
+          "n": 1,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "original": {
+          "n": 2,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "customer_path": {
+        "n_queries": 3,
+        "recall@1": 1.0,
+        "recall@5": 1.0
+      },
+      "memory_proxy": {
+        "vectors": 3,
+        "bytes_approx": 12288,
+        "vs_primary_only_ratio": 1.0,
+        "projected_50k_vectors": 50000,
+        "projected_50k_mb": 195.3
+      }
+    },
+    "B_full_center": {
+      "n_queries": 3,
+      "recall@1": 1.0,
+      "recall@5": 1.0,
+      "recall@10": 1.0,
+      "mrr": 1.0,
+      "ndcg@5": 1.0,
+      "index_vectors": 6,
+      "mean_views_per_tile": 2.0,
+      "latency": {
+        "embed_s": 4.5511,
+        "faiss_s": 0.00146,
+        "fuse_s": 2e-05,
+        "rerank_ms": 0.001,
+        "total_s": 4.5526
+      },
+      "stage_fail": {
+        "faiss_miss_100": 0,
+        "in100_not_top5": 0,
+        "in5_not_top1": 0
+      },
+      "by_variant": {
+        "catalogue_page": {
+          "n": 1,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "original": {
+          "n": 2,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "index_build_s": 39.1,
+      "catalog_source": "real_customer",
+      "by_query_kind": {
+        "catalogue_page": {
+          "n": 1,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "original": {
+          "n": 2,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "customer_path": {
+        "n_queries": 3,
+        "recall@1": 1.0,
+        "recall@5": 1.0
+      },
+      "memory_proxy": {
+        "vectors": 6,
+        "bytes_approx": 24576,
+        "vs_primary_only_ratio": 2.0,
+        "projected_50k_vectors": 100000,
+        "projected_50k_mb": 390.6
+      }
+    },
+    "C_full_adaptive": {
+      "n_queries": 3,
+      "recall@1": 1.0,
+      "recall@5": 1.0,
+      "recall@10": 1.0,
+      "mrr": 1.0,
+      "ndcg@5": 1.0,
+      "index_vectors": 3,
+      "mean_views_per_tile": 1.0,
+      "latency": {
+        "embed_s": 4.4349,
+        "faiss_s": 0.00133,
+        "fuse_s": 2e-05,
+        "rerank_ms": 0.001,
+        "total_s": 4.4363
+      },
+      "stage_fail": {
+        "faiss_miss_100": 0,
+        "in100_not_top5": 0,
+        "in5_not_top1": 0
+      },
+      "by_variant": {
+        "catalogue_page": {
+          "n": 1,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "original": {
+          "n": 2,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "index_build_s": 36.52,
+      "catalog_source": "real_customer",
+      "by_query_kind": {
+        "catalogue_page": {
+          "n": 1,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "original": {
+          "n": 2,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "customer_path": {
+        "n_queries": 3,
+        "recall@1": 1.0,
+        "recall@5": 1.0
+      },
+      "memory_proxy": {
+        "vectors": 3,
+        "bytes_approx": 12288,
+        "vs_primary_only_ratio": 1.0,
+        "projected_50k_vectors": 50000,
+        "projected_50k_mb": 195.3
+      }
+    },
+    "D_full_texture": {
+      "n_queries": 3,
+      "recall@1": 1.0,
+      "recall@5": 1.0,
+      "recall@10": 1.0,
+      "mrr": 1.0,
+      "ndcg@5": 1.0,
+      "index_vectors": 6,
+      "mean_views_per_tile": 2.0,
+      "latency": {
+        "embed_s": 4.332,
+        "faiss_s": 0.00143,
+        "fuse_s": 2e-05,
+        "rerank_ms": 0.001,
+        "total_s": 4.3334
+      },
+      "stage_fail": {
+        "faiss_miss_100": 0,
+        "in100_not_top5": 0,
+        "in5_not_top1": 0
+      },
+      "by_variant": {
+        "catalogue_page": {
+          "n": 1,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "original": {
+          "n": 2,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "index_build_s": 37.56,
+      "catalog_source": "real_customer",
+      "by_query_kind": {
+        "catalogue_page": {
+          "n": 1,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "original": {
+          "n": 2,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "customer_path": {
+        "n_queries": 3,
+        "recall@1": 1.0,
+        "recall@5": 1.0
+      },
+      "memory_proxy": {
+        "vectors": 6,
+        "bytes_approx": 24576,
+        "vs_primary_only_ratio": 2.0,
+        "projected_50k_vectors": 100000,
+        "projected_50k_mb": 390.6
+      }
+    },
+    "E_heuristic_multiview": {
+      "n_queries": 3,
+      "recall@1": 1.0,
+      "recall@5": 1.0,
+      "recall@10": 1.0,
+      "mrr": 1.0,
+      "ndcg@5": 1.0,
+      "index_vectors": 6,
+      "mean_views_per_tile": 2.0,
+      "latency": {
+        "embed_s": 4.3326,
+        "faiss_s": 0.00138,
+        "fuse_s": 2e-05,
+        "rerank_ms": 0.0,
+        "total_s": 4.334
+      },
+      "stage_fail": {
+        "faiss_miss_100": 0,
+        "in100_not_top5": 0,
+        "in5_not_top1": 0
+      },
+      "by_variant": {
+        "catalogue_page": {
+          "n": 1,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "original": {
+          "n": 2,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "index_build_s": 57.62,
+      "catalog_source": "real_customer",
+      "by_query_kind": {
+        "catalogue_page": {
+          "n": 1,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "original": {
+          "n": 2,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "customer_path": {
+        "n_queries": 3,
+        "recall@1": 1.0,
+        "recall@5": 1.0
+      },
+      "memory_proxy": {
+        "vectors": 6,
+        "bytes_approx": 24576,
+        "vs_primary_only_ratio": 2.0,
+        "projected_50k_vectors": 100000,
+        "projected_50k_mb": 390.6
+      }
+    },
+    "production_v8": {
+      "n_queries": 3,
+      "recall@1": 1.0,
+      "recall@5": 1.0,
+      "recall@10": 1.0,
+      "mrr": 1.0,
+      "ndcg@5": 1.0,
+      "index_vectors": 6,
+      "mean_views_per_tile": 2.0,
+      "latency": {
+        "embed_s": 4.4514,
+        "faiss_s": 0.00145,
+        "fuse_s": 2e-05,
+        "rerank_ms": 0.001,
+        "total_s": 4.4529
+      },
+      "stage_fail": {
+        "faiss_miss_100": 0,
+        "in100_not_top5": 0,
+        "in5_not_top1": 0
+      },
+      "by_variant": {
+        "catalogue_page": {
+          "n": 1,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "original": {
+          "n": 2,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "index_build_s": 40.31,
+      "catalog_source": "real_customer",
+      "by_query_kind": {
+        "catalogue_page": {
+          "n": 1,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "original": {
+          "n": 2,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "customer_path": {
+        "n_queries": 3,
+        "recall@1": 1.0,
+        "recall@5": 1.0
+      },
+      "memory_proxy": {
+        "vectors": 6,
+        "bytes_approx": 24576,
+        "vs_primary_only_ratio": 2.0,
+        "projected_50k_vectors": 100000,
+        "projected_50k_mb": 390.6
+      }
+    }
+  },
+  "winning_strategy": "A_primary_only",
+  "fusion": {
+    "max": {
+      "n_queries": 3,
+      "recall@1": 1.0,
+      "recall@5": 1.0,
+      "recall@10": 1.0,
+      "mrr": 1.0,
+      "ndcg@5": 1.0,
+      "index_vectors": 3,
+      "mean_views_per_tile": 1.0,
+      "latency": {
+        "embed_s": 4.4602,
+        "faiss_s": 0.00142,
+        "fuse_s": 2e-05,
+        "rerank_ms": 0.0,
+        "total_s": 4.4616
+      },
+      "stage_fail": {
+        "faiss_miss_100": 0,
+        "in100_not_top5": 0,
+        "in5_not_top1": 0
+      },
+      "by_variant": {
+        "catalogue_page": {
+          "n": 1,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "original": {
+          "n": 2,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "catalog_source": "real_customer",
+      "by_query_kind": {
+        "catalogue_page": {
+          "n": 1,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "original": {
+          "n": 2,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "customer_path": {
+        "n_queries": 3,
+        "recall@1": 1.0,
+        "recall@5": 1.0
+      }
+    },
+    "weighted_max": {
+      "n_queries": 3,
+      "recall@1": 1.0,
+      "recall@5": 1.0,
+      "recall@10": 1.0,
+      "mrr": 1.0,
+      "ndcg@5": 1.0,
+      "index_vectors": 3,
+      "mean_views_per_tile": 1.0,
+      "latency": {
+        "embed_s": 4.4546,
+        "faiss_s": 0.00142,
+        "fuse_s": 3e-05,
+        "rerank_ms": 0.001,
+        "total_s": 4.456
+      },
+      "stage_fail": {
+        "faiss_miss_100": 0,
+        "in100_not_top5": 0,
+        "in5_not_top1": 0
+      },
+      "by_variant": {
+        "catalogue_page": {
+          "n": 1,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "original": {
+          "n": 2,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "catalog_source": "real_customer",
+      "by_query_kind": {
+        "catalogue_page": {
+          "n": 1,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "original": {
+          "n": 2,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "customer_path": {
+        "n_queries": 3,
+        "recall@1": 1.0,
+        "recall@5": 1.0
+      }
+    },
+    "average": {
+      "n_queries": 3,
+      "recall@1": 1.0,
+      "recall@5": 1.0,
+      "recall@10": 1.0,
+      "mrr": 1.0,
+      "ndcg@5": 1.0,
+      "index_vectors": 3,
+      "mean_views_per_tile": 1.0,
+      "latency": {
+        "embed_s": 4.434,
+        "faiss_s": 0.00143,
+        "fuse_s": 5e-05,
+        "rerank_ms": 0.002,
+        "total_s": 4.4355
+      },
+      "stage_fail": {
+        "faiss_miss_100": 0,
+        "in100_not_top5": 0,
+        "in5_not_top1": 0
+      },
+      "by_variant": {
+        "catalogue_page": {
+          "n": 1,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "original": {
+          "n": 2,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "catalog_source": "real_customer",
+      "by_query_kind": {
+        "catalogue_page": {
+          "n": 1,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "original": {
+          "n": 2,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "customer_path": {
+        "n_queries": 3,
+        "recall@1": 1.0,
+        "recall@5": 1.0
+      }
+    },
+    "weighted_average": {
+      "n_queries": 3,
+      "recall@1": 1.0,
+      "recall@5": 1.0,
+      "recall@10": 1.0,
+      "mrr": 1.0,
+      "ndcg@5": 1.0,
+      "index_vectors": 3,
+      "mean_views_per_tile": 1.0,
+      "latency": {
+        "embed_s": 25.4294,
+        "faiss_s": 0.00136,
+        "fuse_s": 4e-05,
+        "rerank_ms": 0.0,
+        "total_s": 25.4308
+      },
+      "stage_fail": {
+        "faiss_miss_100": 0,
+        "in100_not_top5": 0,
+        "in5_not_top1": 0
+      },
+      "by_variant": {
+        "catalogue_page": {
+          "n": 1,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "original": {
+          "n": 2,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "catalog_source": "real_customer",
+      "by_query_kind": {
+        "catalogue_page": {
+          "n": 1,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "original": {
+          "n": 2,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "customer_path": {
+        "n_queries": 3,
+        "recall@1": 1.0,
+        "recall@5": 1.0
+      }
+    },
+    "rrf": {
+      "n_queries": 3,
+      "recall@1": 1.0,
+      "recall@5": 1.0,
+      "recall@10": 1.0,
+      "mrr": 1.0,
+      "ndcg@5": 1.0,
+      "index_vectors": 3,
+      "mean_views_per_tile": 1.0,
+      "latency": {
+        "embed_s": 5.5413,
+        "faiss_s": 0.00165,
+        "fuse_s": 5e-05,
+        "rerank_ms": 0.001,
+        "total_s": 5.543
+      },
+      "stage_fail": {
+        "faiss_miss_100": 0,
+        "in100_not_top5": 0,
+        "in5_not_top1": 0
+      },
+      "by_variant": {
+        "catalogue_page": {
+          "n": 1,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "original": {
+          "n": 2,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "catalog_source": "real_customer",
+      "by_query_kind": {
+        "catalogue_page": {
+          "n": 1,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "original": {
+          "n": 2,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "customer_path": {
+        "n_queries": 3,
+        "recall@1": 1.0,
+        "recall@5": 1.0
+      }
+    },
+    "softmax": {
+      "n_queries": 3,
+      "recall@1": 1.0,
+      "recall@5": 1.0,
+      "recall@10": 1.0,
+      "mrr": 1.0,
+      "ndcg@5": 1.0,
+      "index_vectors": 3,
+      "mean_views_per_tile": 1.0,
+      "latency": {
+        "embed_s": 4.516,
+        "faiss_s": 0.00149,
+        "fuse_s": 0.00018,
+        "rerank_ms": 0.0,
+        "total_s": 4.5177
+      },
+      "stage_fail": {
+        "faiss_miss_100": 0,
+        "in100_not_top5": 0,
+        "in5_not_top1": 0
+      },
+      "by_variant": {
+        "catalogue_page": {
+          "n": 1,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "original": {
+          "n": 2,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "catalog_source": "real_customer",
+      "by_query_kind": {
+        "catalogue_page": {
+          "n": 1,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "original": {
+          "n": 2,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "customer_path": {
+        "n_queries": 3,
+        "recall@1": 1.0,
+        "recall@5": 1.0
+      }
+    },
+    "weighted_max_tuned": {
+      "aux_weight": 0.7,
+      "val_recall@1": 1.0
+    },
+    "weighted_max_tuned_full": {
+      "n_queries": 3,
+      "recall@1": 1.0,
+      "recall@5": 1.0,
+      "recall@10": 1.0,
+      "mrr": 1.0,
+      "ndcg@5": 1.0,
+      "index_vectors": 3,
+      "mean_views_per_tile": 0.0,
+      "latency": {
+        "embed_s": 4.4093,
+        "faiss_s": 0.00137,
+        "fuse_s": 2e-05,
+        "rerank_ms": 0.001,
+        "total_s": 4.4107
+      },
+      "stage_fail": {
+        "faiss_miss_100": 0,
+        "in100_not_top5": 0,
+        "in5_not_top1": 0
+      },
+      "by_variant": {
+        "catalogue_page": {
+          "n": 1,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "original": {
+          "n": 2,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "catalog_source": "real_customer",
+      "by_query_kind": {
+        "catalogue_page": {
+          "n": 1,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        },
+        "original": {
+          "n": 2,
+          "recall@1": 1.0,
+          "recall@5": 1.0,
+          "recall@10": 1.0,
+          "mrr": 1.0
+        }
+      },
+      "customer_path": {
+        "n_queries": 3,
+        "recall@1": 1.0,
+        "recall@5": 1.0
+      },
+      "aux_weight": 0.7
+    }
+  },
+  "winning_fusion": "max",
+  "delta_vs_primary_only": {
+    "recall@1": 0.0,
+    "recall@5": 0.0,
+    "customer_recall@1": 0.0,
+    "customer_recall@5": 0.0,
+    "vector_ratio": 1.0
+  },
+  "reject_if_customer_r1_regresses": false,
+  "acceptance": {
+    "customer_path_r5": 1.0,
+    "customer_path_r1": 1.0,
+    "beats_primary_r5": true,
+    "beats_primary_r1": true
+  },
+  "by_query_kind": {
+    "catalogue_page": {
+      "n": 1,
+      "recall@1": 1.0,
+      "recall@5": 1.0,
+      "recall@10": 1.0,
+      "mrr": 1.0
+    },
+    "original": {
+      "n": 2,
+      "recall@1": 1.0,
+      "recall@5": 1.0,
+      "recall@10": 1.0,
+      "mrr": 1.0
+    }
+  },
+  "low_sample_warning": "WARNING: only 3 real-customer queries \u2014 Recall@1/@5 and MRR are low-confidence below ~30 samples. Do not treat these as headline production numbers."
+}
