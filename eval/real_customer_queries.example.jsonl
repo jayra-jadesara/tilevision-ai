@@ -1,0 +1,13 @@
+# Real-customer bakeoff manifest (schema example — replace with your labels).
+# Compatible with eval/queries.example.jsonl field names.
+# Paths are relative to this file (or absolute).
+# Do NOT commit photos under eval/real_queries/ (gitignored).
+#
+#   python3 dev_tools/search_quality/run_bakeoff.py \
+#     --real-queries eval/real_customer_queries.example.jsonl \
+#     --out /tmp/real_customer_bakeoff \
+#     --orb-verification on
+#
+{"query_path": "real_queries/whatsapp_001.jpg", "relevant_ids": [1], "query_kind": "whatsapp", "catalog_path": "real_catalog/tile_0001.jpg"}
+{"query_path": "real_queries/crop_600x600_014.jpg", "true_tile_id": 2, "query_kind": "crop_600x600", "catalog_path": "real_catalog/tile_0002.jpg"}
+{"query_path": "real_queries/room_photo_003.jpg", "relevant_ids": [3], "query_kind": "room_photo", "catalog_path": "real_catalog/tile_0003.jpg"}

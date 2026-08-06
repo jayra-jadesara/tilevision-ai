@@ -44,6 +44,17 @@ from dev_tools.search_quality.golden_dataset import (
     GoldenQuery,
     build_golden_catalog,
 )
+from dev_tools.search_quality.real_customer import (
+    CATALOG_SOURCE_REAL,
+    CATALOG_SOURCE_SYNTHETIC,
+    catalog_items_from_records,
+    format_query_kind_table,
+    load_real_customer_manifest,
+    low_sample_warning,
+    query_kind_breakdown,
+    records_to_golden_queries,
+    validate_ground_truth_ids,
+)
 
 
 def _cos(a: np.ndarray, b: np.ndarray) -> float:
@@ -377,6 +388,14 @@ def customer_slice(d: dict) -> dict:
         n += stats["n"]
         r1 += int(round(stats["recall@1"] * stats["n"]))
         r5 += int(round(stats["recall@5"] * stats["n"]))
+    # Real-customer manifests use free-text query_kind tags (whatsapp, …)
+    # that are not in CUSTOMER_VARIANTS — fall back to overall metrics.
+    if n == 0 and d.get("catalog_source") == CATALOG_SOURCE_REAL:
+        return {
+            "n_queries": d.get("n_queries", 0),
+            "recall@1": d.get("recall@1", 0.0),
+            "recall@5": d.get("recall@5", 0.0),
+        }
     return {
         "n_queries": n,
         "recall@1": round(r1 / max(1, n), 4),
@@ -431,19 +450,56 @@ def run(
     n_sheets: int,
     *,
     orb_verification: bool = True,
+    real_queries: Path | None = None,
 ) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     weights = Path("model_weights/dinov2-large/config.json")
     if not weights.is_file():
         raise FileNotFoundError("DINOv2 weights missing")
 
-    print("Building golden dataset...")
-    items, queries = build_golden_catalog(
-        out_dir / "golden", n_tiles=n_tiles, n_sheets=n_sheets
-    )
-    print(f"Catalog={len(items)} queries={len(queries)}")
+    catalog_source = CATALOG_SOURCE_SYNTHETIC
+    real_breakdown_payload: dict | None = None
+
+    if real_queries is not None:
+        print(f"Loading real-customer manifest: {real_queries}")
+        records = load_real_customer_manifest(Path(real_queries))
+        warn = low_sample_warning(len(records))
+        if warn:
+            print(f"\n*** {warn} ***\n")
+
+        catalog_from_manifest = catalog_items_from_records(records)
+        if catalog_from_manifest is not None:
+            items = catalog_from_manifest
+            print(
+                f"Catalog from manifest catalog_path fields: {len(items)} tile(s)"
+            )
+        else:
+            print(
+                "Manifest has no complete catalog_path coverage — "
+                "building synthetic catalog for ID validation / indexing."
+            )
+            items, _synthetic_queries = build_golden_catalog(
+                out_dir / "golden", n_tiles=n_tiles, n_sheets=n_sheets
+            )
+
+        catalog_by_id = {item.tile_id: item for item in items}
+        validate_ground_truth_ids(records, set(catalog_by_id))
+        queries = records_to_golden_queries(records)
+        catalog_source = CATALOG_SOURCE_REAL
+        print(
+            f"Real-customer mode: catalog={len(items)} queries={len(queries)} "
+            f"source={catalog_source}"
+        )
+    else:
+        print("Building golden dataset...")
+        items, queries = build_golden_catalog(
+            out_dir / "golden", n_tiles=n_tiles, n_sheets=n_sheets
+        )
+        print(f"Catalog={len(items)} queries={len(queries)}")
+        catalog_by_id = {item.tile_id: item for item in items}
+
     print(f"ORB verification: {'on' if orb_verification else 'off'}")
-    catalog_by_id = {item.tile_id: item for item in items}
+    print(f"catalog_source: {catalog_source}")
 
     emb = DINOv2Embedder()
     emb.load_model()
@@ -477,6 +533,12 @@ def run(
         metrics.vectors = meta.vectors
         payload = metrics_to_dict(metrics)
         payload["index_build_s"] = round(index_s, 2)
+        payload["catalog_source"] = catalog_source
+        if catalog_source == CATALOG_SOURCE_REAL:
+            payload["by_query_kind"] = query_kind_breakdown(payload)
+            real_breakdown_payload = payload["by_query_kind"]
+            print("\nPer-query_kind breakdown:")
+            print(format_query_kind_table(payload["by_query_kind"]))
         payload["customer_path"] = customer_slice(payload)
         payload["memory_proxy"] = {
             "vectors": metrics.vectors,
@@ -533,6 +595,9 @@ def run(
         m.vectors = meta.vectors
         m.mean_views = meta.mean_views
         payload = metrics_to_dict(m)
+        payload["catalog_source"] = catalog_source
+        if catalog_source == CATALOG_SOURCE_REAL:
+            payload["by_query_kind"] = query_kind_breakdown(payload)
         payload["customer_path"] = customer_slice(payload)
         fusion_results[method.value] = payload
         print(
@@ -567,6 +632,9 @@ def run(
     )
     m.vectors = meta.vectors
     tuned_payload = metrics_to_dict(m)
+    tuned_payload["catalog_source"] = catalog_source
+    if catalog_source == CATALOG_SOURCE_REAL:
+        tuned_payload["by_query_kind"] = query_kind_breakdown(tuned_payload)
     tuned_payload["customer_path"] = customer_slice(tuned_payload)
     tuned_payload["aux_weight"] = best_w
     fusion_results["weighted_max_tuned_full"] = tuned_payload
@@ -587,6 +655,7 @@ def run(
         "goal": "production Recall@1 / Recall@5 on golden auto-labeled queries",
         "catalog_size": len(items),
         "n_queries": len(queries),
+        "catalog_source": catalog_source,
         "orb_verification": bool(orb_verification),
         "variants": list(VARIANT_SPECS),
         "embedding_drift_sample": drift,
@@ -620,6 +689,16 @@ def run(
             >= baseline["customer_path"]["recall@1"],
         },
     }
+    if catalog_source == CATALOG_SOURCE_REAL:
+        report["by_query_kind"] = real_breakdown_payload or query_kind_breakdown(
+            winner
+        )
+        warn = low_sample_warning(len(queries))
+        report["low_sample_warning"] = warn
+        if warn:
+            print(f"\n*** {warn} ***\n")
+        print("\nFinal per-query_kind breakdown (winning strategy):")
+        print(format_query_kind_table(report["by_query_kind"]))
     (out_dir / "bakeoff_report.json").write_text(json.dumps(report, indent=2))
     print("\nWrote", out_dir / "bakeoff_report.json")
     return report
@@ -640,6 +719,15 @@ def main() -> int:
         default="on",
         help="Enable ORB near-tie geometric verification (default: on).",
     )
+    parser.add_argument(
+        "--real-queries",
+        type=Path,
+        default=None,
+        help=(
+            "JSONL ground-truth manifest of real customer photos. "
+            "Skips synthetic query generation. See docs/REAL_CUSTOMER_BENCHMARK.md."
+        ),
+    )
     args = parser.parse_args()
     orb_on = args.orb_verification == "on"
     report = run(
@@ -647,14 +735,21 @@ def main() -> int:
         n_tiles=args.tiles,
         n_sheets=args.sheets,
         orb_verification=orb_on,
+        real_queries=args.real_queries,
     )
-    print(json.dumps({
+    summary = {
         "winning_strategy": report["winning_strategy"],
         "winning_fusion": report["winning_fusion"],
+        "catalog_source": report.get("catalog_source"),
         "orb_verification": report["orb_verification"],
         "delta_vs_primary_only": report["delta_vs_primary_only"],
         "acceptance": report["acceptance"],
-    }, indent=2))
+    }
+    if report.get("by_query_kind") is not None:
+        summary["by_query_kind"] = report["by_query_kind"]
+    if report.get("low_sample_warning"):
+        summary["low_sample_warning"] = report["low_sample_warning"]
+    print(json.dumps(summary, indent=2))
     return 0
 
 
