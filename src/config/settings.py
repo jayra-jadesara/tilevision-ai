@@ -61,7 +61,7 @@ class AppSettings:
             "machine_id_welcome_shown": False,
             "check_for_updates": True,
             "enable_sam2_precise_crop": True,
-            "enable_orb_verification": True,
+            "enable_orb_verification": False,
             "update_manifest_url": "",
             "skipped_update_version": "",
             "last_update_check_at": "",
@@ -357,7 +357,7 @@ class AppSettings:
     @property
     def enable_orb_verification(self) -> bool:
         """Query-time ORB geometric verification on near-tie hybrid scores."""
-        return bool(self._settings.get("enable_orb_verification", True))
+        return bool(self._settings.get("enable_orb_verification", False))
 
     @enable_orb_verification.setter
     def enable_orb_verification(self, value: bool) -> None:
