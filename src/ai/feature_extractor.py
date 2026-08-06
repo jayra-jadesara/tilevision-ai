@@ -416,22 +416,68 @@ class FeatureExtractor:
         preloaded: Image.Image | None = None,
     ) -> tuple[TileFeatures, list[np.ndarray]]:
         """
-        Query-only: one preprocess + one DINOv2 vector (reliable on Mac CPU).
+        Query-only adaptive extract (index unchanged).
 
-        Multi-crop OpenCV recall is available via Auto Crop / Precise Crop.
-        Drop-search must stay single-pass so results always return.
+        Uses Query Analyzer to choose crops:
+        - clean / partial → single embedding
+        - catalogue sheet → panel (+ optional panel-center)
+        - room / phone → isolate + capped multi-crop (platform CPU cap)
 
-        Pass ``preloaded`` so the search use-case can decode the query once
-        and reuse it for dHash + embedding.
+        FAISS merges crops by MAX per tile_id in SearchTilesUseCase.
+        Pass ``preloaded`` so drop-search can decode the query file once.
         """
         total_start = time.perf_counter()
         t0 = time.perf_counter()
-        # Always one view — never stack multi-crop DINOv2 on the drop path.
-        views = ImagePreprocessor.prepare_query_views(
-            image_path,
-            max_views=1,
-            preloaded=preloaded,
+        path = Path(image_path)
+        image = ImagePreprocessor.to_rgb(
+            preloaded if preloaded is not None else ImagePreprocessor.load(path)
         )
+
+        from src.ai.search_quality.query_analyzer import QueryKind, analyze_query
+        from src.ai.search_quality.query_views import collect_query_crop_pils
+
+        # Platform cap: Mac + Windows-CPU stay at ≤2 DINOv2 forwards.
+        max_cap = ImagePreprocessor._capped_query_max_views(3)
+        analysis = analyze_query(image)
+        if "tilevision_crops" in path.as_posix().lower():
+            max_cap = 1
+        _, crop_pils = collect_query_crop_pils(
+            image, analysis=analysis, max_views_cap=max_cap
+        )
+
+        original_width, original_height = image.size
+        views = [
+            ImagePreprocessor._finalize_query_pil(
+                crop,
+                original_width=original_width,
+                original_height=original_height,
+            )
+            for crop in crop_pils
+        ]
+        # Catalogue sheets: skip perspective straighten divergence — finalize
+        # already straightens; for sheets prefer lighting+letterbox only.
+        if analysis.kind == QueryKind.CATALOG_SHEET:
+            views = []
+            for crop in crop_pils:
+                pil = crop.convert("RGB")
+                pil = ImagePreprocessor.normalize_lighting(pil)
+                pil = ImagePreprocessor.resize_letterbox(pil)
+                rgb = ImagePreprocessor.to_numpy(pil)
+                import cv2
+
+                bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+                gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+                views.append(
+                    PreprocessedImage(
+                        pil=pil,
+                        rgb=rgb,
+                        bgr=bgr,
+                        gray=gray,
+                        width=original_width,
+                        height=original_height,
+                    )
+                )
+
         preprocess_elapsed = time.perf_counter() - t0
 
         embeddings: list[np.ndarray] = []
@@ -445,17 +491,23 @@ class FeatureExtractor:
             dinov2_elapsed += time.perf_counter() - t1
             embeddings.append(emb)
 
-        features = self._fuse_query_embeddings(views[0], embeddings, dinov2_elapsed)
+        # Primary features from best crop; keep ALL embeddings for FAISS MAX merge.
+        features = self._fuse_query_embeddings(
+            views[0], [embeddings[0]], dinov2_elapsed
+        )
         self._last_timings = ExtractTimings(
             preprocessing=preprocess_elapsed,
-            dinov2=self._last_timings.dinov2,
+            dinov2=dinov2_elapsed,
             descriptors=self._last_timings.descriptors,
             total=time.perf_counter() - total_start,
         )
         logger.info(
-            "Search extract (single-pass): preprocess=%.2fs dinov2=%.2fs total=%.2fs",
+            "Search extract (adaptive query): kind=%s views=%d "
+            "preprocess=%.2fs dinov2=%.2fs total=%.2fs",
+            analysis.kind.value,
+            len(embeddings),
             preprocess_elapsed,
-            self._last_timings.dinov2,
+            dinov2_elapsed,
             self._last_timings.total,
         )
         return features, embeddings

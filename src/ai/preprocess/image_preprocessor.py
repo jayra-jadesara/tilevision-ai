@@ -494,18 +494,33 @@ class ImagePreprocessor:
 
         already_cropped = "tilevision_crops" in path.as_posix().lower()
         is_catalog_sheet = False
-        if not already_cropped and cls._looks_like_scene_photo(image):
-            # Wide marketing sheets also trip the aspect heuristic. Isolating a
-            # "tile region" or perspective-straightening them diverges from
-            # index preprocess (measured cosine ~0.53–0.80 vs same-file index
-            # embedding) and destroys self-hit + crop ranking.
-            is_catalog_sheet = cls.primary_texture_panel(image) is not None
+        if not already_cropped:
+            # Query Analyzer (v1.2.32): distinguish true catalogue sheets
+            # (text/grid/white-margin evidence) from wide room scenes.
+            # Previously ``primary_texture_panel is not None`` false-triggered
+            # on room photos (aspect>1.12 + textured left third), skipped
+            # isolation, and embedded the full room (cosine ~0.47–0.53 vs
+            # parent tile; isolation recovers ~0.86 on the same images).
+            from src.ai.search_quality.query_analyzer import QueryKind, analyze_query
+
+            qanalysis = analyze_query(image)
+            is_catalog_sheet = qanalysis.kind == QueryKind.CATALOG_SHEET
             if is_catalog_sheet:
                 logger.info(
                     "Query catalog marketing sheet detected — skipping scene "
                     "auto-crop and perspective straighten"
                 )
-            else:
+            elif qanalysis.kind.value in {
+                "room_scene",
+                "phone_screenshot",
+            } or (
+                cls._looks_like_scene_photo(image)
+                and qanalysis.kind != QueryKind.CLEAN_TILE
+            ):
+                if qanalysis.kind.value == "phone_screenshot":
+                    from src.ai.search_quality.query_views import strip_phone_ui
+
+                    image = strip_phone_ui(image)
                 image = cls._isolate_query_tile(image)
 
         if not is_catalog_sheet:
