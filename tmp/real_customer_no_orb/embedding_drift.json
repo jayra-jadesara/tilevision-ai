@@ -1,0 +1,10 @@
+{
+  "tile_1": {
+    "analysis": {
+      "kind": "bordered_tile",
+      "left_panel_beneficial": false,
+      "center_crop_beneficial": true,
+      "texture_richness": 0.869
+    }
+  }
+}
