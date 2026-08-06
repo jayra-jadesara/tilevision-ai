@@ -494,13 +494,11 @@ class ImagePreprocessor:
 
         already_cropped = "tilevision_crops" in path.as_posix().lower()
         is_catalog_sheet = False
-        if not already_cropped:
-            # Query Analyzer (v1.2.32): distinguish true catalogue sheets
-            # (text/grid/white-margin evidence) from wide room scenes.
-            # Previously ``primary_texture_panel is not None`` false-triggered
-            # on room photos (aspect>1.12 + textured left third), skipped
-            # isolation, and embedded the full room (cosine ~0.47–0.53 vs
-            # parent tile; isolation recovers ~0.86 on the same images).
+        if not already_cropped and cls._looks_like_scene_photo(image):
+            # v1.2.32: catalogue sheets need white-margin/text evidence.
+            # ``primary_texture_panel is not None`` false-triggered on room
+            # photos (wide aspect + textured left third) and skipped isolation
+            # — measured cosine ~0.47–0.53 vs parent; isolation recovers ~0.86+.
             from src.ai.search_quality.query_analyzer import QueryKind, analyze_query
 
             qanalysis = analyze_query(image)
@@ -510,19 +508,8 @@ class ImagePreprocessor:
                     "Query catalog marketing sheet detected — skipping scene "
                     "auto-crop and perspective straighten"
                 )
-            elif qanalysis.kind.value in {
-                "room_scene",
-                "phone_screenshot",
-            } or (
-                # Rotation-expand / perspective white frames: isolate the face.
-                qanalysis.white_border_ratio >= 0.25
-                and qanalysis.kind != QueryKind.CATALOG_SHEET
-            ) or (
-                cls._looks_like_scene_photo(image)
-                and qanalysis.kind
-                not in {QueryKind.CLEAN_TILE, QueryKind.CATALOG_SHEET}
-            ):
-                if qanalysis.kind.value == "phone_screenshot":
+            else:
+                if qanalysis.kind == QueryKind.PHONE_SCREENSHOT:
                     from src.ai.search_quality.query_views import strip_phone_ui
 
                     image = strip_phone_ui(image)

@@ -418,13 +418,12 @@ class FeatureExtractor:
         """
         Query-only adaptive extract (index unchanged).
 
-        Uses Query Analyzer to choose crops:
-        - clean / partial → single embedding
-        - catalogue sheet → panel (+ optional panel-center)
-        - room / phone → isolate + capped multi-crop (platform CPU cap)
+        Room / phone queries: isolate + capped multi-crop (Query Analyzer).
+        All other queries: classic ``preprocess_for_query`` single embedding
+        (v1.2.31 path) with the fixed catalogue-sheet gate so room photos are
+        no longer mistaken for marketing sheets.
 
         FAISS merges crops by MAX per tile_id in SearchTilesUseCase.
-        Pass ``preloaded`` so drop-search can decode the query file once.
         """
         total_start = time.perf_counter()
         t0 = time.perf_counter()
@@ -436,47 +435,34 @@ class FeatureExtractor:
         from src.ai.search_quality.query_analyzer import QueryKind, analyze_query
         from src.ai.search_quality.query_views import collect_query_crop_pils
 
-        # Platform cap: Mac + Windows-CPU stay at ≤2 DINOv2 forwards.
-        max_cap = ImagePreprocessor._capped_query_max_views(3)
         analysis = analyze_query(image)
-        if "tilevision_crops" in path.as_posix().lower():
-            max_cap = 1
-        _, crop_pils = collect_query_crop_pils(
-            image, analysis=analysis, max_views_cap=max_cap
+        use_multi = (
+            analysis.kind in {QueryKind.ROOM_SCENE, QueryKind.PHONE_SCREENSHOT}
+            and "tilevision_crops" not in path.as_posix().lower()
         )
 
-        original_width, original_height = image.size
-        views = [
-            ImagePreprocessor._finalize_query_pil(
-                crop,
-                original_width=original_width,
-                original_height=original_height,
+        if use_multi:
+            max_cap = ImagePreprocessor._capped_query_max_views(3)
+            _, crop_pils = collect_query_crop_pils(
+                image, analysis=analysis, max_views_cap=max_cap
             )
-            for crop in crop_pils
-        ]
-        # Catalogue sheets: skip perspective straighten divergence — finalize
-        # already straightens; for sheets prefer lighting+letterbox only.
-        if analysis.kind == QueryKind.CATALOG_SHEET:
-            views = []
-            for crop in crop_pils:
-                pil = crop.convert("RGB")
-                pil = ImagePreprocessor.normalize_lighting(pil)
-                pil = ImagePreprocessor.resize_letterbox(pil)
-                rgb = ImagePreprocessor.to_numpy(pil)
-                import cv2
-
-                bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-                gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-                views.append(
-                    PreprocessedImage(
-                        pil=pil,
-                        rgb=rgb,
-                        bgr=bgr,
-                        gray=gray,
-                        width=original_width,
-                        height=original_height,
-                    )
+            original_width, original_height = image.size
+            views = [
+                ImagePreprocessor._finalize_query_pil(
+                    crop,
+                    original_width=original_width,
+                    original_height=original_height,
                 )
+                for crop in crop_pils
+            ]
+        else:
+            # Preserve v1.2.31 single-pass behavior for clean/partial/catalogue
+            # (rotation, crops, originals). Only the sheet-vs-room gate changed.
+            views = ImagePreprocessor.prepare_query_views(
+                path,
+                max_views=1,
+                preloaded=image,
+            )
 
         preprocess_elapsed = time.perf_counter() - t0
 
@@ -491,7 +477,6 @@ class FeatureExtractor:
             dinov2_elapsed += time.perf_counter() - t1
             embeddings.append(emb)
 
-        # Primary features from best crop; keep ALL embeddings for FAISS MAX merge.
         features = self._fuse_query_embeddings(
             views[0], [embeddings[0]], dinov2_elapsed
         )

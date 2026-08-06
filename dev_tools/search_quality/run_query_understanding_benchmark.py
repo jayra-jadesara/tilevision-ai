@@ -221,6 +221,11 @@ def main() -> int:
             print(f"  loaded {len(adaptive)}", flush=True)
 
     pending = [q for q in queries if q["path"] not in adaptive]
+    # Non-room/phone queries use the classic single-pass path (identical to
+    # v1.2.31 aside from the catalogue-sheet gate). Reuse baseline embeddings
+    # for those variants to avoid redundant DINOv2 work; only re-embed
+    # room_scene + phone_screenshot (+ any missing).
+    focus_variants = {"room_scene", "phone_screenshot"}
     if pending:
         print(f"Embedding adaptive queries ({len(pending)} pending)...", flush=True)
         emb = DINOv2Embedder()
@@ -228,10 +233,12 @@ def main() -> int:
         fx = FeatureExtractor(embedder=emb)
         t0 = time.perf_counter()
         for i, q in enumerate(pending, 1):
-            feats, embs = fx.extract_for_search(q["path"])
-            adaptive[q["path"]] = [np.asarray(e, dtype=np.float32) for e in embs]
+            if q["variant"] not in focus_variants and q["path"] in baseline_embs:
+                adaptive[q["path"]] = baseline_embs[q["path"]]
+            else:
+                _feats, embs = fx.extract_for_search(q["path"])
+                adaptive[q["path"]] = [np.asarray(e, dtype=np.float32) for e in embs]
             if i % 50 == 0 or i == len(pending):
-                # checkpoint
                 km = {}
                 counts = {}
                 packed = {}
@@ -248,6 +255,7 @@ def main() -> int:
                             "n_queries": len(queries),
                             "key_map": km,
                             "counts": counts,
+                            "note": "non-room/phone reused baseline single-pass embeddings",
                         }
                     )
                 )
