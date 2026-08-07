@@ -32,7 +32,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QGroupBox,
     QFormLayout,
-    QProgressDialog,
     QTabWidget,
     QScrollArea,
     QFrame,
@@ -52,6 +51,7 @@ from src.utils.logger import get_log_file_path
 from src.presentation.views.catalogue_profiles_panel import CatalogueProfilesPanel
 from src.theme.theme_manager import get_shared_view_qss, get_settings_view_qss
 from src.presentation.dialogs import message_box
+from src.presentation.dialogs.task_progress_dialog import TaskProgressDialog
 
 logger = logging.getLogger("tilevision.presentation.views.settings_view")
 
@@ -117,7 +117,7 @@ class SettingsView(QWidget):
         self._diagnostics_info_provider = diagnostics_info_provider
         self._vector_index = vector_index
         self._rebuild_worker: Optional[RebuildIndexWorker] = None
-        self._rebuild_progress_dialog: Optional[QProgressDialog] = None
+        self._rebuild_progress_dialog: Optional[TaskProgressDialog] = None
         self._setup_ui()
         self._apply_styles()
         self.refresh_feature_status()
@@ -920,16 +920,13 @@ class SettingsView(QWidget):
 
         self._rebuild_progress_prefix = progress_prefix
         self._rebuild_button.setEnabled(False)
-        self._rebuild_progress_dialog = QProgressDialog(
-            preparing_text, None, 0, 1, self
+        self._rebuild_progress_dialog = TaskProgressDialog(
+            title=window_title,
+            message=preparing_text,
+            theme=self._theme,
+            parent=self.window(),
         )
-        self._rebuild_progress_dialog.setWindowTitle(window_title)
-        self._rebuild_progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
-        self._rebuild_progress_dialog.setMinimumDuration(0)
-        self._rebuild_progress_dialog.setCancelButton(None)
-        self._rebuild_progress_dialog.setAutoClose(False)
-        self._rebuild_progress_dialog.setAutoReset(False)
-        self._rebuild_progress_dialog.show()
+        self._rebuild_progress_dialog.show_centered()
 
         self._rebuild_worker = RebuildIndexWorker(self._indexing_use_case, folders)
         self._rebuild_worker.progress_updated.connect(self._on_rebuild_progress)
@@ -949,23 +946,19 @@ class SettingsView(QWidget):
         if dialog is None:
             return
 
-        if total > 0 and dialog.maximum() != total:
-            dialog.setMaximum(total)
-
-        dialog.setValue(min(processed, max(total, 1)))
+        dialog.set_progress(processed, total)
         eta_text = f" — ~{int(eta_seconds)}s remaining" if eta_seconds > 1 else ""
         prefix = getattr(self, "_rebuild_progress_prefix", "Rebuilding Search Index")
-        dialog.setLabelText(
+        dialog.set_message(
             f"{prefix}: {current_name} ({processed}/{total}){eta_text}"
         )
 
     def _on_rebuild_finished(self, total_reembedded: int, total_failed: int) -> None:
         self._rebuild_button.setEnabled(True)
         if self._rebuild_progress_dialog is not None:
-            self._rebuild_progress_dialog.setValue(
-                self._rebuild_progress_dialog.maximum()
-            )
-            self._rebuild_progress_dialog.close()
+            dialog = self._rebuild_progress_dialog
+            dialog.set_progress(dialog.maximum, dialog.maximum)
+            dialog.close()
             self._rebuild_progress_dialog = None
         self._rebuild_worker = None
 
@@ -992,6 +985,8 @@ class SettingsView(QWidget):
         self._theme = theme
         if hasattr(self, "_export_profiles_panel"):
             self._export_profiles_panel.set_theme(theme)
+        if self._rebuild_progress_dialog is not None:
+            self._rebuild_progress_dialog.set_theme(theme)
         self._apply_styles()
 
     def _apply_styles(self) -> None:

@@ -46,3 +46,16 @@ def test_update_dialog_applies_theme_object_names(qapp):
     assert "PrimaryButton" in dialog.styleSheet()
     assert "DialogProgressBar" in dialog.styleSheet()
     dialog.close()
+
+
+def test_task_progress_dialog_uses_theme_and_object_names(qapp):
+    from src.presentation.dialogs.task_progress_dialog import TaskProgressDialog
+
+    dialog = TaskProgressDialog(
+        title="Rebuilding Search Index",
+        message="Preparing rebuild...",
+        theme="dark",
+    )
+    assert dialog._progress.objectName() == "DialogProgressBar"
+    assert "DialogProgressBar" in dialog.styleSheet()
+    dialog.close()

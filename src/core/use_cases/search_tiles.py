@@ -85,6 +85,9 @@ _WEAK_RESULT_ABSOLUTE_RAW_FLOOR = 0.38
 # Crop-from-catalog: when embedding similarity to the source product is this
 # high, treat it as the same catalog tile (100% match).
 _CROP_SOURCE_EMBEDDING_THRESHOLD = 0.78
+# When crop lineage is known from the temp filename (auto/precise/manual crop),
+# the source catalog tile is always promoted — embedding gaps on marketing
+# sheets can fall well below 0.35 even for a correct manual crop.
 
 # When FAISS retrieves a tile via an aux texture-panel vector, FlatIP cosine
 # can be ≫ hybrid.embedding (which always uses the layout-heavy primary).
@@ -554,6 +557,14 @@ class SearchTilesUseCase:
                         "Crop search linked to catalog tile: %s",
                         catalog_source_tile.file_name,
                     )
+                    if catalog_source_tile.features is not None:
+                        present = {t.id for t in candidates if t.id is not None}
+                        if catalog_source_tile.id not in present:
+                            candidates.append(catalog_source_tile)
+                            logger.info(
+                                "Injected crop source tile into candidates: %s",
+                                catalog_source_tile.file_name,
+                            )
 
             reranked = []
             query_resolved = str(query_path.resolve())
@@ -629,11 +640,23 @@ class SearchTilesUseCase:
                         not exact_match
                         and catalog_source_tile is not None
                         and tile.id == catalog_source_tile.id
-                        and max(hybrid.embedding, faiss_cos)
-                        >= _CROP_SOURCE_EMBEDDING_THRESHOLD
                     ):
-                        exact_match = True
-                        final_score = 1.0
+                        lineage_sim = max(
+                            hybrid.embedding,
+                            faiss_cos,
+                            float(hybrid.final),
+                        )
+                        if lineage_sim >= _CROP_SOURCE_EMBEDDING_THRESHOLD:
+                            exact_match = True
+                            final_score = 1.0
+                        else:
+                            # Filename lineage: user cropped from this catalog file.
+                            final_score = _QUERY_SELF_MATCH_SCORE
+                            logger.info(
+                                "Crop lineage boost | %s | lineage=%.3f (forced)",
+                                tile.file_name,
+                                lineage_sim,
+                            )
                     elif exact_match and same_query_file:
                         # Keep self-hit visible, but below a parent-sheet aux hit.
                         final_score = _QUERY_SELF_MATCH_SCORE
@@ -751,8 +774,11 @@ class SearchTilesUseCase:
         """
         Extract the original catalog filename stem from a Crop & Search temp file.
 
-        Example: crop_5mm-white-dotted-ceramic-floor-tile-500x500_12345.jpg
-        -> 5mm-white-dotted-ceramic-floor-tile-500x500
+        Examples:
+            crop_5mm-white-dotted-ceramic-floor-tile-500x500_12345.jpg
+            -> 5mm-white-dotted-ceramic-floor-tile-500x500
+            autocrop_xx.jpg_1886531936448.jpg -> xx.jpg
+            precise_xx.jpg_1887012676096.jpg -> xx.jpg
         """
         normalized = str(query_path).replace("\\", "/").lower()
         if "tilevision_crops" not in normalized:
@@ -760,15 +786,15 @@ class SearchTilesUseCase:
 
         filename = normalized.rsplit("/", 1)[-1]
         stem = Path(filename).stem
-        if not stem.startswith("crop_"):
-            return None
-
-        remainder = stem[5:]
-        if "_" in remainder:
-            base, suffix = remainder.rsplit("_", 1)
-            if suffix.isdigit():
-                return base
-        return remainder
+        for prefix in ("autocrop_", "precise_", "crop_"):
+            if stem.startswith(prefix):
+                remainder = stem[len(prefix) :]
+                if "_" in remainder:
+                    base, suffix = remainder.rsplit("_", 1)
+                    if suffix.isdigit():
+                        return base
+                return remainder
+        return None
 
     def _find_catalog_tile_by_stem(self, stem: str) -> Optional[TileImage]:
         """Find an indexed catalog tile whose filename stem matches."""
