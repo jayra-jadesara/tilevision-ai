@@ -1,3 +1,3 @@
 """Application version — single source of truth for releases and update checks."""
 
-APP_VERSION = "1.2.32"
+APP_VERSION = "1.2.33"
