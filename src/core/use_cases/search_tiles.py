@@ -173,25 +173,25 @@ class SearchTilesUseCase:
         self,
         embeddings: list,
         search_k: int,
-    ) -> tuple[List[int], dict[int, float]]:
+    ) -> tuple[List[int], dict[int, float], dict[int, int]]:
         """
         Run FAISS for each query crop and merge by best similarity per tile id.
 
-        Returns ordered unique ids plus the best FAISS Inner-Product (cosine)
-        per id. Aux texture-panel vectors share a tile id with the primary
-        sheet embedding; the best score must flow into rerank or layout-heavy
-        primaries stay near ~27% after hybrid scoring.
+        Returns ordered unique ids, the best FAISS Inner-Product (cosine)
+        per id, and the query-view index that produced each best score.
         """
         if not embeddings:
-            return [], {}
+            return [], {}, {}
 
         best_score: dict[int, float] = {}
-        for emb in embeddings:
+        best_view: dict[int, int] = {}
+        for view_idx, emb in enumerate(embeddings):
             ids, scores = self._index.search_vectors(emb, search_k)
             for tile_id, score in zip(ids, scores):
                 prev = best_score.get(tile_id)
                 if prev is None or float(score) > prev:
                     best_score[tile_id] = float(score)
+                    best_view[tile_id] = view_idx
 
         ordered = sorted(best_score.items(), key=lambda item: item[1], reverse=True)
         matching_ids = [tile_id for tile_id, _score in ordered]
@@ -200,7 +200,7 @@ class SearchTilesUseCase:
             len(embeddings),
             len(matching_ids),
         )
-        return matching_ids, best_score
+        return matching_ids, best_score, best_view
 
     def get_index_health(self):
         """Return feature-version compatibility status for the indexed catalog."""
@@ -485,9 +485,11 @@ class SearchTilesUseCase:
                     cache_status,
                 )
                 with timer.measure("faiss"):
-                    matching_ids, faiss_scores = self._search_faiss_multi_crop(
-                        query_embeddings or [query_features.embedding],
-                        search_k,
+                    matching_ids, faiss_scores, _faiss_winning_views = (
+                        self._search_faiss_multi_crop(
+                            query_embeddings or [query_features.embedding],
+                            search_k,
+                        )
                     )
 
                 if not matching_ids:

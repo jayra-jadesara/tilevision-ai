@@ -437,7 +437,12 @@ class FeatureExtractor:
 
         analysis = analyze_query(image)
         use_multi = (
-            analysis.kind in {QueryKind.ROOM_SCENE, QueryKind.PHONE_SCREENSHOT}
+            analysis.kind
+            in {
+                QueryKind.ROOM_SCENE,
+                QueryKind.PHONE_SCREENSHOT,
+                QueryKind.PARTIAL_CROP,
+            }
             and "tilevision_crops" not in path.as_posix().lower()
         )
 

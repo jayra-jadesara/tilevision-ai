@@ -73,9 +73,19 @@ class DINOv2Embedder:
     MODEL_NAME = "facebook/dinov2-large"
     EMBEDDING_DIM = 1024
 
-    def __init__(self, *, device_preference: DevicePreference = "auto") -> None:
+    def __init__(
+        self,
+        *,
+        device_preference: DevicePreference = "auto",
+        pooling: str = "cls",
+    ) -> None:
+        if pooling not in ("cls", "mean_patch"):
+            raise ValueError(
+                f"Invalid pooling {pooling!r}: expected 'cls' or 'mean_patch'"
+            )
         configure_mps_fallback()
         self._device_preference: DevicePreference = device_preference
+        self._pooling = pooling
         self._runtime = detect_gpu_runtime(preference=device_preference)
         self._device = torch.device(self._runtime.active_device)
         self._processor = None
@@ -200,12 +210,22 @@ class DINOv2Embedder:
         with torch.inference_mode():
             outputs = self._run_model_forward(inputs)
 
-        embeddings = (
-            outputs.last_hidden_state[:, 0]
-            .cpu()
-            .numpy()
-            .astype(np.float32)
-        )
+        hidden = outputs.last_hidden_state
+        if self._pooling == "mean_patch":
+            embeddings = (
+                hidden[:, 1:]
+                .mean(dim=1)
+                .cpu()
+                .numpy()
+                .astype(np.float32)
+            )
+        else:
+            embeddings = (
+                hidden[:, 0]
+                .cpu()
+                .numpy()
+                .astype(np.float32)
+            )
         norms = np.linalg.norm(embeddings, axis=1, keepdims=True) + 1e-8
         return embeddings / norms
 

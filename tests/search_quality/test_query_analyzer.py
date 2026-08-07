@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from src.ai.search_quality.query_analyzer import QueryKind, analyze_query
+from src.ai.search_quality.query_analyzer import QueryAnalysis, QueryKind, analyze_query
 from src.ai.search_quality.query_views import collect_query_crop_pils, plan_query_views
 
 
@@ -96,3 +96,37 @@ def test_phone_screenshot_strips_ui_plan():
     assert a.kind == QueryKind.PHONE_SCREENSHOT
     plan = plan_query_views(a)
     assert plan.strip_ui is True
+
+
+def test_partial_crop_plan_allows_multi_view():
+    rng = np.random.default_rng(4)
+    tile = rng.integers(120, 220, (520, 480, 3), dtype=np.uint8)
+    canvas = np.full((600, 620, 3), 235, dtype=np.uint8)
+    canvas[40:560, 70:550] = tile
+    img = Image.fromarray(canvas)
+    a = analyze_query(img)
+    if a.kind != QueryKind.PARTIAL_CROP:
+        a = QueryAnalysis(
+            kind=QueryKind.PARTIAL_CROP,
+            width=img.size[0],
+            height=img.size[1],
+            aspect_ratio=img.size[0] / img.size[1],
+            tile_coverage_ratio=0.7,
+            background_ratio=0.3,
+            entropy=0.5,
+            gradient_density=0.4,
+            texture_density=0.3,
+            edge_density=0.2,
+            white_border_ratio=0.08,
+            largest_texture_area_ratio=0.6,
+            has_ui_chrome=False,
+            text_region_score=0.02,
+            has_preview_grid=False,
+            band_color_delta=12.0,
+            confidence=0.65,
+        )
+    plan = plan_query_views(a, max_views_cap=3)
+    assert plan.max_views >= 2
+    assert plan.isolate_scene is False
+    _, crops = collect_query_crop_pils(img, analysis=a, max_views_cap=3)
+    assert len(crops) >= 2
