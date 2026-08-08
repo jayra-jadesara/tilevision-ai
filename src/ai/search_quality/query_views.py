@@ -22,6 +22,41 @@ from src.ai.search_quality.query_analyzer import QueryAnalysis, QueryKind, analy
 
 logger = logging.getLogger("tilevision.ai.query_views")
 
+PartialCropMode = str  # readable alias
+
+PARTIAL_CROP_MODES = frozenset(
+    {
+        "old_single",
+        "new_primary_only",
+        "new_primary_plus_tighten",
+        "new_primary_plus_all",
+    }
+)
+
+_partial_crop_mode: str = "new_primary_plus_tighten"
+
+
+def get_partial_crop_mode() -> str:
+    return _partial_crop_mode
+
+
+def set_partial_crop_mode(mode: str) -> None:
+    global _partial_crop_mode
+    if mode not in PARTIAL_CROP_MODES:
+        raise ValueError(
+            f"Invalid partial_crop_mode {mode!r}; expected one of "
+            f"{sorted(PARTIAL_CROP_MODES)}"
+        )
+    _partial_crop_mode = mode
+
+
+def _partial_crop_max_views(mode: str, cap: int) -> int:
+    if mode == "old_single" or mode == "new_primary_only":
+        return 1
+    if mode == "new_primary_plus_tighten":
+        return min(2, cap)
+    return min(3, cap)
+
 
 @dataclass(frozen=True, slots=True)
 class QueryViewPlan:
@@ -73,9 +108,10 @@ def plan_query_views(analysis: QueryAnalysis, *, max_views_cap: int = 3) -> Quer
             preserve_aspect=False,
         )
     if analysis.kind == QueryKind.PARTIAL_CROP:
+        mode = get_partial_crop_mode()
         return QueryViewPlan(
             kind=analysis.kind,
-            max_views=min(3, cap),
+            max_views=_partial_crop_max_views(mode, cap),
             strip_ui=False,
             isolate_scene=False,
             prefer_panel=False,
@@ -214,15 +250,31 @@ def collect_query_crop_pils(
         # Always keep a full-sheet view as fallback for layout queries.
         crops.append(working)
     elif plan.kind == QueryKind.PARTIAL_CROP:
-        content = ImagePreprocessor.crop_to_content_region(
-            working,
-            min_margin_ratio=0.02,
-        )
-        crops.append(content)
-        if plan.max_views >= 2:
-            crops.append(_pad_crop_border(content))
-        if plan.max_views >= 3:
-            crops.append(_center_crop(content, 0.82))
+        mode = get_partial_crop_mode()
+        if mode == "old_single":
+            high_frame = analysis.white_border_ratio >= 0.25
+            if high_frame or ImagePreprocessor._looks_like_scene_photo(working):
+                crops.append(isolate_tile_region(working).image)
+            else:
+                crops.append(
+                    ImagePreprocessor.crop_to_content_region(
+                        working,
+                        min_margin_ratio=0.05,
+                    )
+                )
+        else:
+            content = ImagePreprocessor.crop_to_content_region(
+                working,
+                min_margin_ratio=0.02,
+            )
+            crops.append(content)
+            if mode == "new_primary_plus_tighten" and plan.max_views >= 2:
+                crops.append(_center_crop(content, 0.82))
+            elif mode == "new_primary_plus_all":
+                if plan.max_views >= 2:
+                    crops.append(_pad_crop_border(content))
+                if plan.max_views >= 3:
+                    crops.append(_center_crop(content, 0.82))
     elif plan.isolate_scene:
         primary = isolate_tile_region(working)
         crops.append(primary.image)

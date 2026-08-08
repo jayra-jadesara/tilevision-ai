@@ -25,7 +25,7 @@ def _partial_crop_image(seed: int = 4) -> Image.Image:
     return Image.fromarray(canvas)
 
 
-def test_partial_crop_plan_requests_up_to_three_views():
+def test_partial_crop_plan_requests_up_to_two_views():
     analysis = QueryAnalysis(
         kind=QueryKind.PARTIAL_CROP,
         width=620,
@@ -47,11 +47,11 @@ def test_partial_crop_plan_requests_up_to_three_views():
     )
     plan = plan_query_views(analysis, max_views_cap=3)
     assert plan.kind == QueryKind.PARTIAL_CROP
-    assert plan.max_views == 3
+    assert plan.max_views == 2
     assert plan.isolate_scene is False
 
 
-def test_partial_crop_collects_complementary_views():
+def test_partial_crop_collects_content_and_tighten_without_pad():
     img = _partial_crop_image()
     analysis = QueryAnalysis(
         kind=QueryKind.PARTIAL_CROP,
@@ -73,9 +73,9 @@ def test_partial_crop_collects_complementary_views():
         confidence=0.65,
     )
     _, crops = collect_query_crop_pils(img, analysis=analysis, max_views_cap=3)
-    assert len(crops) == 3
-    sizes = {c.size for c in crops}
-    assert len(sizes) >= 2
+    assert len(crops) == 2
+    assert crops[1].size[0] < crops[0].size[0]
+    assert crops[1].size[1] < crops[0].size[1]
 
 
 def test_partial_crop_feature_extractor_uses_multi_view_path():

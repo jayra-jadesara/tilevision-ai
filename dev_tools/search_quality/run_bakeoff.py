@@ -55,6 +55,7 @@ from dev_tools.search_quality.real_customer import (
     records_to_golden_queries,
     validate_ground_truth_ids,
 )
+from src.ai.search_quality.query_views import PARTIAL_CROP_MODES, set_partial_crop_mode
 
 
 def _cos(a: np.ndarray, b: np.ndarray) -> float:
@@ -468,8 +469,12 @@ def run(
     orb_verification: bool = True,
     real_queries: Path | None = None,
     pooling: str = "cls",
+    partial_crop_mode: str | None = None,
 ) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
+    if partial_crop_mode is not None:
+        set_partial_crop_mode(partial_crop_mode)
+        print(f"partial_crop_mode: {partial_crop_mode}")
     weights = Path("model_weights/dinov2-large/config.json")
     if not weights.is_file():
         raise FileNotFoundError("DINOv2 weights missing")
@@ -763,6 +768,12 @@ def main() -> int:
         default="cls",
         help="DINOv2 token pooling for bakeoff A/B (default: cls, production).",
     )
+    parser.add_argument(
+        "--partial-crop-mode",
+        choices=sorted(PARTIAL_CROP_MODES),
+        default=None,
+        help="Diagnostic: PARTIAL_CROP view strategy (ablation only).",
+    )
     args = parser.parse_args()
     orb_on = args.orb_verification == "on"
     report = run(
@@ -772,6 +783,7 @@ def main() -> int:
         orb_verification=orb_on,
         real_queries=args.real_queries,
         pooling=args.pooling,
+        partial_crop_mode=args.partial_crop_mode,
     )
     summary = {
         "winning_strategy": report["winning_strategy"],
