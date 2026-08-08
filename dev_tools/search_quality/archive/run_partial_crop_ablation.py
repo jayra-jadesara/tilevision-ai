@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
 """
-Ablate PARTIAL_CROP view strategies on golden crop_* queries.
+ARCHIVED — PARTIAL_CROP view-strategy ablation (PR #41 investigation).
 
-Runs four modes through BakeoffEngine.evaluate() (same path as PR #41 metrics):
+Production now hardcodes content + 82%% tighten only; see docs/PARTIAL_CROP_FIX.md.
+This script is kept as a reusable ablation pattern but requires the removed
+PARTIAL_CROP mode API to run — do not invoke from CI or regular tool paths.
 
-  old_single              — pre-PR-41: prepare_query_views, 1 view
-  new_primary_only        — crop_to_content_region only, 1 view
-  new_primary_plus_tighten — content + 82%% center, 2 views
-  new_primary_plus_all    — content + pad + tighten, 3 views (PR #41)
-
-Usage:
-  python dev_tools/search_quality/run_partial_crop_ablation.py \\
+Original usage:
+  python dev_tools/search_quality/archive/run_partial_crop_ablation.py \\
       --out /tmp/partial_crop_ablation
 """
 
@@ -21,7 +18,7 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from src.ai.embedder import DINOv2Embedder
 from src.ai.feature_extractor import FeatureExtractor

@@ -434,23 +434,16 @@ class FeatureExtractor:
         )
 
         from src.ai.search_quality.query_analyzer import QueryKind, analyze_query
-        from src.ai.search_quality.query_views import (
-            collect_query_crop_pils,
-            get_partial_crop_mode,
-        )
+        from src.ai.search_quality.query_views import collect_query_crop_pils
 
         analysis = analyze_query(image)
-        partial_mode = get_partial_crop_mode()
         use_multi = (
             analysis.kind
             in {
                 QueryKind.ROOM_SCENE,
                 QueryKind.PHONE_SCREENSHOT,
+                QueryKind.PARTIAL_CROP,
             }
-            or (
-                analysis.kind == QueryKind.PARTIAL_CROP
-                and partial_mode != "old_single"
-            )
         ) and "tilevision_crops" not in path.as_posix().lower()
 
         if use_multi:
