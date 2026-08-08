@@ -75,7 +75,7 @@ def plan_query_views(analysis: QueryAnalysis, *, max_views_cap: int = 3) -> Quer
     if analysis.kind == QueryKind.PARTIAL_CROP:
         return QueryViewPlan(
             kind=analysis.kind,
-            max_views=1,
+            max_views=min(2, cap),
             strip_ui=False,
             isolate_scene=False,
             prefer_panel=False,
@@ -194,6 +194,14 @@ def collect_query_crop_pils(
                 crops.append(_center_crop(panel, 0.72))
         # Always keep a full-sheet view as fallback for layout queries.
         crops.append(working)
+    elif plan.kind == QueryKind.PARTIAL_CROP:
+        content = ImagePreprocessor.crop_to_content_region(
+            working,
+            min_margin_ratio=0.02,
+        )
+        crops.append(content)
+        if plan.max_views >= 2:
+            crops.append(_center_crop(content, 0.82))
     elif plan.isolate_scene:
         primary = isolate_tile_region(working)
         crops.append(primary.image)
@@ -211,7 +219,7 @@ def collect_query_crop_pils(
         if len(crops) < plan.max_views:
             crops.append(_center_crop(working, 0.55))
     else:
-        # Clean / partial. Rotation-expand and perspective fills create large
+        # Clean / unknown. Rotation-expand and perspective fills create large
         # white corners (white_border_ratio ≫ 0) — aggressive content crop
         # alone regressed Recall@5 by ~30pp on ±10° rotations. Prefer
         # OpenCV isolation of the face inside the white frame (same idea as
@@ -220,7 +228,7 @@ def collect_query_crop_pils(
 
         high_frame = analysis.white_border_ratio >= 0.25
         if high_frame or (
-            analysis.kind in {_QK.UNKNOWN, _QK.PARTIAL_CROP}
+            analysis.kind == _QK.UNKNOWN
             and ImagePreprocessor._looks_like_scene_photo(working)
         ):
             iso = isolate_tile_region(working)

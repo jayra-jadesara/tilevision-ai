@@ -418,10 +418,11 @@ class FeatureExtractor:
         """
         Query-only adaptive extract (index unchanged).
 
-        Room / phone queries: isolate + capped multi-crop (Query Analyzer).
-        All other queries: classic ``preprocess_for_query`` single embedding
-        (v1.2.31 path) with the fixed catalogue-sheet gate so room photos are
-        no longer mistaken for marketing sheets.
+        Room / phone / partial-crop queries: isolate or complementary
+        multi-crop (Query Analyzer). All other queries: classic
+        ``preprocess_for_query`` single embedding (v1.2.31 path) with the
+        fixed catalogue-sheet gate so room photos are no longer mistaken for
+        marketing sheets.
 
         FAISS merges crops by MAX per tile_id in SearchTilesUseCase.
         """
@@ -437,9 +438,13 @@ class FeatureExtractor:
 
         analysis = analyze_query(image)
         use_multi = (
-            analysis.kind in {QueryKind.ROOM_SCENE, QueryKind.PHONE_SCREENSHOT}
-            and "tilevision_crops" not in path.as_posix().lower()
-        )
+            analysis.kind
+            in {
+                QueryKind.ROOM_SCENE,
+                QueryKind.PHONE_SCREENSHOT,
+                QueryKind.PARTIAL_CROP,
+            }
+        ) and "tilevision_crops" not in path.as_posix().lower()
 
         if use_multi:
             max_cap = ImagePreprocessor._capped_query_max_views(3)

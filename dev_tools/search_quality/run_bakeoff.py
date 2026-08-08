@@ -121,10 +121,14 @@ class BakeoffEngine:
             dtype=np.float32,
         )
 
-    def embed_query(self, path: Path) -> tuple[np.ndarray, float]:
+    def embed_query(self, path: Path) -> tuple[list[np.ndarray], float]:
         t0 = time.perf_counter()
-        feats, _ = self.fx.extract_for_search(str(path))
-        return np.asarray(feats.embedding, dtype=np.float32), time.perf_counter() - t0
+        _feats, embs = self.fx.extract_for_search(str(path))
+        vectors = embs if embs else [_feats.embedding]
+        return (
+            [np.asarray(v, dtype=np.float32) for v in vectors],
+            time.perf_counter() - t0,
+        )
 
     def index_strategy(
         self,
@@ -197,21 +201,28 @@ class BakeoffEngine:
             orb = OrbVerifier()
 
         for q in queries:
-            qemb, embed_s = self.embed_query(q.path)
+            qembs, embed_s = self.embed_query(q.path)
             total_embed += embed_s
             t1 = time.perf_counter()
-            raw_ids, raw_scores = mgr.search_vectors(qemb, top_k=k)
+            best_scores: dict[int, float] = {}
+            for qemb in qembs:
+                raw_ids, raw_scores = mgr.search_vectors(qemb, top_k=k)
+                for tid, sc in zip(raw_ids, raw_scores):
+                    tile_id = int(tid)
+                    score = float(sc)
+                    prev = best_scores.get(tile_id)
+                    if prev is None or score > prev:
+                        best_scores[tile_id] = score
             faiss_s = time.perf_counter() - t1
             total_faiss += faiss_s
 
             hits: list[ScoredHit] = []
-            for rank, (tid, sc) in enumerate(zip(raw_ids, raw_scores), start=1):
-                # Without per-vector metadata in FlatIP IDMap, treat non-first
-                # duplicate ranks as aux-ish; weight applied uniformly via tune.
+            fused_sorted = sorted(best_scores.items(), key=lambda item: item[1], reverse=True)
+            for rank, (tid, sc) in enumerate(fused_sorted, start=1):
                 hits.append(
                     ScoredHit(
-                        tile_id=int(tid),
-                        score=float(sc),
+                        tile_id=tid,
+                        score=sc,
                         view_weight=aux_weight,
                         rank_in_list=rank,
                     )
@@ -429,7 +440,12 @@ def embedding_drift_report(engine: BakeoffEngine, items: list[CatalogItem], out:
             qp = qdir / f"{variant}.jpg"
             if not qp.exists():
                 continue
-            qemb, _ = engine.embed_query(qp)
+            qembs, _ = engine.embed_query(qp)
+            if len(qembs) == 1:
+                qemb = qembs[0]
+            else:
+                qemb = np.mean(np.vstack(qembs), axis=0)
+                qemb = qemb / (np.linalg.norm(qemb) + 1e-8)
             row[variant] = round(_cos(primary, qemb), 4)
         # Panel aux drift for sheets
         analysis = analyze_image(Image.open(item.path))
@@ -451,6 +467,7 @@ def run(
     *,
     orb_verification: bool = True,
     real_queries: Path | None = None,
+    pooling: str = "cls",
 ) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     weights = Path("model_weights/dinov2-large/config.json")
@@ -501,7 +518,7 @@ def run(
     print(f"ORB verification: {'on' if orb_verification else 'off'}")
     print(f"catalog_source: {catalog_source}")
 
-    emb = DINOv2Embedder()
+    emb = DINOv2Embedder(pooling=pooling)
     emb.load_model()
     fx = FeatureExtractor(embedder=emb)
     engine = BakeoffEngine(fx)
@@ -610,11 +627,22 @@ def run(
     # Build trials from FAISS raw hits
     trials = []
     for q in half:
-        qemb, _ = engine.embed_query(q.path)
-        ids, scores = mgr.search_vectors(qemb, top_k=min(50, mgr.get_total_count()))
+        qembs, _ = engine.embed_query(q.path)
+        best_scores: dict[int, float] = {}
+        for qemb in qembs:
+            ids, scores = mgr.search_vectors(qemb, top_k=min(50, mgr.get_total_count()))
+            for tile_id, score in zip(ids, scores):
+                tid = int(tile_id)
+                sc = float(score)
+                prev = best_scores.get(tid)
+                if prev is None or sc > prev:
+                    best_scores[tid] = sc
         hits = [
-            ScoredHit(tile_id=int(t), score=float(s), view_weight=0.9, rank_in_list=i + 1)
-            for i, (t, s) in enumerate(zip(ids, scores))
+            ScoredHit(tile_id=tid, score=sc, view_weight=0.9, rank_in_list=i + 1)
+            for i, (tid, sc) in enumerate(
+                sorted(best_scores.items(), key=lambda item: item[1], reverse=True),
+                start=1,
+            )
         ]
         trials.append((hits, q.tile_id))
     best_w, tuned_r1 = tune_weighted_max(trials)
@@ -657,6 +685,7 @@ def run(
         "n_queries": len(queries),
         "catalog_source": catalog_source,
         "orb_verification": bool(orb_verification),
+        "pooling": pooling,
         "variants": list(VARIANT_SPECS),
         "embedding_drift_sample": drift,
         "strategies": strategy_results,
@@ -728,6 +757,12 @@ def main() -> int:
             "Skips synthetic query generation. See docs/REAL_CUSTOMER_BENCHMARK.md."
         ),
     )
+    parser.add_argument(
+        "--pooling",
+        choices=("cls", "mean_patch"),
+        default="cls",
+        help="DINOv2 token pooling for bakeoff A/B (default: cls, production).",
+    )
     args = parser.parse_args()
     orb_on = args.orb_verification == "on"
     report = run(
@@ -736,6 +771,7 @@ def main() -> int:
         n_sheets=args.sheets,
         orb_verification=orb_on,
         real_queries=args.real_queries,
+        pooling=args.pooling,
     )
     summary = {
         "winning_strategy": report["winning_strategy"],
