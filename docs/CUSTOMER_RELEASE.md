@@ -12,7 +12,7 @@ The only difference is the installer file — not the features or search results
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  1. Develop & test on your PC (python main.py)              │
-│  2. Bump version in packaging/tilevision_setup.iss          │
+│  2. Bump version: python scripts/bump_version.py X.Y.Z   │
 │  3. Build Windows + Mac (see below)                         │
 │  4. Test both on clean machines (offline)                   │
 │  5. Send installer to customer + license key                 │
@@ -154,11 +154,18 @@ can be very slow in some regions. Browser open remains a last-resort fallback.
 
 ### Release a version with update links
 
+> **Why one command?** Release `v1.2.33` bumped `src/version.py` and
+> `packaging/tilevision_setup.iss` by hand but missed
+> `packaging/tilevision_admin_setup.iss`. CI failed on all four platforms in
+> under 30 seconds. Use the bump script so all three files stay in sync.
+
 ```bash
-# 1. Bump APP_VERSION in src/version.py and packaging/tilevision_setup.iss
-# 2. Commit and tag:
-git tag v1.0.1
-git push origin v1.0.1
+python scripts/bump_version.py X.Y.Z
+git add -A
+git commit -m "Bump version to X.Y.Z"
+git push origin main
+git tag vX.Y.Z
+git push origin vX.Y.Z
 ```
 
 After the **Build** workflow finishes, the release includes:
