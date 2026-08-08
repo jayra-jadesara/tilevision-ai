@@ -1,0 +1,16 @@
+{
+  "n_catalog_tiles": 10,
+  "n_queries": 70,
+  "n_confusable_pairs": 4,
+  "query_kinds": [
+    "catalogue_page",
+    "crop_600x1200",
+    "crop_600x600",
+    "low_quality_jpeg",
+    "original",
+    "perspective_distortion",
+    "phone_photo",
+    "whatsapp"
+  ],
+  "manifest": "/workspace/eval/real_customer_release.jsonl"
+}

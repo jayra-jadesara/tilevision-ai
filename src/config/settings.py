@@ -61,7 +61,7 @@ class AppSettings:
             "machine_id_welcome_shown": False,
             "check_for_updates": True,
             "enable_sam2_precise_crop": True,
-            "enable_orb_verification": False,
+            "enable_orb_verification": True,
             "update_manifest_url": "",
             "skipped_update_version": "",
             "last_update_check_at": "",
