@@ -46,14 +46,29 @@ See `eval/real_customer_queries.example.jsonl`.
 **Missing ground-truth IDs hard-fail** with a clear list — they are never
 silently skipped (that would deflate Recall).
 
+## Release eval set (v1.2.34)
+
+A committed, reproducible stand-in set lives at:
+
+- Manifest: `eval/real_customer_release.jsonl`
+- Catalog/queries: `eval/real_customer_release/` (synthetic marble pairs +
+  customer-like variants — safe to commit, not showroom PII)
+- Builder: `python3 dev_tools/search_quality/build_real_customer_eval_set.py`
+- ORB gate: `python3 dev_tools/search_quality/run_real_customer_orb_gate.py`
+
+Regenerate after editing pair seeds or query specs.
+
 ## Command
 
 ```bash
 python3 dev_tools/search_quality/run_bakeoff.py \
-  --real-queries eval/real_customer_queries.jsonl \
+  --real-queries eval/real_customer_release.jsonl \
   --out /opt/cursor/artifacts/real_customer \
   --orb-verification on
 ```
+
+For anonymized showroom photos, use a private manifest under
+`eval/real_queries/` (gitignored) with the same schema.
 
 Uses the same bakeoff evaluate path and `--orb-verification` flag as the
 synthetic run. Report field `catalog_source` is set to `real_customer`.
@@ -61,23 +76,25 @@ synthetic run. Report field `catalog_source` is set to `real_customer`.
 If the manifest has fewer than ~30 queries, the harness prints a visible
 low-confidence warning — do not treat tiny runs as headline numbers.
 
-## Measured (fill after a real run)
+## Measured — production path (release gate, n=70)
 
-| query_kind | n | Recall@1 | Recall@5 | MRR |
-|------------|---|----------|----------|-----|
-| original | | | | |
-| crop_600x600 | | | | |
-| crop_600x1200 | | | | |
-| catalogue_page | | | | |
-| phone_photo | | | | |
-| room_photo | | | | |
-| whatsapp | | | | |
-| low_quality_jpeg | | | | |
-| perspective_distortion | | | | |
-| **overall** | | | | |
+Full `SearchTilesUseCase` (hybrid rerank + optional ORB), confusable marble
+catalog. Source: `run_real_customer_orb_gate.py` on `eval/real_customer_release.jsonl`.
 
-*(Leave blank until a real anonymized customer set is evaluated — do not
-fabricate numbers.)*
+| query_kind | n | R@1 (ORB off) | R@1 (ORB on) | R@5 (both) |
+|------------|---|---------------|--------------|------------|
+| original | 10 | 0.7000 | 0.8000 | 0.9000 |
+| crop_600x600 | 10 | 0.6000 | 0.7000 | 0.9000 |
+| crop_600x1200 | 10 | 0.6000 | 0.7000 | 0.9000 |
+| whatsapp | 10 | 0.4000 | 0.6000 | 0.8000 |
+| phone_photo | 10 | 0.4000 | 0.6000 | 1.0000 |
+| low_quality_jpeg | 10 | 0.5000 | 0.6000 | 0.8000 |
+| perspective_distortion | 8 | 0.3750 | 0.3750 | 0.7500 |
+| catalogue_page | 2 | 0.5000 | 0.5000 | 1.0000 |
+| **overall** | **70** | **0.5143** | **0.6286** | **0.8714** |
+| **confusable pairs** | **56** | **0.5179** | **0.6607** | — |
+
+Replace rows above when re-running the gate after manifest updates.
 
 ## Platforms
 

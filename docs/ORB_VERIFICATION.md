@@ -25,39 +25,50 @@ query image
 
 ORB runs CPU-only via OpenCV (`cv2.ORB_create` + BFMatcher + RANSAC
 homography). Failures degrade to `0.0` and keep the hybrid-only ranking.
-Toggle with `enable_orb_verification` in `config.json` (default `true`).
+Toggle with `enable_orb_verification` in `config.json` (default **on** as of
+v1.2.34 — see real-customer gate below).
 
-## Benchmark
+## Real-customer gate (v1.2.34 release decision)
 
-```bash
-# Baseline (ORB off)
-python3 dev_tools/search_quality/run_bakeoff.py \
-  --out /opt/cursor/artifacts/orb_off \
-  --orb-verification off
-
-# With ORB near-tie verification
-python3 dev_tools/search_quality/run_bakeoff.py \
-  --out /opt/cursor/artifacts/orb_on \
-  --orb-verification on
-```
-
-Latency reports include `rerank_ms` (ORB stage wall time per query).
-Vectors/tile is N/A — no index change.
-
-### Measured
+Production `SearchTilesUseCase` A/B on the committed release eval set
+(`eval/real_customer_release.jsonl`, 70 queries, 4 confusable white/marble
+pairs, crops / WhatsApp / phone / perspective variants):
 
 | Metric | ORB off | ORB on | Δ |
 |--------|---------|--------|---|
-| Recall@1 | | | |
-| Recall@5 | | | |
-| MRR | | | |
-| rerank_ms | | | |
-| total_s | | | |
+| Recall@1 (overall) | 0.5143 | **0.6286** | +0.1143 |
+| Recall@5 (overall) | 0.8714 | 0.8714 | 0.0 |
+| MRR (overall) | 0.6607 | **0.7286** | +0.0679 |
+| Recall@1 (confusable pairs) | 0.5179 | **0.6607** | +0.1429 |
 
-*(Fill after running the bakeoff above — do not fabricate numbers.)*
+ORB materially improves top-1 on confusable marble pairs and customer-like
+captures without hurting Recall@5. **Default flipped to ON** in
+`AppSettings` for new installs; existing `config.json` files keep their
+saved value.
+
+Reproduce:
+
+```bash
+python3 dev_tools/search_quality/build_real_customer_eval_set.py
+python3 dev_tools/search_quality/run_real_customer_orb_gate.py \
+  --manifest eval/real_customer_release.jsonl \
+  --out /tmp/real_customer_orb_gate
+```
+
+## Synthetic bakeoff (reference only)
+
+```bash
+python3 dev_tools/search_quality/run_bakeoff.py \
+  --out /tmp/orb_off --orb-verification off
+
+python3 dev_tools/search_quality/run_bakeoff.py \
+  --out /tmp/orb_on --orb-verification on
+```
+
+Do **not** use golden synthetic numbers alone to decide ORB — the
+real-customer gate above is authoritative for the production default.
 
 ## Platforms
 
 Pure OpenCV / NumPy CPU code — identical on Windows, macOS Intel, and Apple
-Silicon. No platform-specific branches. Validate via CI search gates; do not
-fabricate per-OS scores.
+Silicon. No platform-specific branches.

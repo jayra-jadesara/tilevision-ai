@@ -87,9 +87,9 @@ def test_orb_never_raises_on_malformed():
     assert 0.0 <= verifier.score(rgb, rgb) <= 1.0
 
 
-def test_enable_orb_verification_defaults_off(tmp_path):
+def test_enable_orb_verification_defaults_on(tmp_path):
     settings = AppSettings(config_dir=tmp_path / "cfg")
-    assert settings.enable_orb_verification is False
+    assert settings.enable_orb_verification is True
 
 
 def test_enable_orb_verification_persists_off(tmp_path):

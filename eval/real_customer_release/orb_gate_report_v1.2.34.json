@@ -1,0 +1,131 @@
+{
+  "manifest": "/workspace/eval/real_customer_release.jsonl",
+  "production_path": true,
+  "orb_on": {
+    "orb_verification": true,
+    "n_queries": 70,
+    "recall@1": 0.6286,
+    "recall@5": 0.8714,
+    "mrr": 0.7286,
+    "confusable_marble_pairs": {
+      "n": 56,
+      "recall@1": 0.6607
+    },
+    "latency_total_s": 316.02,
+    "by_query_kind": {
+      "catalogue_page": {
+        "n": 2,
+        "recall@1": 0.5,
+        "recall@5": 1.0,
+        "mrr": 0.75
+      },
+      "crop_600x1200": {
+        "n": 10,
+        "recall@1": 0.7,
+        "recall@5": 0.9,
+        "mrr": 0.8
+      },
+      "crop_600x600": {
+        "n": 10,
+        "recall@1": 0.7,
+        "recall@5": 0.9,
+        "mrr": 0.8
+      },
+      "low_quality_jpeg": {
+        "n": 10,
+        "recall@1": 0.6,
+        "recall@5": 0.8,
+        "mrr": 0.6833
+      },
+      "original": {
+        "n": 10,
+        "recall@1": 0.8,
+        "recall@5": 0.9,
+        "mrr": 0.85
+      },
+      "perspective_distortion": {
+        "n": 8,
+        "recall@1": 0.375,
+        "recall@5": 0.75,
+        "mrr": 0.4792
+      },
+      "phone_photo": {
+        "n": 10,
+        "recall@1": 0.6,
+        "recall@5": 1.0,
+        "mrr": 0.75
+      },
+      "whatsapp": {
+        "n": 10,
+        "recall@1": 0.6,
+        "recall@5": 0.8,
+        "mrr": 0.6833
+      }
+    }
+  },
+  "orb_off": {
+    "orb_verification": false,
+    "n_queries": 70,
+    "recall@1": 0.5143,
+    "recall@5": 0.8714,
+    "mrr": 0.6607,
+    "confusable_marble_pairs": {
+      "n": 56,
+      "recall@1": 0.5179
+    },
+    "latency_total_s": 325.78,
+    "by_query_kind": {
+      "catalogue_page": {
+        "n": 2,
+        "recall@1": 0.5,
+        "recall@5": 1.0,
+        "mrr": 0.75
+      },
+      "crop_600x1200": {
+        "n": 10,
+        "recall@1": 0.6,
+        "recall@5": 0.9,
+        "mrr": 0.7333
+      },
+      "crop_600x600": {
+        "n": 10,
+        "recall@1": 0.6,
+        "recall@5": 0.9,
+        "mrr": 0.75
+      },
+      "low_quality_jpeg": {
+        "n": 10,
+        "recall@1": 0.5,
+        "recall@5": 0.8,
+        "mrr": 0.6167
+      },
+      "original": {
+        "n": 10,
+        "recall@1": 0.7,
+        "recall@5": 0.9,
+        "mrr": 0.7833
+      },
+      "perspective_distortion": {
+        "n": 8,
+        "recall@1": 0.375,
+        "recall@5": 0.75,
+        "mrr": 0.4792
+      },
+      "phone_photo": {
+        "n": 10,
+        "recall@1": 0.4,
+        "recall@5": 1.0,
+        "mrr": 0.6417
+      },
+      "whatsapp": {
+        "n": 10,
+        "recall@1": 0.4,
+        "recall@5": 0.8,
+        "mrr": 0.5667
+      }
+    }
+  },
+  "delta_r1": 0.1143,
+  "delta_confusable_r1": 0.1429,
+  "recommendation": "enable_orb_verification=true"
+}
