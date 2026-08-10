@@ -23,7 +23,9 @@ from dataclasses import dataclass
 #      preview grid now gets left-panel aux index view); rebuild required.
 # v12: panel aux crop shaves top/left caption band (PGYS2319 top-left bleed);
 #      rebuild required.
-CURRENT_FEATURE_VERSION = 12
+# v13: widen panel top caption band 10% → 13% (residual clipped line on real
+#      PGYS2319 at 2x zoom); rebuild required.
+CURRENT_FEATURE_VERSION = 13
 
 # Bump when pattern descriptor layout or algorithm changes.
 CURRENT_PATTERN_FEATURE_VERSION = 3

@@ -354,8 +354,11 @@ class ImagePreprocessor:
 
         # Qingyu-style sheets (PGYS2319): caption lines bleed across the top
         # panel edge into the top-left corner. panel_center (72% inset) clears
-        # them; shave the same band from the full panel aux crop boundary.
-        top_cut = max(0, int(ph * 0.10))
+        # them; shave the caption band from the full panel aux crop boundary.
+        # Real PGYS2319: 10% (v12) left a partial clipped line in top ~15px;
+        # 13% clears it at 2x zoom without eating bottom marble texture.
+        _PANEL_TOP_CAPTION_BAND_RATIO = 0.13
+        top_cut = max(0, int(ph * _PANEL_TOP_CAPTION_BAND_RATIO))
         left_cut = max(0, int(pw * 0.03))
         if top_cut > 0 or left_cut > 0:
             new_w = pw - left_cut

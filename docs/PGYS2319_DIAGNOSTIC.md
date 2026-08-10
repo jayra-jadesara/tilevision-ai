@@ -30,7 +30,11 @@ Root cause on real `PGYS2319.jpg` was **two independent gate failures**:
 Additional safeguard: center-crop aux is blocked on wide preview-grid sheets
 (center region includes grid photos).
 
-After upgrading, customers must **Rebuild Search Index** (feature_version **12**).
+After upgrading, customers must **Rebuild Search Index** (feature_version **13**).
+
+`panel` top-caption band: **13%** of panel height shaved after content crop
+(v12 used 10%, which left a partial clipped caption line on real PGYS2319 at
+2x zoom). Accept only after zoomed top-strip inspection — see below.
 
 ## Which index views become live FAISS vectors
 
@@ -49,8 +53,9 @@ For `catalog_sheet` tiles indexed via Strategy E (`extract_index_vectors` in
 `vector_index.update_vectors()` unless `_maybe_append_aux` drops it as a
 near-duplicate of primary or another aux (cosine ≥ 0.985 / 0.99). Because
 caption-contaminated `panel` and clean `panel_center` differ enough, **both**
-typically become live vectors. v12 shaves a top/left caption band from
-`primary_texture_panel()` so the `panel` aux matches `panel_center` quality.
+typically become live vectors. v12+ shaves a top/left caption band from
+`primary_texture_panel()` so the `panel` aux is marble-only (v13: top band
+13%, verified at 2x zoom on real PGYS2319).
 
 ## Prerequisites
 
@@ -120,6 +125,21 @@ Inspect PNGs under `/tmp/index_crop_debug/`:
 If logo, Chinese text, or photo-grid appear in panel/aux views, the indexed
 vector is polluted → index-side fix required (Task 3), not query-side.
 
+**Zoom acceptance check (required — do not skip):** a full-size glance misses
+residual caption bleed. After `show_index_crop.py`, extract and 2x-zoom the
+top strip of `*_view1_panel.png`:
+
+```python
+from PIL import Image
+img = Image.open("/tmp/index_crop_debug/PGYS2319_view1_panel.png")
+strip = img.crop((0, 0, img.width, 80)).resize((img.width * 2, 160))
+strip.save("/tmp/top_strip_check.png")
+```
+
+Inspect `/tmp/top_strip_check.png` directly — zero text strokes before closing.
+Repeat for the bottom 80px (`top = img.height - 80`) to confirm the larger
+top cut has not eaten usable marble texture at the bottom edge.
+
 Printed metrics to capture:
 
 - `left_panel_beneficial` / `center_crop_beneficial`
@@ -179,3 +199,41 @@ python scripts/explain_search.py "$QUERY" \
   --output-dir /tmp/index_crop_debug \
   --parity-out /tmp/pgys2319_$(uname -s).json
 ```
+
+## Client Confirmation Steps (required before closing this issue)
+
+A clean index-time crop proves **what gets embedded** for `PGYS2319.jpg`. It
+does **not** prove the client's original failed search (`xx.jpg` → missing
+`PGYS2319`) is fixed — that requires their real FAISS index and query on
+their machine. These steps are the **closing criteria** for this issue:
+
+1. **Upgrade** to the build containing feature_version **13** (panel top band
+   13% + prior v11 panel-isolation fixes).
+
+2. Run **Rebuild Search Index** on the catalog that contains `PGYS2319.jpg`.
+   Index-time vectors changed; existing v10/v11/v12 vectors do not self-heal.
+
+3. **Zoom-verify** panel crops on the real sheet (see zoom acceptance check
+   above) — confirm zero caption text at 2x in the top 80px and intact marble
+   at the bottom 80px of `*_view1_panel.png`.
+
+4. Re-run the **exact search that failed**: drop `xx.jpg`, confirm `PGYS2319`
+   appears in the UI results.
+
+5. Run for a definitive rank/score (not just present/absent):
+
+   ```bash
+   python scripts/explain_search.py "/Users/apple/Desktop/xx.jpg" \
+     --catalog "<real catalog path>" \
+     --find-tile PGYS2319 --top 30 --pool-size 100
+   ```
+
+   Report: FAISS pool rank, hybrid rerank rank, `final` score, weak-filter
+   kept/dropped, and component scores (`emb`, `color`, `tex`, `edge`, `pat`).
+
+6. **Platform parity** (original concern): if feasible, run step 5 on **Windows
+   and macOS Intel** against the **same rebuilt index** and confirm ranks/scores
+   agree within float noise (~1e-4). Use `--parity-out` JSON files and diff.
+
+Until steps 2, 4, and 5 pass on the client machine, this issue remains open
+even if index-time crops look clean in isolation.
