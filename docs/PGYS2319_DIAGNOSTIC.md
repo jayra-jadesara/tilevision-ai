@@ -30,7 +30,29 @@ Root cause on real `PGYS2319.jpg` was **two independent gate failures**:
 Additional safeguard: center-crop aux is blocked on wide preview-grid sheets
 (center region includes grid photos).
 
-After upgrading, customers must **Rebuild Search Index** (feature_version 11).
+After upgrading, customers must **Rebuild Search Index** (feature_version **12**).
+
+## Which index views become live FAISS vectors
+
+For `catalog_sheet` tiles indexed via Strategy E (`extract_index_vectors` in
+`src/ai/feature_extractor.py`):
+
+| View | Embedded? | Notes |
+|------|-----------|-------|
+| `primary` | **Yes** (always) | Full sheet via `extract()` — stored in SQLite features + FAISS |
+| `panel` | **Yes** (if not near-dup) | Aux vector from `primary_texture_panel()` — **live FAISS id** |
+| `panel_center` | **Yes** (if not near-dup) | 72% center of panel — separate aux vector |
+| `adaptive` | **Yes** (if not near-dup) | Content-region crop |
+| `center` | Only when `center_crop_beneficial` | Blocked on preview-grid marketing sheets |
+
+`panel` is **not** a debug-only artifact — it is embedded and passed to
+`vector_index.update_vectors()` unless `_maybe_append_aux` drops it as a
+near-duplicate of primary or another aux (cosine ≥ 0.985 / 0.99). Because
+caption-contaminated `panel` and clean `panel_center` differ enough, **both**
+typically become live vectors. v12 shaves a top/left caption band from
+`primary_texture_panel()` so the `panel` aux matches `panel_center` quality.
+
+## Prerequisites
 
 - TileVision AI v1.2.34+ (includes `scripts/explain_search.py`)
 - DINOv2 weights: `python scripts/download_dinov2_model.py`

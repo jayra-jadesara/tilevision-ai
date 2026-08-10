@@ -122,6 +122,12 @@ def _panel_crop_is_marble_only(panel: Image.Image, sheet: Image.Image) -> bool:
     ph, pw = panel_arr.shape[:2]
     if pw < 64 or ph < 64:
         return False
+    # Top-left caption band (PGYS2319 bleed zone).
+    top_left = panel_arr[: int(ph * 0.15), : int(pw * 0.25)]
+    tl_gray = cv2.cvtColor(top_left, cv2.COLOR_RGB2GRAY)
+    tl_edges = cv2.Canny(tl_gray, 60, 140)
+    if float(np.mean(tl_edges > 0)) >= 0.05:
+        return False
     # Right 15% of panel should stay marble — not logo/grid bleed.
     right_strip = panel_arr[:, int(pw * 0.85) :]
     gray = cv2.cvtColor(right_strip, cv2.COLOR_RGB2GRAY)

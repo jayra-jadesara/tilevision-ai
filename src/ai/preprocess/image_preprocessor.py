@@ -351,6 +351,21 @@ class ImagePreprocessor:
                 ph,
             )
             return None
+
+        # Qingyu-style sheets (PGYS2319): caption lines bleed across the top
+        # panel edge into the top-left corner. panel_center (72% inset) clears
+        # them; shave the same band from the full panel aux crop boundary.
+        top_cut = max(0, int(ph * 0.10))
+        left_cut = max(0, int(pw * 0.03))
+        if top_cut > 0 or left_cut > 0:
+            new_w = pw - left_cut
+            new_h = ph - top_cut
+            if new_w >= 64 and new_h >= 64:
+                left = left.crop((left_cut, top_cut, pw, ph))
+                pw, ph = left.size
+            else:
+                top_cut = left_cut = 0
+
         arr = np.asarray(left, dtype=np.float32)
         # High-key white marble/onyx panels often have std ≈ 1–4. The old
         # threshold of 6.0 rejected every Qingyu-style slab (customer PGYS2319).
@@ -372,11 +387,15 @@ class ImagePreprocessor:
             )
             return None
         logger.info(
-            "primary_texture_panel: using left panel %sx%s (std=%.2f, Δfull=%.2f)",
+            "primary_texture_panel: using left panel %sx%s (std=%.2f, Δfull=%.2f"
+            "%s)",
             pw,
             ph,
             panel_std,
             mean_abs,
+            f", top_cut={top_cut} left_cut={left_cut}"
+            if top_cut or left_cut
+            else "",
         )
         return left
 
