@@ -330,7 +330,11 @@ class ImagePreprocessor:
         width, height = image.size
         if width < 480 or height < 320:
             return None
-        if (width / max(height, 1)) < 1.12:
+        rgb = np.asarray(image, dtype=np.uint8)
+        gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+        from src.ai.search_quality.image_analysis import marketing_sheet_panel_eligible
+
+        if not marketing_sheet_panel_eligible(width, height, gray):
             return None
 
         # Take the left ~45% (not a full half) so the text/grid column does not

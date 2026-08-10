@@ -19,7 +19,9 @@ from dataclasses import dataclass
 #     center aux). Golden bakeoff winner vs primary-only; rebuild required.
 # v10: Strategy E + force adaptive content crop (320-tile optimization study:
 #      +1.57pp R@5 / +1.19pp R@1 vs E at +0.13 vectors/tile); rebuild required.
-CURRENT_FEATURE_VERSION = 10
+# v11: marketing-sheet text detection + aspect gate (PGYS2319 @ 1.063 with
+#      preview grid now gets left-panel aux index view); rebuild required.
+CURRENT_FEATURE_VERSION = 11
 
 # Bump when pattern descriptor layout or algorithm changes.
 CURRENT_PATTERN_FEATURE_VERSION = 3

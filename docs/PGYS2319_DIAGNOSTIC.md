@@ -12,7 +12,25 @@ Candidates for reranking: 100
 Weak-result filter: kept 10 of 100 (min_raw=0.430)
 ```
 
-## Prerequisites
+## Fix (v11, feature_version bump → Rebuild Search Index required)
+
+Root cause on real `PGYS2319.jpg` was **two independent gate failures**:
+
+1. **`text_region_score` undercounting (~0.024):** the legacy detector averaged
+   single-threshold Canny edge density over the entire right 45%. Sparse gold
+   logo + small caption blocks in the top band were diluted by white margin and
+   photo-grid cells. Fixed with multi-threshold top-band Canny, horizontal Sobel
+   row activity, and slab-vs-marketing column contrast gating.
+
+2. **`aspect >= 1.12` hard floor:** real sheet is aspect **1.063** — below the
+   old threshold even with `has_preview_grid=True`. Preview-grid sheets now use
+   a **1.03** aspect floor; `primary_texture_panel()` shares the same gate via
+   `marketing_sheet_panel_eligible()`.
+
+Additional safeguard: center-crop aux is blocked on wide preview-grid sheets
+(center region includes grid photos).
+
+After upgrading, customers must **Rebuild Search Index** (feature_version 11).
 
 - TileVision AI v1.2.34+ (includes `scripts/explain_search.py`)
 - DINOv2 weights: `python scripts/download_dinov2_model.py`

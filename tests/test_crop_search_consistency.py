@@ -25,6 +25,8 @@ cv2 = pytest.importorskip("cv2")
 faiss = pytest.importorskip("faiss")
 
 from src.ai.preprocess.image_preprocessor import ImagePreprocessor
+from src.ai.search_quality.image_analysis import analyze_image
+from src.ai.search_quality.views import IndexStrategy, IndexViewType, build_index_views
 from src.ai.vector_index import FaissIndexManager
 
 
@@ -39,41 +41,72 @@ def _make_marble(h: int, w: int, seed: int = 42) -> Image.Image:
     return Image.fromarray(base)
 
 
-def _make_catalog_sheet(tmp_path: Path) -> tuple[Path, Path]:
-    """Build PGYS2319-like sheet + 600×600 slab crop."""
-    slab = _make_marble(900, 450, seed=7)
-    sheet = Image.new("RGB", (1200, 900), (255, 255, 255))
-    sheet.paste(slab.resize((500, 880)), (20, 10))
-    draw = ImageDraw.Draw(sheet)
+def _load_fonts():
     try:
-        font = ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 64
-        )
-        font_sm = ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 22
+        return (
+            ImageFont.truetype(
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 52
+            ),
+            ImageFont.truetype(
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16
+            ),
+            ImageFont.truetype(
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 13
+            ),
         )
     except Exception:
-        font = ImageFont.load_default()
-        font_sm = font
-    draw.text((560, 40), "ELEGANT", fill=(180, 150, 40), font=font)
-    for i, line in enumerate(
-        [
-            "Design from neutral tones",
-            "Soft light and shadow",
-            "Delicate jade-like touch",
-            "Created for aesthetics",
-            "Qingyu Large Slab Series",
-        ]
-    ):
-        draw.text((560, 130 + i * 34), line, fill=(10, 10, 10), font=font_sm)
-    mini = slab.resize((90, 160))
+        default = ImageFont.load_default()
+        return default, default, default
+
+
+def _make_catalog_sheet(tmp_path: Path) -> tuple[Path, Path]:
+    """
+    Build a PGYS2319-realistic marketing sheet + 600×600 slab crop.
+
+    Matches the real client sheet proportions (aspect ~1.063, panel ~45%,
+    sparse gold logo + small caption blocks + preview grid). The old synthetic
+    (1200×900, dense English paragraphs) falsely passed left_panel_beneficial
+    because aspect 1.333 cleared the 1.12 gate and dense text inflated
+    text_region_score — it did not reproduce the real failure mode.
+    """
+    # Real PGYS2319.jpg: aspect≈1.063, kind=bordered_tile, has_preview_grid=True.
+    sheet_w, sheet_h = 1063, 1000
+    panel_w = int(sheet_w * 0.45)
+
+    slab = _make_marble(900, 450, seed=7)
+    sheet = Image.new("RGB", (sheet_w, sheet_h), (255, 255, 255))
+    sheet.paste(slab.resize((panel_w - 30, sheet_h - 20)), (15, 10))
+    draw = ImageDraw.Draw(sheet)
+    font_logo, font_md, font_sm = _load_fonts()
+
+    # Sparse gold logo — low Canny density vs white (real sheet pattern).
+    draw.text((panel_w + 35, 28), "ELEGANT", fill=(185, 155, 45), font=font_logo)
+
+    # Small caption blocks (proxy for Chinese lines — few pixels vs canvas).
+    captions = [
+        "中性色调设计理念",
+        "柔和光影层次表现",
+        "PGYS2319  750*1500mm",
+    ]
+    for i, line in enumerate(captions):
+        draw.text((panel_w + 35, 110 + i * 26), line, fill=(15, 15, 15), font=font_sm)
+
+    # Secondary small block (product series line).
+    draw.text((panel_w + 35, 200), "Qingyu Large Slab Series", fill=(30, 30, 30), font=font_md)
+
+    mini = slab.resize((82, 145))
+    grid_x0 = panel_w + 30
     for r in range(2):
         for c in range(3):
-            x, y = 560 + c * 110, 360 + r * 180
+            x, y = grid_x0 + c * 105, 340 + r * 175
             sheet.paste(mini, (x, y))
-            draw.rectangle((x, y, x + 90, y + 160), outline=(0, 0, 0), width=2)
-    draw.text((560, 760), "PGYS2319  750*1500mm", fill=(0, 0, 0), font=font_sm)
-    draw.rectangle((540, 20, 1180, 880), outline=(30, 30, 30), width=3)
+            draw.rectangle((x, y, x + 82, y + 145), outline=(0, 0, 0), width=2)
+
+    draw.rectangle(
+        (panel_w + 15, 18, sheet_w - 18, sheet_h - 18),
+        outline=(30, 30, 30),
+        width=3,
+    )
 
     sheet_path = tmp_path / "sheet_PGYS2319.jpg"
     crop_path = tmp_path / "crop_600x600.jpg"
@@ -81,6 +114,55 @@ def _make_catalog_sheet(tmp_path: Path) -> tuple[Path, Path]:
     slab_big = slab.resize((600, 900))
     slab_big.crop((0, 150, 600, 750)).save(crop_path, quality=95)
     return sheet_path, crop_path
+
+
+def _panel_crop_is_marble_only(panel: Image.Image, sheet: Image.Image) -> bool:
+    """Heuristic: panel crop must not include marketing-column edge density."""
+    panel_arr = np.asarray(panel.convert("RGB"))
+    ph, pw = panel_arr.shape[:2]
+    if pw < 64 or ph < 64:
+        return False
+    # Right 15% of panel should stay marble — not logo/grid bleed.
+    right_strip = panel_arr[:, int(pw * 0.85) :]
+    gray = cv2.cvtColor(right_strip, cv2.COLOR_RGB2GRAY)
+    edges = cv2.Canny(gray, 60, 140)
+    edge_density = float(np.mean(edges > 0))
+    # Marketing text/grid typically >0.08 on contaminated crops.
+    return edge_density < 0.06
+
+
+def test_realistic_pgys2319_sheet_analysis_flags_left_panel(tmp_path):
+    """Realistic proportions must trigger panel isolation (regression PGYS2319)."""
+    sheet_path, _ = _make_catalog_sheet(tmp_path)
+    sheet = Image.open(sheet_path)
+    a = analyze_image(sheet)
+
+    aspect = sheet.size[0] / sheet.size[1]
+    assert 1.04 <= aspect <= 1.08
+    assert a.has_preview_grid is True
+    # Old detector returned ~0.024 on real image; must exceed gate now.
+    assert a.text_region_score >= 0.12, (
+        f"text_region_score={a.text_region_score:.3f} still undercounts"
+    )
+    assert a.left_panel_beneficial is True
+    assert a.center_crop_beneficial is False
+
+
+def test_realistic_pgys2319_index_views_include_clean_panel(tmp_path):
+    """Index-time views must include panel aux, not center-only pollution."""
+    sheet_path, _ = _make_catalog_sheet(tmp_path)
+    sheet = Image.open(sheet_path)
+    views = build_index_views(sheet, IndexStrategy.E_HEURISTIC_MULTIVIEW)
+    types = [v.view_type for v in views]
+    assert IndexViewType.PANEL in types
+
+    panel = ImagePreprocessor.primary_texture_panel(sheet)
+    assert panel is not None
+    assert _panel_crop_is_marble_only(panel, sheet)
+
+    panel_views = [v for v in views if v.view_type == IndexViewType.PANEL]
+    assert panel_views
+    assert _panel_crop_is_marble_only(panel_views[0].image, sheet)
 
 
 def test_primary_texture_panel_detects_wide_catalog_sheet(tmp_path):
@@ -95,17 +177,19 @@ def test_primary_texture_panel_detects_wide_catalog_sheet(tmp_path):
 
 def test_primary_texture_panel_keeps_low_contrast_white_marble(tmp_path):
     """Customer PGYS2319-class sheets: high-key white slab, std often < 6."""
-    h, w = 900, 1200
-    sheet = Image.new("RGB", (w, h), (255, 255, 255))
-    # Nearly flat white left slab with faint veins (std ~2–4).
-    slab = np.full((h - 20, w // 2 - 40, 3), 248, dtype=np.float32)
+    # Realistic aspect (~1.063) — old 1200×900 fixture hid the aspect gate bug.
+    sheet_w, sheet_h = 1063, 1000
+    panel_w = int(sheet_w * 0.45)
+    sheet = Image.new("RGB", (sheet_w, sheet_h), (255, 255, 255))
+    slab = np.full((sheet_h - 20, panel_w - 30, 3), 248, dtype=np.float32)
     rng = np.random.default_rng(11)
     slab += rng.normal(0, 2.5, slab.shape)
     slab = np.clip(slab, 0, 255).astype(np.uint8)
-    sheet.paste(Image.fromarray(slab), (20, 10))
+    sheet.paste(Image.fromarray(slab), (15, 10))
     draw = ImageDraw.Draw(sheet)
-    draw.text((w // 2 + 40, 40), "ELEGANT", fill=(180, 150, 40))
-    draw.text((w // 2 + 40, 120), "PGYS2319 catalog sheet", fill=(0, 0, 0))
+    font_logo, _, font_sm = _load_fonts()
+    draw.text((panel_w + 35, 28), "ELEGANT", fill=(185, 155, 45), font=font_logo)
+    draw.text((panel_w + 35, 120), "PGYS2319 catalog sheet", fill=(0, 0, 0), font=font_sm)
     path = tmp_path / "white_sheet.jpg"
     sheet.save(path, quality=95)
 
