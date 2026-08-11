@@ -171,6 +171,114 @@ def test_realistic_pgys2319_index_views_include_clean_panel(tmp_path):
     assert _panel_crop_is_marble_only(panel_views[0].image, sheet)
 
 
+def test_catalog_sheet_primary_descriptors_come_from_isolated_panel(tmp_path):
+    """
+    Exact reproduction of the color=0.075 bug class:
+
+    Primary letterbox used to be the full marketing sheet (and/or gray-padded
+    portrait panel). After v14 it must be the isolated panel letterboxed with
+    content-matched pad so color/texture/edge/pattern match a clean marble crop.
+    """
+    from src.ai.descriptors.color_descriptor import ColorDescriptor, HISTOGRAM_SIZE
+    from src.ai.descriptors.edge_descriptor import EdgeDescriptor
+    from src.ai.descriptors.pattern_descriptor import PatternDescriptor
+    from src.ai.descriptors.texture_descriptor import TextureDescriptor
+    from src.ai.feature_extractor import FeatureExtractor
+    from src.ai.debug.index_crop_debug import show_index_crops
+    from tests.fake_ai import FakeEmbedder
+
+    sheet_path, crop_path = _make_catalog_sheet(tmp_path)
+    crop_pre = ImagePreprocessor.preprocess(crop_path)
+    legacy = ImagePreprocessor.preprocess(sheet_path)
+
+    # BEFORE: full-sheet primary letterbox vs clean crop (hist CORREL collapses
+    # on real PGYS2319 to ~0.075; synthetic stays higher but still weak).
+    hist_before = float(
+        cv2.compareHist(
+            ColorDescriptor.extract(legacy.bgr)[:HISTOGRAM_SIZE],
+            ColorDescriptor.extract(crop_pre.bgr)[:HISTOGRAM_SIZE],
+            cv2.HISTCMP_CORREL,
+        )
+    )
+    edge_before = EdgeDescriptor.similarity(
+        EdgeDescriptor.extract(legacy.bgr),
+        EdgeDescriptor.extract(crop_pre.bgr),
+    )
+    pat_before = PatternDescriptor.similarity(
+        PatternDescriptor.extract(legacy.bgr),
+        PatternDescriptor.extract(crop_pre.bgr),
+    )
+
+    # Gray-pad panel path (broken letterbox) must not be what we ship.
+    panel = ImagePreprocessor.primary_texture_panel(Image.open(sheet_path))
+    assert panel is not None
+    gray_pad = FeatureExtractor._finalize_index_pil(
+        panel,
+        original_size=Image.open(sheet_path).size,
+        match_pad_to_content=False,
+    )
+    color_gray_pad = ColorDescriptor.similarity(
+        ColorDescriptor.extract(gray_pad.bgr),
+        ColorDescriptor.extract(crop_pre.bgr),
+    )
+
+    report = show_index_crops(sheet_path, output_dir=tmp_path / "crops")
+    primary_letter_path = next(
+        p for p in report.saved_paths if p.endswith("_primary_preprocess_letterbox.png")
+    )
+    primary_letter = Image.open(primary_letter_path)
+    arr = np.asarray(primary_letter.convert("RGB"))
+    # Content-matched pad: almost no neutral-gray (128) pad pixels.
+    gray_pad_frac = float(np.mean(np.all(np.abs(arr.astype(int) - 128) < 3, axis=2)))
+    assert gray_pad_frac < 0.05, f"primary letterbox still gray-padded: {gray_pad_frac:.3f}"
+
+    fx = FeatureExtractor(embedder=FakeEmbedder())
+    features, _aux = fx.extract_index_vectors(str(sheet_path))
+
+    q_color = ColorDescriptor.extract(crop_pre.bgr)
+    color_after = ColorDescriptor.similarity(features.color_histogram, q_color)
+    tex_after = TextureDescriptor.similarity(
+        features.texture_histogram,
+        TextureDescriptor.extract(crop_pre.bgr),
+    )
+    edge_after = EdgeDescriptor.similarity(
+        features.edge_histogram,
+        EdgeDescriptor.extract(crop_pre.bgr),
+    )
+    pat_after = PatternDescriptor.similarity(
+        features.pattern_features,
+        PatternDescriptor.extract(crop_pre.bgr),
+    )
+    hist_after = float(
+        cv2.compareHist(
+            features.color_histogram[:HISTOGRAM_SIZE],
+            q_color[:HISTOGRAM_SIZE],
+            cv2.HISTCMP_CORREL,
+        )
+    )
+
+    # Task 2 acceptance: high marble-vs-marble color (exact letterbox repro).
+    letter_bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+    direct = ColorDescriptor.similarity(
+        ColorDescriptor.extract(letter_bgr),
+        ColorDescriptor.extract(crop_pre.bgr),
+    )
+    assert direct >= 0.85, f"exact-repro letterbox color={direct:.3f}"
+    assert color_after >= 0.85, f"panel-primary color={color_after:.3f}"
+    assert color_after > color_gray_pad + 0.15, (
+        f"content pad must beat gray pad: {color_after:.3f} vs {color_gray_pad:.3f}"
+    )
+    assert hist_after > hist_before, (
+        f"LAB hist CORREL must improve: {hist_before:.3f} → {hist_after:.3f}"
+    )
+    # Task 3: edge/pattern improve vs polluted full-sheet primary.
+    assert edge_after > edge_before + 0.10, (
+        f"edge {edge_before:.3f} → {edge_after:.3f}"
+    )
+    assert pat_after > pat_before, f"pattern {pat_before:.3f} → {pat_after:.3f}"
+    assert tex_after >= 0.70, f"texture after={tex_after:.3f}"
+
+
 def test_primary_texture_panel_detects_wide_catalog_sheet(tmp_path):
     sheet_path, _ = _make_catalog_sheet(tmp_path)
     sheet = Image.open(sheet_path)

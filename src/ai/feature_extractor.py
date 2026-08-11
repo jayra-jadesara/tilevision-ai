@@ -297,22 +297,42 @@ class FeatureExtractor:
         original_size: tuple[int, int],
     ) -> np.ndarray:
         """Letterbox + DINOv2 for an index-time aux crop (same path as primary)."""
+        preprocessed = self._finalize_index_pil(view, original_size=original_size)
+        return np.asarray(
+            self._embedder.extract_from_preprocessed(preprocessed, for_query=False),
+            dtype=np.float32,
+        )
+
+    @staticmethod
+    def _finalize_index_pil(
+        view: Image.Image,
+        *,
+        original_size: tuple[int, int],
+        match_pad_to_content: bool = False,
+    ) -> PreprocessedImage:
+        """Normalize + letterbox an index crop into a PreprocessedImage."""
         view = ImagePreprocessor.normalize_lighting(view)
-        view = ImagePreprocessor.resize_letterbox(view)
+        pad_color = None
+        if match_pad_to_content:
+            # Portrait panel letterboxes are ~45% pad; neutral gray PAD_COLOR
+            # destroys LAB color/texture histograms (PGYS2319 color=0.07 class).
+            mean = np.asarray(view.convert("RGB"), dtype=np.float32).mean(axis=(0, 1))
+            pad_color = (
+                int(np.clip(mean[0], 0, 255)),
+                int(np.clip(mean[1], 0, 255)),
+                int(np.clip(mean[2], 0, 255)),
+            )
+        view = ImagePreprocessor.resize_letterbox(view, pad_color=pad_color)
         rgb = ImagePreprocessor.to_numpy(view)
         bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        preprocessed = PreprocessedImage(
+        return PreprocessedImage(
             pil=view,
             rgb=rgb,
             bgr=bgr,
             gray=gray,
             width=original_size[0],
             height=original_size[1],
-        )
-        return np.asarray(
-            self._embedder.extract_from_preprocessed(preprocessed, for_query=False),
-            dtype=np.float32,
         )
 
     # Skip near-duplicates of primary. 0.97 was too strict for center-50 on
@@ -352,10 +372,15 @@ class FeatureExtractor:
         """
         Index-time extract: primary TileFeatures plus optional aux FAISS vectors.
 
-        View selection follows Strategy E + force adaptive (v1.2.31 /
-        feature_v10): heuristic image analysis gates panel/center crops, and
-        an adaptive content crop is always attempted. Near-duplicate aux
-        vectors are dropped.
+        When ``left_panel_beneficial`` (catalog marketing sheet), the *primary*
+        TileFeatures row — embedding **and** color/texture/edge/pattern /
+        dominant-color — is taken from ``primary_texture_panel()``, not the
+        raw full sheet. Full-sheet layout used to pollute hybrid descriptors
+        (measured color similarity 0.075 for xx.jpg vs PGYS2319) while only
+        the aux FAISS embedding was clean.
+
+        Aux FAISS vectors still include full-sheet (for sheet self-hit),
+        panel_center, and adaptive when beneficial. Near-duplicates are dropped.
         """
         from src.ai.search_quality.image_analysis import analyze_image
         from src.ai.search_quality.views import (
@@ -364,10 +389,8 @@ class FeatureExtractor:
             build_index_views,
         )
 
-        features = self.extract(image_path, for_query=False)
-        aux: list[np.ndarray] = []
-        primary = np.asarray(features.embedding, dtype=np.float32).ravel()
         image_name = Path(image_path).name
+        aux: list[np.ndarray] = []
 
         try:
             # Analyze / crop on the raw sheet. Do NOT trim the full sheet before
@@ -389,9 +412,54 @@ class FeatureExtractor:
                 analysis.left_panel_beneficial,
                 analysis.center_crop_beneficial,
             )
+
+            panel_pil = None
+            if analysis.left_panel_beneficial:
+                panel_pil = ImagePreprocessor.primary_texture_panel(raw)
+
+            if panel_pil is not None:
+                primary_pre = self._finalize_index_pil(
+                    panel_pil,
+                    original_size=raw.size,
+                    match_pad_to_content=True,
+                )
+                features = self.extract_from_preprocessed(
+                    primary_pre,
+                    for_query=False,
+                )
+                logger.info(
+                    "Index primary from isolated panel for %s "
+                    "(%sx%s → letterbox %sx%s)",
+                    image_name,
+                    panel_pil.size[0],
+                    panel_pil.size[1],
+                    primary_pre.pil.size[0],
+                    primary_pre.pil.size[1],
+                )
+            else:
+                features = self.extract(image_path, for_query=False)
+
+            primary = np.asarray(features.embedding, dtype=np.float32).ravel()
+
             for view in views:
                 if view.view_type == IndexViewType.PRIMARY:
-                    continue  # primary already embedded via extract()
+                    if panel_pil is not None:
+                        # Former full-sheet primary → aux for sheet self-hit.
+                        emb = self._embed_index_view(
+                            view.image,
+                            original_size=raw.size,
+                        )
+                        self._maybe_append_aux(
+                            aux,
+                            primary,
+                            emb,
+                            label="full_sheet",
+                            image_name=image_name,
+                        )
+                    continue
+                if view.view_type == IndexViewType.PANEL and panel_pil is not None:
+                    # Panel crop is already the primary — skip near-dup aux.
+                    continue
                 emb = self._embed_index_view(view.image, original_size=raw.size)
                 self._maybe_append_aux(
                     aux,
@@ -402,10 +470,13 @@ class FeatureExtractor:
                 )
         except Exception as exc:
             logger.warning(
-                "Index aux embed skipped for %s: %s",
+                "Index panel/aux path failed for %s (%s) — falling back to "
+                "full-sheet primary only",
                 image_path,
                 exc,
             )
+            features = self.extract(image_path, for_query=False)
+            aux = []
 
         return features, aux
 

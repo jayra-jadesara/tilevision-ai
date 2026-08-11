@@ -421,9 +421,16 @@ class ImagePreprocessor:
         cls,
         image: Image.Image,
         target: int = TARGET_SIZE,
+        *,
+        pad_color: Tuple[int, int, int] | None = None,
     ) -> Image.Image:
         """
         Resize preserving aspect ratio, then center-pad to a square canvas.
+
+        ``pad_color`` defaults to ``PAD_COLOR`` (neutral gray). For tall
+        catalog-panel crops, pass the panel mean color so gray pads do not
+        pollute LAB color / texture histograms (~45% of a portrait panel
+        letterbox can otherwise be pad pixels).
         """
         width, height = image.size
         if width <= 0 or height <= 0:
@@ -438,7 +445,8 @@ class ImagePreprocessor:
             Image.Resampling.BICUBIC,
         )
 
-        canvas = Image.new("RGB", (target, target), PAD_COLOR)
+        fill = pad_color if pad_color is not None else PAD_COLOR
+        canvas = Image.new("RGB", (target, target), fill)
         offset_x = (target - new_width) // 2
         offset_y = (target - new_height) // 2
         canvas.paste(resized, (offset_x, offset_y))

@@ -25,7 +25,10 @@ from dataclasses import dataclass
 #      rebuild required.
 # v13: widen panel top caption band 10% → 13% (residual clipped line on real
 #      PGYS2319 at 2x zoom); rebuild required.
-CURRENT_FEATURE_VERSION = 13
+# v14: catalog-sheet primary TileFeatures (embedding + color/texture/edge/
+#      pattern/dominant) come from isolated panel, not full marketing sheet;
+#      full-sheet kept as FAISS aux for sheet self-hit; rebuild required.
+CURRENT_FEATURE_VERSION = 14
 
 # Bump when pattern descriptor layout or algorithm changes.
 CURRENT_PATTERN_FEATURE_VERSION = 3

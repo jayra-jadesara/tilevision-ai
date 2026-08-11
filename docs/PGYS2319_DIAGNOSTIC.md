@@ -30,11 +30,20 @@ Root cause on real `PGYS2319.jpg` was **two independent gate failures**:
 Additional safeguard: center-crop aux is blocked on wide preview-grid sheets
 (center region includes grid photos).
 
-After upgrading, customers must **Rebuild Search Index** (feature_version **13**).
+After upgrading, customers must **Rebuild Search Index** (feature_version **14**).
 
 `panel` top-caption band: **13%** of panel height shaved after content crop
 (v12 used 10%, which left a partial clipped caption line on real PGYS2319 at
 2x zoom). Accept only after zoomed top-strip inspection — see below.
+
+**v14 (critical):** when `left_panel_beneficial`, the tile's stored
+`TileFeatures` row (embedding **and** color/texture/edge/pattern/dominant)
+is extracted from the isolated panel, not the full marketing sheet. Full-sheet
+remains a FAISS aux for sheet self-hit. Portrait panels letterbox with
+**content-matched pad** (not neutral gray) so pad pixels do not destroy LAB
+histograms. This is the fix for `color=0.075` on xx.jpg vs PGYS2319 — the
+near-white softening from Issue B remains as a general improvement but is not
+what resolved this pair.
 
 ## Which index views become live FAISS vectors
 
@@ -207,11 +216,12 @@ does **not** prove the client's original failed search (`xx.jpg` → missing
 `PGYS2319`) is fixed — that requires their real FAISS index and query on
 their machine. These steps are the **closing criteria** for this issue:
 
-1. **Upgrade** to the build containing feature_version **13** (panel top band
-   13% + prior v11 panel-isolation fixes).
+1. **Upgrade** to the build containing feature_version **14** (panel primary
+   TileFeatures + prior panel-isolation / self-hit / near-white fixes).
 
 2. Run **Rebuild Search Index** on the catalog that contains `PGYS2319.jpg`.
-   Index-time vectors changed; existing v10/v11/v12 vectors do not self-heal.
+   Index-time primary vectors **and** stored descriptors changed; existing
+   v10–v13 vectors do not self-heal.
 
 3. **Zoom-verify** panel crops on the real sheet (see zoom acceptance check
    above) — confirm zero caption text at 2x in the top 80px and intact marble
@@ -258,28 +268,31 @@ Search logs now print the resolved FAISS `index=` path for support diffs.
 
 ## Issue B — `color=0.075` on white marble pairs
 
-**Diagnosis (side-by-side, synthetic cool/warm WB on same marble):**
+**True root cause (exact reproduction):**
 
-| Pair | hist CORREL (before) | ColorDescriptor.similarity |
-|------|----------------------|----------------------------|
-| Same marble, cool vs warm WB | **0.001** | 0.178 → **0.94 after fix** |
-| Full marketing sheet vs clean crop | 0.213 | 0.345 |
+```text
+ColorDescriptor.similarity(
+  extract(xx_primary_preprocess_letterbox.png),      # clean query
+  extract(PGYS2319_primary_preprocess_letterbox.png) # was FULL SHEET
+) == 0.075
+```
 
-Root mechanism: full LAB `HISTCMP_CORREL` collapses when camera white-balance
-shifts a*/b* across bins on near-white / low-chroma surfaces. Dominant-color
-LAB distance can also exceed the soft-start (28) and apply the full `-0.08`
-penalty on cream-vs-cool-white pairs.
+Panel isolation from Tasks 1–3 only fed an **aux FAISS embedding**. The single
+stored `TileFeatures` row (hybrid color/texture/edge/pattern +
+`candidate.embedding`) still came from the uncropped marketing sheet.
 
-**Fix (query-time only — no `feature_version` bump / no reindex):**
-- Near-white soft path in `ColorDescriptor.similarity` (lightness/chroma
-  agreement when both sides are high-L / low-sat).
-- Skip `dominant_color_penalty` when **both** dominant colors are near-white.
+**v14 fix:** primary extraction uses `primary_texture_panel()` when
+`left_panel_beneficial`, with content-matched letterbox pad. Near-white
+softening (Issue B query-time path) is kept for genuine WB pairs but is
+**not** what fixed this tile — inputs must be matched first.
 
-Does not change crop/panel isolation (FAISS rank 4 already proved that works).
+Synthetic before/after (same slab crop vs sheet primary):
 
-**Bakeoff:** unit lock for cool/warm WB + white-vs-navy discrimination.
-Full `eval/real_customer_release.jsonl` bakeoff requires DINOv2 weights on a
-machine with the eval assets — re-run
-`dev_tools/search_quality/run_real_customer_orb_gate.py` (or the current
-release bakeoff entrypoint) before/after and report R@1 / confusable-pair /
-`perspective_distortion` deltas before merging to a release build.
+| Path | LAB hist CORREL | color_sim | edge | pattern |
+|------|-----------------|-----------|------|---------|
+| Legacy full-sheet primary | 0.21 | 0.79* | 0.41 | 0.47 |
+| Panel + gray pad (broken) | 0.63 | 0.66 | 0.76 | 0.62 |
+| Panel + content pad (v14) | 0.65 | **0.99** | **0.77** | **0.67** |
+
+\\*near-white soft path masks hist weakness on synthetic; real PGYS2319
+sheet sat fails the near-white gate → similarity stays at hist ≈ 0.075.

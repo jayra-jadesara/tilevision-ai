@@ -79,16 +79,43 @@ def show_index_crops(
         panel.save(panel_path)
         saved.append(str(panel_path))
 
-    primary_pre = ImagePreprocessor.preprocess(source)
+    # Primary letterbox must match extract_index_vectors: panel when beneficial.
+    if analysis.left_panel_beneficial and panel is not None:
+        primary_src = panel
+        primary_note = "panel"
+        mean = np.asarray(primary_src.convert("RGB"), dtype=np.float32).mean(
+            axis=(0, 1)
+        )
+        pad_color = (
+            int(np.clip(mean[0], 0, 255)),
+            int(np.clip(mean[1], 0, 255)),
+            int(np.clip(mean[2], 0, 255)),
+        )
+        primary_lit = ImagePreprocessor.normalize_lighting(primary_src)
+        primary_letter = ImagePreprocessor.resize_letterbox(
+            primary_lit,
+            pad_color=pad_color,
+        )
+    else:
+        primary_note = "full_sheet"
+        primary_pre = ImagePreprocessor.preprocess(source)
+        primary_letter = primary_pre.pil
     primary_path = out / f"{stem}_primary_preprocess_letterbox.png"
-    primary_pre.pil.save(primary_path)
+    primary_letter.save(primary_path)
     saved.append(str(primary_path))
+    # Also save legacy full-sheet letterbox for before/after diffs.
+    if primary_note == "panel":
+        legacy = ImagePreprocessor.preprocess(source)
+        legacy_path = out / f"{stem}_legacy_fullsheet_letterbox.png"
+        legacy.pil.save(legacy_path)
+        saved.append(str(legacy_path))
 
     if feature_extractor is not None:
         _, aux = feature_extractor.extract_index_vectors(str(source))
         aux_path = out / f"{stem}_aux_vectors.txt"
         aux_path.write_text(
             f"aux_vector_count={len(aux)}\n"
+            f"primary_source={primary_note}\n"
             + "\n".join(
                 f"aux_{i}_dim={len(v)} norm={float(np.linalg.norm(v)):.4f}"
                 for i, v in enumerate(aux)
@@ -135,6 +162,16 @@ def format_index_crop_report(report: IndexCropReport) -> str:
         )
     else:
         lines.append("primary_texture_panel: None (no left-panel aux vector path)")
+    if report.analysis.left_panel_beneficial and report.primary_panel:
+        lines.append(
+            "primary_preprocess_letterbox: ISOLATED PANEL "
+            "(feeds TileFeatures embedding + descriptors)"
+        )
+    else:
+        lines.append(
+            "primary_preprocess_letterbox: full sheet "
+            "(feeds TileFeatures embedding + descriptors)"
+        )
     lines.append("")
     lines.append("Saved PNGs:")
     for path in report.saved_paths:
