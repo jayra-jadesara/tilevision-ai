@@ -237,3 +237,49 @@ their machine. These steps are the **closing criteria** for this issue:
 
 Until steps 2, 4, and 5 pass on the client machine, this issue remains open
 even if index-time crops look clean in isolation.
+
+## Issue A — UI shows 1 result while CLI keeps 9 (same catalog)
+
+**Root cause (confirmed):** not a different catalog path and not a mid-rebuild
+race. `xx.jpg` is itself an indexed catalog tile. Production
+`SearchTilesUseCase.execute()` demoted same-file exact matches to score
+`0.97` **and cleared `exact_match`**, so the weak-result filter used
+`reference=0.97` → `min_raw=0.582`. Every similar marble (including
+PGYS2319 at `final=0.436`) was dropped → UI **"Found 1 similar tile(s)"** at
+~96% (display of 0.97).
+
+`explain_search.py` did **not** demote self-hits the same way, so its floor
+stayed at the absolute `0.381` and reported 9 kept — CLI/UI mismatch.
+
+**Fix:** keep `exact_match=True` when demoting the same-file self-hit score to
+0.97 (parent-sheet aux at 1.0 still ranks above). Weak-filter reference then
+comes from the next non-exact peer. `explain_search.py` mirrors this path.
+Search logs now print the resolved FAISS `index=` path for support diffs.
+
+## Issue B — `color=0.075` on white marble pairs
+
+**Diagnosis (side-by-side, synthetic cool/warm WB on same marble):**
+
+| Pair | hist CORREL (before) | ColorDescriptor.similarity |
+|------|----------------------|----------------------------|
+| Same marble, cool vs warm WB | **0.001** | 0.178 → **0.94 after fix** |
+| Full marketing sheet vs clean crop | 0.213 | 0.345 |
+
+Root mechanism: full LAB `HISTCMP_CORREL` collapses when camera white-balance
+shifts a*/b* across bins on near-white / low-chroma surfaces. Dominant-color
+LAB distance can also exceed the soft-start (28) and apply the full `-0.08`
+penalty on cream-vs-cool-white pairs.
+
+**Fix (query-time only — no `feature_version` bump / no reindex):**
+- Near-white soft path in `ColorDescriptor.similarity` (lightness/chroma
+  agreement when both sides are high-L / low-sat).
+- Skip `dominant_color_penalty` when **both** dominant colors are near-white.
+
+Does not change crop/panel isolation (FAISS rank 4 already proved that works).
+
+**Bakeoff:** unit lock for cool/warm WB + white-vs-navy discrimination.
+Full `eval/real_customer_release.jsonl` bakeoff requires DINOv2 weights on a
+machine with the eval assets — re-run
+`dev_tools/search_quality/run_real_customer_orb_gate.py` (or the current
+release bakeoff entrypoint) before/after and report R@1 / confusable-pair /
+`perspective_distortion` deltas before merging to a release build.

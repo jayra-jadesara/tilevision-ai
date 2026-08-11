@@ -42,11 +42,26 @@ class CandidateFilter:
         """
         Return a soft penalty in [-COLOR_PENALTY_MAX, 0.0] based on dominant
         LAB color distance.  Same tile under different lighting stays near 0.
+
+        Near-white pairs (high L, low chroma on both sides) take no penalty —
+        camera white-balance shifts on cream/white marble routinely exceed
+        COLOR_DISTANCE_SOFT_START while remaining the same perceptual family.
         """
-        distance = cls.color_distance(
-            query.dominant_color,
-            candidate.dominant_color,
-        )
+        q_rgb = tuple(query.dominant_color)
+        c_rgb = tuple(candidate.dominant_color)
+
+        if ColorDescriptor.is_near_white_rgb(q_rgb) and ColorDescriptor.is_near_white_rgb(
+            c_rgb
+        ):
+            logger.debug(
+                "Color compatibility | near-white pair — penalty skipped "
+                "(query=%s candidate=%s)",
+                q_rgb,
+                c_rgb,
+            )
+            return 0.0
+
+        distance = cls.color_distance(q_rgb, c_rgb)
 
         logger.debug(
             "Color compatibility | lab_distance=%.2f",

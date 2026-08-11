@@ -256,9 +256,14 @@ class SearchTilesUseCase:
         def stage(name: str, detail: str = "") -> None:
             log_search_stage(logger, name, detail=detail, on_stage=on_stage)
 
+        index_path = getattr(self._index, "index_path", None)
         logger.info(
-            f"Initiating similarity search query for: {query_path.name} "
-            f"(top_k={top_k}, filters={active_filters or 'none'})"
+            "Initiating similarity search query for: %s "
+            "(top_k=%s, filters=%s, index=%s)",
+            query_path.name,
+            top_k,
+            active_filters or "none",
+            index_path if index_path is not None else "?",
         )
 
         version_status = self._repo.get_feature_version_status()
@@ -637,9 +642,13 @@ class SearchTilesUseCase:
                         exact_match = True
                         final_score = 1.0
                     elif exact_match and same_query_file:
-                        # Keep self-hit visible, but below a parent-sheet aux hit.
+                        # Keep self-hit visible, but below a parent-sheet aux hit
+                        # (score 1.0). Keep exact_match=True so the weak-result
+                        # filter uses the next non-exact peer as its reference —
+                        # clearing the flag (pre-fix) made reference=0.97 and
+                        # min_raw=0.582, which dropped every similar marble and
+                        # left the UI showing only "Found 1 similar tile(s)".
                         final_score = _QUERY_SELF_MATCH_SCORE
-                        exact_match = False
                     else:
                         final_score = 1.0 if exact_match else hybrid.final
 
@@ -897,6 +906,9 @@ class SearchTilesUseCase:
             return []
 
         reference_score = reranked[0][0]
+        # Exact matches (including same-file query self-hits scored at
+        # _QUERY_SELF_MATCH_SCORE) must not set the relative floor — otherwise
+        # searching with an indexed catalog file collapses the UI to 1 result.
         if reranked[0][2]:
             for score, _, exact_match in reranked[1:]:
                 if not exact_match:

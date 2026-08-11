@@ -38,6 +38,17 @@ def test_very_different_colors_get_max_penalty():
     assert penalty == -CandidateFilter.COLOR_PENALTY_MAX
 
 
+def test_near_white_pair_skips_dominant_color_penalty():
+    """Cream vs cool-white: LAB distance can exceed soft_start under WB."""
+    query = _features((245, 245, 248))
+    candidate = _features((228, 220, 205))
+    # Distance may be large, but both near-white → no penalty.
+    assert CandidateFilter.dominant_color_penalty(query, candidate) == 0.0
+    # White vs saturated color still penalized.
+    navy = _features((20, 30, 120))
+    assert CandidateFilter.dominant_color_penalty(query, navy) < 0.0
+
+
 def test_filter_does_not_remove_candidates():
     from src.core.models import TileImage
 

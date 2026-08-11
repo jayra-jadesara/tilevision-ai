@@ -67,3 +67,36 @@ def test_filter_weak_results_never_returns_empty_when_candidates_exist():
     assert len(kept) >= 1
     assert kept[0][1].file_name == "0.jpg"
 
+
+def test_filter_weak_results_self_hit_does_not_raise_floor_above_peers():
+    """
+    Searching with an indexed catalog file: same-file self-hit is exact with
+    score 0.97. Using that score as the weak-filter reference (old bug) set
+    min_raw=0.582 and dropped every similar marble → UI "Found 1 tile".
+    """
+    from src.core.use_cases.search_tiles import _QUERY_SELF_MATCH_SCORE
+
+    tiles = [
+        TileImage(
+            file_path=f"{i}.jpg",
+            file_name=f"{i}.jpg",
+            file_size=1,
+            dimensions="1x1",
+            id=i,
+        )
+        for i in range(4)
+    ]
+    # Self-hit first (exact), then peers matching the real PGYS2319 band.
+    reranked = [
+        (_QUERY_SELF_MATCH_SCORE, tiles[0], True),
+        (0.55, tiles[1], False),
+        (0.436, tiles[2], False),  # PGYS2319-like hybrid final
+        (0.40, tiles[3], False),
+    ]
+    kept = SearchTilesUseCase._filter_weak_results(reranked, top_k=10)
+    names = {tile.file_name for _, tile, _ in kept}
+    assert "0.jpg" in names  # self always kept (exact)
+    assert "1.jpg" in names
+    assert "2.jpg" in names  # must survive — floor from peer 0.55 → 0.38 abs
+    assert len(kept) >= 3
+

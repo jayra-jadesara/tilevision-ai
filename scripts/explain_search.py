@@ -45,6 +45,7 @@ from src.core.use_cases.search_tiles import (
     ORB_MAX_CANDIDATES,
     ORB_VERIFICATION_BAND,
     SearchTilesUseCase,
+    _QUERY_SELF_MATCH_SCORE,
     _WEAK_RESULT_ABSOLUTE_RAW_FLOOR,
     _WEAK_RESULT_RELATIVE_FLOOR,
 )
@@ -165,6 +166,13 @@ def bootstrap_search(
     enable_orb: bool = True,
 ) -> SearchTilesUseCase:
     database_path, index_path, thumbnail_dir = resolve_catalog_paths(catalog)
+    print(
+        f"[explain_search] catalog paths:\n"
+        f"  database={database_path}\n"
+        f"  index={index_path}\n"
+        f"  thumbnails={thumbnail_dir}",
+        flush=True,
+    )
     db_context = DatabaseContext(db_path=database_path)
     repo = SQLiteImageRepository(db_context=db_context)
     feature_extractor = FeatureExtractor(embedder=DINOv2Embedder())
@@ -285,7 +293,19 @@ def explain_search(
             query_sha256,
             query_dhash,
         )
-        final_score = 1.0 if exact_match else hybrid.final
+        same_query_file = False
+        try:
+            same_query_file = Path(tile.file_path).resolve() == query_path.resolve()
+        except OSError:
+            same_query_file = False
+        # Mirror SearchTilesUseCase.execute: demote same-file self-hit score but
+        # keep exact_match=True so weak-filter reference uses the next peer.
+        if exact_match and same_query_file:
+            final_score = _QUERY_SELF_MATCH_SCORE
+        elif exact_match:
+            final_score = 1.0
+        else:
+            final_score = hybrid.final
 
         reranked.append(
             (
