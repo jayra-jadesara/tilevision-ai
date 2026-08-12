@@ -28,7 +28,9 @@ from dataclasses import dataclass
 # v14: catalog-sheet primary TileFeatures (embedding + color/texture/edge/
 #      pattern/dominant) come from isolated panel, not full marketing sheet;
 #      full-sheet kept as FAISS aux for sheet self-hit; rebuild required.
-CURRENT_FEATURE_VERSION = 14
+# v15: normalize_lighting skips high-key low-chroma materials (cream marble)
+#      so panel primary is not posterized; rebuild required for catalog sheets.
+CURRENT_FEATURE_VERSION = 15
 
 # Bump when pattern descriptor layout or algorithm changes.
 CURRENT_PATTERN_FEATURE_VERSION = 3

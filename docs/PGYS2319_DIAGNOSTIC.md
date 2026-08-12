@@ -30,7 +30,7 @@ Root cause on real `PGYS2319.jpg` was **two independent gate failures**:
 Additional safeguard: center-crop aux is blocked on wide preview-grid sheets
 (center region includes grid photos).
 
-After upgrading, customers must **Rebuild Search Index** (feature_version **14**).
+After upgrading, customers must **Rebuild Search Index** (feature_version **15**).
 
 `panel` top-caption band: **13%** of panel height shaved after content crop
 (v12 used 10%, which left a partial clipped caption line on real PGYS2319 at
@@ -44,6 +44,13 @@ remains a FAISS aux for sheet self-hit. Portrait panels letterbox with
 histograms. This is the fix for `color=0.075` on xx.jpg vs PGYS2319 — the
 near-white softening from Issue B remains as a general improvement but is not
 what resolved this pair.
+
+**v15:** `normalize_lighting()` no longer stretches high-key, low-chroma
+frames (cream/white marble). The old heuristic stretched any L-channel
+2nd–98th percentile span < 40, which posterized genuine subtle marble once
+v14 routed isolated panels through the primary path. Stretch still runs for
+underexposed/crushed photos (dark mean / highlights well below white). Same
+function is on the query path — cream marble queries are skipped too.
 
 ## Which index views become live FAISS vectors
 
@@ -216,16 +223,19 @@ does **not** prove the client's original failed search (`xx.jpg` → missing
 `PGYS2319`) is fixed — that requires their real FAISS index and query on
 their machine. These steps are the **closing criteria** for this issue:
 
-1. **Upgrade** to the build containing feature_version **14** (panel primary
-   TileFeatures + prior panel-isolation / self-hit / near-white fixes).
+1. **Upgrade** to the build containing feature_version **15** (panel primary
+   TileFeatures + lighting heuristic + prior panel-isolation / self-hit /
+   near-white fixes).
 
 2. Run **Rebuild Search Index** on the catalog that contains `PGYS2319.jpg`.
    Index-time primary vectors **and** stored descriptors changed; existing
-   v10–v13 vectors do not self-heal.
+   v10–v14 vectors do not self-heal.
 
 3. **Zoom-verify** panel crops on the real sheet (see zoom acceptance check
    above) — confirm zero caption text at 2x in the top 80px and intact marble
-   at the bottom 80px of `*_view1_panel.png`.
+   at the bottom 80px of `*_view1_panel.png`. Also open
+   `*_primary_preprocess_letterbox.png` and confirm soft natural marble
+   (not harsh posterized B&W from the old L-channel stretch).
 
 4. Re-run the **exact search that failed**: drop `xx.jpg`, confirm `PGYS2319`
    appears in the UI results.
@@ -296,3 +306,32 @@ Synthetic before/after (same slab crop vs sheet primary):
 
 \\*near-white soft path masks hist weakness on synthetic; real PGYS2319
 sheet sat fails the near-white gate → similarity stays at hist ≈ 0.075.
+
+## Issue C — posterized primary letterbox after v14
+
+**Symptom:** real `PGYS2319_primary_preprocess_letterbox.png` looked harsh
+B&W while `panel` / `panel_center` / legacy full-sheet looked natural.
+
+**Cause:** `normalize_lighting()` stretched any narrow L-range (< 40). Cream
+marble is high-key with intrinsic low L-span; stretch manufactured false
+contrast. Dormant until v14 fed isolated panels into primary preprocess.
+
+**v15 fix:** skip stretch when `mean_L` high + highlights near white + low
+chroma (or already bright well-exposed). Underexposed/crushed frames still
+stretch. Query-side `preprocess_for_query` uses the same gate — cream
+marble queries are no longer silently posterized either.
+
+Synthetic exact reproduction (`xx` letterbox vs panel primary letterbox):
+
+| Lighting path | color_sim |
+|---------------|-----------|
+| Old stretch on primary (query natural) | ~0.65 |
+| Both sides old-stretched | ~0.62 |
+| **v15 natural primary + query** | **~0.87** |
+
+Re-check on real files after rebuild:
+
+```bash
+python scripts/show_index_crop.py PGYS2319.jpg --output-dir /tmp/index_crop_debug
+# open PGYS2319_primary_preprocess_letterbox.png — expect soft marble
+```
