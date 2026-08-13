@@ -81,18 +81,66 @@ def _texture_richness(gray: np.ndarray) -> float:
 
 def _text_region_score(gray: np.ndarray) -> float:
     """
-    Approximate text/logo density via MSER-like contrast blobs on one side.
+    Approximate text/logo density in the marketing column (right of slab panel).
 
-    High when a vertical strip has many small high-contrast components
-    (typical catalogue info column).
+    Previous implementation averaged Canny edge density over the entire right
+    45% at a single threshold (60, 140). That undercounted real showroom
+    sheets (PGYS2319): sparse gold logo lettering and small Chinese captions
+    sit in the top ~35% of the column, while most of the strip is white
+    margin or photo-grid cells — diluting the mean to ~0.006 (score 0.024).
+
+    Uses three complementary signals on the marketing column (from ~42% width):
+    1. Multi-threshold Canny on the *top band* (sparse large logo strokes).
+    2. Horizontal Sobel row activity (stacked text lines / product code).
+    3. Full-column Canny (grid lines + dense captions), preserved for parity.
     """
     h, w = gray.shape
     if w < 80 or h < 80:
         return 0.0
-    right = gray[:, int(w * 0.55) :]
-    edges = cv2.Canny(right, 60, 140)
-    density = float(np.mean(edges > 0))
-    return float(np.clip(density * 4.0, 0.0, 1.0))
+
+    # Marketing column starts near the slab split (~42–45%), not 55%.
+    col_start = int(w * 0.42)
+    right = gray[:, col_start:]
+    if right.size == 0:
+        return 0.0
+
+    top_h = max(32, int(h * 0.38))
+    top_band = right[:top_h, :]
+    left_top = gray[:top_h, : max(1, col_start)]
+
+    scores: list[float] = []
+
+    # Signal 1: multi-threshold Canny on top band — gold logo on white is soft.
+    for lo, hi in ((25, 75), (40, 100), (60, 140)):
+        edges = cv2.Canny(top_band, lo, hi)
+        density = float(np.mean(edges > 0))
+        scores.append(density * 8.0)
+
+    # Signal 2: horizontal stroke activity (text rows, product code line).
+    sobel_x = cv2.Sobel(top_band, cv2.CV_64F, 1, 0, ksize=3)
+    row_activity = np.mean(np.abs(sobel_x), axis=1)
+    if row_activity.size > 0:
+        peak = float(np.percentile(row_activity, 80))
+        active_rows = float(np.mean(row_activity > max(peak * 0.45, 8.0)))
+        scores.append(active_rows * 3.0)
+
+    # Signal 3: legacy full-column edge density (grid dividers + captions).
+    edges_full = cv2.Canny(right, 60, 140)
+    scores.append(float(np.mean(edges_full > 0)) * 4.0)
+
+    raw = float(np.clip(max(scores), 0.0, 1.0))
+
+    # Suppress false positives on uniform tile faces: the marketing top band
+    # must show more structured edges than the slab top band next to it.
+    if left_top.size > 0:
+        marketing_edges = cv2.Canny(top_band, 40, 100)
+        slab_edges = cv2.Canny(left_top, 40, 100)
+        m_density = float(np.mean(marketing_edges > 0))
+        s_density = float(np.mean(slab_edges > 0))
+        if m_density < s_density + 0.006:
+            raw *= 0.30
+
+    return float(np.clip(raw, 0.0, 1.0))
 
 
 def _has_preview_grid(gray: np.ndarray) -> bool:
@@ -109,6 +157,50 @@ def _has_preview_grid(gray: np.ndarray) -> bool:
     return len(lines) >= 8
 
 
+# Real PGYS2319 is aspect ~1.063 with a preview grid — the old 1.12 gate
+# blocked panel isolation even when has_preview_grid=True.
+_MARKETING_SHEET_MIN_ASPECT = 1.03
+_DEFAULT_SHEET_MIN_ASPECT = 1.12
+
+
+def _min_panel_aspect(
+    aspect: float,
+    *,
+    has_preview_grid: bool,
+    text_region_score: float,
+) -> float:
+    """Minimum aspect for left-panel isolation on marketing sheets."""
+    if has_preview_grid or text_region_score >= 0.12:
+        return _MARKETING_SHEET_MIN_ASPECT
+    return _DEFAULT_SHEET_MIN_ASPECT
+
+
+def marketing_sheet_panel_eligible(
+    width: int,
+    height: int,
+    gray: np.ndarray,
+) -> bool:
+    """
+    Whether ``primary_texture_panel`` should run (mirrors analyze_image gates).
+
+    Exported for index-time cropping without duplicating thresholds.
+    """
+    if width < 480 or height < 320:
+        return False
+    aspect = width / max(height, 1)
+    if aspect < _MARKETING_SHEET_MIN_ASPECT:
+        return False
+    if aspect >= _DEFAULT_SHEET_MIN_ASPECT:
+        return True
+    grid = _has_preview_grid(gray)
+    text_score = _text_region_score(gray)
+    return aspect >= _min_panel_aspect(
+        aspect,
+        has_preview_grid=grid,
+        text_region_score=text_score,
+    )
+
+
 def analyze_image(image: Image.Image) -> ImageAnalysis:
     """Analyze a catalog image and recommend whether aux views help."""
     rgb_img = image.convert("RGB")
@@ -122,18 +214,26 @@ def analyze_image(image: Image.Image) -> ImageAnalysis:
     text_score = _text_region_score(gray)
     grid = _has_preview_grid(gray)
 
+    min_aspect = _min_panel_aspect(
+        aspect,
+        has_preview_grid=grid,
+        text_region_score=text_score,
+    )
+    has_marketing_column = text_score >= 0.12 or grid or border >= 0.25
     left_panel = (
-        aspect >= 1.12
+        aspect >= min_aspect
         and width >= 480
         and height >= 320
-        and (text_score >= 0.12 or grid or border >= 0.25)
+        and has_marketing_column
     )
     # Center crop helps large clean tiles when texture is present and the
-    # frame is not already a tight crop.
+    # frame is not already a tight crop. Block on wide preview-grid sheets
+    # (center includes photo-grid cells — PGYS2319 failure mode).
     center = (
         min(width, height) >= 400
         and texture >= 0.15
         and not left_panel
+        and not (grid and aspect >= _MARKETING_SHEET_MIN_ASPECT)
         and border < 0.55
     )
 

@@ -256,10 +256,17 @@ class ImagePreprocessor:
     @classmethod
     def normalize_lighting(cls, image: Image.Image) -> Image.Image:
         """
-        Mild LAB L-channel stretch for shadow/exposure differences.
+        Mild LAB L-channel stretch for underexposed / crushed photos.
 
-        Only applied when the luminance dynamic range is clearly compressed,
-        to avoid altering well-exposed catalogue images.
+        A narrow L-channel range is *not* enough to decide to stretch:
+        well-lit cream/white marble also has a compressed L-range (that is
+        the material). Stretching those frames posterizes subtle veins
+        (seen on PGYS2319 panel primary after v14 routed isolated panels
+        through this path).
+
+        Stretch only when the frame looks underexposed or crushed — dark
+        mean and/or highlights well below white — not when it is already
+        high-key with low chroma.
         """
         rgb = np.asarray(image.convert("RGB"))
         bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
@@ -267,14 +274,53 @@ class ImagePreprocessor:
         l_channel, a_channel, b_channel = cv2.split(lab)
 
         low, high = np.percentile(l_channel, (2, 98))
-        if high - low >= 40:
+        span = float(high - low)
+        if span >= 40.0:
+            return image
+
+        mean_l = float(l_channel.mean())
+        a_f = a_channel.astype(np.float32)
+        b_f = b_channel.astype(np.float32)
+        chroma = float(np.mean(np.hypot(a_f - 128.0, b_f - 128.0)))
+
+        # High-key, low-chroma material (cream marble, white ceramic): leave
+        # alone — narrow span is intrinsic, not a lighting defect.
+        if mean_l >= 160.0 and high >= 195.0 and chroma <= 28.0:
+            logger.debug(
+                "normalize_lighting: skip high-key low-chroma material "
+                "(mean_L=%.1f high=%.1f span=%.1f chroma=%.1f)",
+                mean_l,
+                high,
+                span,
+                chroma,
+            )
+            return image
+
+        # Adequately bright frame even with some chroma — do not invent
+        # contrast on already well-exposed product photography.
+        if mean_l >= 170.0 and high >= 200.0:
+            logger.debug(
+                "normalize_lighting: skip bright well-exposed frame "
+                "(mean_L=%.1f high=%.1f span=%.1f)",
+                mean_l,
+                high,
+                span,
+            )
             return image
 
         stretched = np.clip(
-            (l_channel.astype(np.float32) - low) * (255.0 / max(high - low, 1.0)),
+            (l_channel.astype(np.float32) - low) * (255.0 / max(span, 1.0)),
             0,
             255,
         ).astype(np.uint8)
+        logger.info(
+            "normalize_lighting: stretch underexposed/crushed frame "
+            "(mean_L=%.1f high=%.1f span=%.1f chroma=%.1f)",
+            mean_l,
+            high,
+            span,
+            chroma,
+        )
         merged = cv2.merge([stretched, a_channel, b_channel])
         corrected_bgr = cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
         corrected_rgb = cv2.cvtColor(corrected_bgr, cv2.COLOR_BGR2RGB)
@@ -330,7 +376,11 @@ class ImagePreprocessor:
         width, height = image.size
         if width < 480 or height < 320:
             return None
-        if (width / max(height, 1)) < 1.12:
+        rgb = np.asarray(image, dtype=np.uint8)
+        gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+        from src.ai.search_quality.image_analysis import marketing_sheet_panel_eligible
+
+        if not marketing_sheet_panel_eligible(width, height, gray):
             return None
 
         # Take the left ~45% (not a full half) so the text/grid column does not
@@ -347,6 +397,24 @@ class ImagePreprocessor:
                 ph,
             )
             return None
+
+        # Qingyu-style sheets (PGYS2319): caption lines bleed across the top
+        # panel edge into the top-left corner. panel_center (72% inset) clears
+        # them; shave the caption band from the full panel aux crop boundary.
+        # Real PGYS2319: 10% (v12) left a partial clipped line in top ~15px;
+        # 13% clears it at 2x zoom without eating bottom marble texture.
+        _PANEL_TOP_CAPTION_BAND_RATIO = 0.13
+        top_cut = max(0, int(ph * _PANEL_TOP_CAPTION_BAND_RATIO))
+        left_cut = max(0, int(pw * 0.03))
+        if top_cut > 0 or left_cut > 0:
+            new_w = pw - left_cut
+            new_h = ph - top_cut
+            if new_w >= 64 and new_h >= 64:
+                left = left.crop((left_cut, top_cut, pw, ph))
+                pw, ph = left.size
+            else:
+                top_cut = left_cut = 0
+
         arr = np.asarray(left, dtype=np.float32)
         # High-key white marble/onyx panels often have std ≈ 1–4. The old
         # threshold of 6.0 rejected every Qingyu-style slab (customer PGYS2319).
@@ -368,11 +436,15 @@ class ImagePreprocessor:
             )
             return None
         logger.info(
-            "primary_texture_panel: using left panel %sx%s (std=%.2f, Δfull=%.2f)",
+            "primary_texture_panel: using left panel %sx%s (std=%.2f, Δfull=%.2f"
+            "%s)",
             pw,
             ph,
             panel_std,
             mean_abs,
+            f", top_cut={top_cut} left_cut={left_cut}"
+            if top_cut or left_cut
+            else "",
         )
         return left
 
@@ -395,9 +467,16 @@ class ImagePreprocessor:
         cls,
         image: Image.Image,
         target: int = TARGET_SIZE,
+        *,
+        pad_color: Tuple[int, int, int] | None = None,
     ) -> Image.Image:
         """
         Resize preserving aspect ratio, then center-pad to a square canvas.
+
+        ``pad_color`` defaults to ``PAD_COLOR`` (neutral gray). For tall
+        catalog-panel crops, pass the panel mean color so gray pads do not
+        pollute LAB color / texture histograms (~45% of a portrait panel
+        letterbox can otherwise be pad pixels).
         """
         width, height = image.size
         if width <= 0 or height <= 0:
@@ -412,7 +491,8 @@ class ImagePreprocessor:
             Image.Resampling.BICUBIC,
         )
 
-        canvas = Image.new("RGB", (target, target), PAD_COLOR)
+        fill = pad_color if pad_color is not None else PAD_COLOR
+        canvas = Image.new("RGB", (target, target), fill)
         offset_x = (target - new_width) // 2
         offset_y = (target - new_height) // 2
         canvas.paste(resized, (offset_x, offset_y))

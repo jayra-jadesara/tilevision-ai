@@ -36,7 +36,7 @@ class FakeEmbedder:
         padded[: base.size] = base
         return padded
 
-    def extract_from_preprocessed(self, processed) -> np.ndarray:
+    def extract_from_preprocessed(self, processed, *, for_query: bool = False) -> np.ndarray:
         return self._rgb_embedding(processed.pil)
 
     def extract_batch_from_preprocessed(self, processed_images) -> list:

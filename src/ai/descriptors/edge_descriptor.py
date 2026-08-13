@@ -30,6 +30,18 @@ import numpy as np
 
 logger = logging.getLogger("tilevision.ai.edge_descriptor")
 
+# Cosine denom / empty-hist epsilon.
+_EPS = 1e-8
+# Adaptive Canny: derive hysteresis from the image's own Sobel magnitude
+# distribution. Fixed 80/180 (legacy) found zero edges on correctly exposed
+# cream marble — the same low-contrast class that broke normalize_lighting.
+_CANNY_MAG_PERCENTILE = 92.0
+_CANNY_HIGH_FLOOR = 12.0
+_CANNY_HIGH_CEIL = 200.0
+_CANNY_LOW_RATIO = 0.4
+# If adaptive Canny is still nearly empty, fall back to a magnitude mask.
+_MIN_CANNY_DENSITY = 0.002
+
 
 class EdgeDescriptor:
     """
@@ -37,6 +49,14 @@ class EdgeDescriptor:
     """
 
     ORIENTATION_BINS = 36
+
+    @classmethod
+    def _adaptive_canny_thresholds(cls, magnitude: np.ndarray) -> tuple[int, int]:
+        """Hysteresis from this frame's gradient stats, not fixed constants."""
+        high = float(np.percentile(magnitude, _CANNY_MAG_PERCENTILE))
+        high = float(np.clip(high, _CANNY_HIGH_FLOOR, _CANNY_HIGH_CEIL))
+        low = max(high * _CANNY_LOW_RATIO, 1.0)
+        return int(round(low)), int(round(high))
 
     @classmethod
     def extract(
@@ -68,12 +88,6 @@ class EdgeDescriptor:
             0,
         )
 
-        edges = cv2.Canny(
-            gray,
-            threshold1=80,
-            threshold2=180,
-        )
-
         gx = cv2.Sobel(
             gray,
             cv2.CV_32F,
@@ -96,10 +110,30 @@ class EdgeDescriptor:
             angleInDegrees=True,
         )
 
+        low, high = cls._adaptive_canny_thresholds(magnitude)
+        edges = cv2.Canny(
+            gray,
+            threshold1=low,
+            threshold2=high,
+        )
+
         edge_mask = edges > 0
+        density = float(np.mean(edge_mask))
+        if density < _MIN_CANNY_DENSITY:
+            # Still too sparse (near-solid or extremely subtle): use the
+            # strongest gradient pixels so orientation is not all-zero.
+            mag_thr = float(np.percentile(magnitude, 90.0))
+            edge_mask = magnitude >= max(mag_thr, 1.0)
+            logger.debug(
+                "edge_descriptor: Canny density %.5f < %.3f; "
+                "using mag-percentile mask (thr=%.2f, dens=%.5f)",
+                density,
+                _MIN_CANNY_DENSITY,
+                mag_thr,
+                float(np.mean(edge_mask)),
+            )
 
         edge_angles = angle[edge_mask]
-
         edge_weights = magnitude[edge_mask]
 
         if edge_angles.size == 0:
@@ -119,7 +153,7 @@ class EdgeDescriptor:
 
         histogram /= (
             np.linalg.norm(histogram)
-            + 1e-8
+            + _EPS
         )
 
         return histogram
@@ -136,23 +170,27 @@ class EdgeDescriptor:
         -------
         float
 
-        1.0 = identical
+        1.0 = identical (including both empty / unstructured)
 
-        0.0 = unrelated
+        0.0 = unrelated (or one structured and one empty)
         """
 
-        denom = (
-            np.linalg.norm(query_hist)
-            * np.linalg.norm(candidate_hist)
-            + 1e-8
-        )
+        q_norm = float(np.linalg.norm(query_hist))
+        c_norm = float(np.linalg.norm(candidate_hist))
+
+        # Both unstructured (true solid / no gradients): equally flat → similar.
+        # One empty and one not: structured vs plain → dissimilar.
+        if q_norm < _EPS and c_norm < _EPS:
+            return 1.0
+        if q_norm < _EPS or c_norm < _EPS:
+            return 0.0
 
         return float(
             np.dot(
                 query_hist,
                 candidate_hist,
             )
-            / denom
+            / (q_norm * c_norm)
         )
 
     @staticmethod

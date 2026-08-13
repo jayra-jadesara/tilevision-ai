@@ -71,6 +71,71 @@ _install_fake_module(
     {"create_model_and_transforms": lambda *a, **k: (None, None, None)},
 )
 
+# DINOv2 embedder imports AutoImageProcessor / AutoModel at module load.
+# Orchestration tests inject FakeEmbedder and never call the real classes.
+_install_fake_module(
+    "transformers",
+    {
+        "AutoImageProcessor": object,
+        "AutoModel": object,
+    },
+)
+
+
+def _install_fake_pyside6() -> None:
+    """Allow AI/orchestration imports that transitively touch brand_assets."""
+    try:
+        import PySide6  # noqa: F401
+        return
+    except Exception:
+        # Missing install *or* installed but missing libEGL / display libs.
+        pass
+
+    qtcore = types.ModuleType("PySide6.QtCore")
+
+    class _Qt:
+        class AspectRatioMode:
+            KeepAspectRatio = 1
+
+        class TransformationMode:
+            SmoothTransformation = 1
+
+    class _QSize:
+        def __init__(self, *args):
+            self.args = args
+
+    qtcore.QSize = _QSize
+    qtcore.Qt = _Qt
+
+    qtgui = types.ModuleType("PySide6.QtGui")
+
+    class _QIcon:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class _QPixmap:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def isNull(self):
+            return True
+
+        def scaled(self, *args, **kwargs):
+            return self
+
+    qtgui.QIcon = _QIcon
+    qtgui.QPixmap = _QPixmap
+
+    root = types.ModuleType("PySide6")
+    root.QtCore = qtcore
+    root.QtGui = qtgui
+    sys.modules["PySide6"] = root
+    sys.modules["PySide6.QtCore"] = qtcore
+    sys.modules["PySide6.QtGui"] = qtgui
+
+
+_install_fake_pyside6()
+
 
 def pytest_configure():
     import os

@@ -19,7 +19,20 @@ from dataclasses import dataclass
 #     center aux). Golden bakeoff winner vs primary-only; rebuild required.
 # v10: Strategy E + force adaptive content crop (320-tile optimization study:
 #      +1.57pp R@5 / +1.19pp R@1 vs E at +0.13 vectors/tile); rebuild required.
-CURRENT_FEATURE_VERSION = 10
+# v11: marketing-sheet text detection + aspect gate (PGYS2319 @ 1.063 with
+#      preview grid now gets left-panel aux index view); rebuild required.
+# v12: panel aux crop shaves top/left caption band (PGYS2319 top-left bleed);
+#      rebuild required.
+# v13: widen panel top caption band 10% → 13% (residual clipped line on real
+#      PGYS2319 at 2x zoom); rebuild required.
+# v14: catalog-sheet primary TileFeatures (embedding + color/texture/edge/
+#      pattern/dominant) come from isolated panel, not full marketing sheet;
+#      full-sheet kept as FAISS aux for sheet self-hit; rebuild required.
+# v15: normalize_lighting skips high-key low-chroma materials (cream marble)
+#      so panel primary is not posterized; rebuild required for catalog sheets.
+# v16: EdgeDescriptor adaptive Canny (+ empty-hist similarity); fixed 80/180
+#      returned all-zero hists on subtle marble → cosine 0.0; rebuild required.
+CURRENT_FEATURE_VERSION = 16
 
 # Bump when pattern descriptor layout or algorithm changes.
 CURRENT_PATTERN_FEATURE_VERSION = 3
