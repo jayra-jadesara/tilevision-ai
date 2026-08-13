@@ -2,6 +2,9 @@
 Debug-only helpers to visualize index-time crop selection.
 
 Does not import torch / DINOv2 — safe to run without model weights.
+
+Uses ``prepare_index_primary`` — the same function production indexing calls —
+so saved primary letterboxes match what ``extract_index_vectors`` embeds.
 """
 
 from __future__ import annotations
@@ -12,9 +15,28 @@ from typing import Any
 
 import numpy as np
 
+from src.ai.descriptors.color_descriptor import ColorDescriptor
+from src.ai.descriptors.edge_descriptor import EdgeDescriptor
+from src.ai.descriptors.pattern_descriptor import PatternDescriptor
+from src.ai.descriptors.texture_descriptor import TextureDescriptor
 from src.ai.preprocess.image_preprocessor import ImagePreprocessor
-from src.ai.search_quality.image_analysis import ImageAnalysis, analyze_image
-from src.ai.search_quality.views import IndexStrategy, build_index_views
+from src.ai.preprocess.index_primary import (
+    IndexPrimaryPreparation,
+    prepare_index_primary,
+)
+from src.ai.search_quality.image_analysis import ImageAnalysis
+
+
+@dataclass(frozen=True, slots=True)
+class DescriptorParity:
+    """Handcrafted descriptor similarities: query preprocess vs index primary."""
+
+    color: float
+    texture: float
+    edge: float
+    pattern: float
+    query_letterbox_path: str
+    index_letterbox_path: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +47,8 @@ class IndexCropReport:
     saved_paths: tuple[str, ...]
     index_view_types: tuple[str, ...]
     primary_panel: dict[str, Any] | None
+    primary_source: str
+    parity: DescriptorParity | None = None
 
 
 def show_index_crops(
@@ -32,90 +56,74 @@ def show_index_crops(
     *,
     output_dir: str | Path = "/tmp/index_crop_debug",
     feature_extractor: Any | None = None,
+    query_path: str | Path | None = None,
 ) -> IndexCropReport:
     """
-    Re-run the production index-time view plan and save embedded crop PNGs.
+    Re-run the production index-time primary prep and save crop PNGs.
 
-    Debug-only: does not mutate the FAISS index.
+    The primary letterbox is taken from ``prepare_index_primary()`` — identical
+    to ``FeatureExtractor.extract_index_vectors``. Debug-only: does not mutate
+    the FAISS index.
+
+    Pass ``query_path`` to also save the query-time letterbox
+    (``preprocess_for_query``) and print descriptor similarities that match
+    hybrid component scores (except embedding / pattern-compat / penalties).
     """
-    source = Path(image_path).expanduser().resolve()
-    if not source.is_file():
-        raise FileNotFoundError(f"Catalog image not found: {source}")
-
+    prep = prepare_index_primary(image_path)
     out = Path(output_dir).expanduser().resolve()
     out.mkdir(parents=True, exist_ok=True)
 
-    raw = ImagePreprocessor.load(source)
-    raw = ImagePreprocessor.to_rgb(raw)
-    analysis = analyze_image(raw)
-    views = build_index_views(
-        raw,
-        IndexStrategy.E_HEURISTIC_MULTIVIEW,
-        analysis=analysis,
-    )
-
-    stem = source.stem
+    stem = Path(prep.source_path).stem
     saved: list[str] = []
     view_types: list[str] = []
 
-    for idx, view in enumerate(views):
+    for idx, view in enumerate(prep.views):
         label = f"{stem}_view{idx}_{view.view_type.value}"
         dest = out / f"{label}.png"
         view.image.save(dest)
         saved.append(str(dest))
         view_types.append(view.view_type.value)
 
-    panel = ImagePreprocessor.primary_texture_panel(raw)
     panel_info: dict[str, Any] | None = None
-    if panel is not None:
-        arr = np.asarray(panel, dtype=np.float32)
-        full = np.asarray(raw.resize(panel.size), dtype=np.float32)
+    if prep.panel is not None:
+        arr = np.asarray(prep.panel, dtype=np.float32)
+        full = np.asarray(prep.raw.resize(prep.panel.size), dtype=np.float32)
         panel_info = {
-            "size": panel.size,
+            "size": prep.panel.size,
             "std": float(arr.std()),
             "mean_abs_delta_full": float(np.mean(np.abs(arr - full))),
         }
         panel_path = out / f"{stem}_primary_texture_panel.png"
-        panel.save(panel_path)
+        prep.panel.save(panel_path)
         saved.append(str(panel_path))
 
-    # Primary letterbox must match extract_index_vectors: panel when beneficial.
-    if analysis.left_panel_beneficial and panel is not None:
-        primary_src = panel
-        primary_note = "panel"
-        mean = np.asarray(primary_src.convert("RGB"), dtype=np.float32).mean(
-            axis=(0, 1)
-        )
-        pad_color = (
-            int(np.clip(mean[0], 0, 255)),
-            int(np.clip(mean[1], 0, 255)),
-            int(np.clip(mean[2], 0, 255)),
-        )
-        primary_lit = ImagePreprocessor.normalize_lighting(primary_src)
-        primary_letter = ImagePreprocessor.resize_letterbox(
-            primary_lit,
-            pad_color=pad_color,
-        )
-    else:
-        primary_note = "full_sheet"
-        primary_pre = ImagePreprocessor.preprocess(source)
-        primary_letter = primary_pre.pil
+    # Exact production letterbox bytes (not a parallel reconstruction).
     primary_path = out / f"{stem}_primary_preprocess_letterbox.png"
-    primary_letter.save(primary_path)
+    prep.primary.pil.save(primary_path)
     saved.append(str(primary_path))
-    # Also save legacy full-sheet letterbox for before/after diffs.
-    if primary_note == "panel":
-        legacy = ImagePreprocessor.preprocess(source)
+
+    if prep.primary_source == "panel":
+        legacy = ImagePreprocessor.preprocess(prep.source_path)
         legacy_path = out / f"{stem}_legacy_fullsheet_letterbox.png"
         legacy.pil.save(legacy_path)
         saved.append(str(legacy_path))
 
+    parity: DescriptorParity | None = None
+    if query_path is not None:
+        parity = _descriptor_parity_vs_query(
+            query_path=query_path,
+            index_primary=prep,
+            output_dir=out,
+            catalog_stem=stem,
+        )
+        saved.append(parity.query_letterbox_path)
+
     if feature_extractor is not None:
-        _, aux = feature_extractor.extract_index_vectors(str(source))
+        _, aux = feature_extractor.extract_index_vectors(str(prep.source_path))
         aux_path = out / f"{stem}_aux_vectors.txt"
         aux_path.write_text(
             f"aux_vector_count={len(aux)}\n"
-            f"primary_source={primary_note}\n"
+            f"primary_source={prep.primary_source}\n"
             + "\n".join(
                 f"aux_{i}_dim={len(v)} norm={float(np.linalg.norm(v)):.4f}"
                 for i, v in enumerate(aux)
@@ -126,12 +134,65 @@ def show_index_crops(
         saved.append(str(aux_path))
 
     return IndexCropReport(
-        source_path=str(source),
+        source_path=prep.source_path,
         output_dir=str(out),
-        analysis=analysis,
+        analysis=prep.analysis,
         saved_paths=tuple(saved),
         index_view_types=tuple(view_types),
         primary_panel=panel_info,
+        primary_source=prep.primary_source,
+        parity=parity,
+    )
+
+
+def _descriptor_parity_vs_query(
+    *,
+    query_path: str | Path,
+    index_primary: IndexPrimaryPreparation,
+    output_dir: Path,
+    catalog_stem: str,
+) -> DescriptorParity:
+    qpath = Path(query_path).expanduser().resolve()
+    if not qpath.is_file():
+        raise FileNotFoundError(f"Query image not found: {qpath}")
+
+    query_pre = ImagePreprocessor.preprocess_for_query(qpath)
+    q_letter_path = output_dir / f"{qpath.stem}_query_preprocess_letterbox.png"
+    query_pre.pil.save(q_letter_path)
+
+    index_letter_path = (
+        output_dir / f"{catalog_stem}_primary_preprocess_letterbox.png"
+    )
+    q_bgr = query_pre.bgr
+    i_bgr = index_primary.primary.bgr
+
+    return DescriptorParity(
+        color=float(
+            ColorDescriptor.similarity(
+                ColorDescriptor.extract(q_bgr),
+                ColorDescriptor.extract(i_bgr),
+            )
+        ),
+        texture=float(
+            TextureDescriptor.similarity(
+                TextureDescriptor.extract(q_bgr),
+                TextureDescriptor.extract(i_bgr),
+            )
+        ),
+        edge=float(
+            EdgeDescriptor.similarity(
+                EdgeDescriptor.extract(q_bgr),
+                EdgeDescriptor.extract(i_bgr),
+            )
+        ),
+        pattern=float(
+            PatternDescriptor.similarity(
+                PatternDescriptor.extract(q_bgr),
+                PatternDescriptor.extract(i_bgr),
+            )
+        ),
+        query_letterbox_path=str(q_letter_path),
+        index_letterbox_path=str(index_letter_path),
     )
 
 
@@ -140,6 +201,18 @@ def format_index_crop_report(report: IndexCropReport) -> str:
     lines = [
         f"Index crop debug: {report.source_path}",
         f"Output dir: {report.output_dir}",
+        "",
+        "IMPORTANT — production parity notes:",
+        "  • Primary letterbox is from prepare_index_primary() — the SAME",
+        "    function FeatureExtractor.extract_index_vectors() uses.",
+        "  • SAM2 / Precise Crop is NOT part of catalog indexing. The",
+        "    startup log 'SAM2 precise-crop setting ON' only enables the",
+        "    UI 'Precise Crop & Search' button (and optional scene path).",
+        "  • Hybrid component scores in explain_search compare",
+        "    preprocess_for_query(query) vs indexed primary descriptors —",
+        "    NOT two index letterboxes. Pass --query to measure that pair.",
+        "  • Re-reading saved PNGs and re-extracting can differ slightly",
+        "    from in-memory arrays (PNG round-trip); prefer --query output.",
         "",
         "Image analysis (index-time gates):",
         f"  kind={a.kind.value}  aspect={a.aspect:.3f}  "
@@ -153,6 +226,7 @@ def format_index_crop_report(report: IndexCropReport) -> str:
         "",
         f"Index views ({len(report.index_view_types)}): "
         + ", ".join(report.index_view_types),
+        f"primary_source={report.primary_source}",
     ]
     if report.primary_panel:
         p = report.primary_panel
@@ -162,7 +236,7 @@ def format_index_crop_report(report: IndexCropReport) -> str:
         )
     else:
         lines.append("primary_texture_panel: None (no left-panel aux vector path)")
-    if report.analysis.left_panel_beneficial and report.primary_panel:
+    if report.primary_source == "panel":
         lines.append(
             "primary_preprocess_letterbox: ISOLATED PANEL "
             "(feeds TileFeatures embedding + descriptors)"
@@ -172,6 +246,30 @@ def format_index_crop_report(report: IndexCropReport) -> str:
             "primary_preprocess_letterbox: full sheet "
             "(feeds TileFeatures embedding + descriptors)"
         )
+
+    if report.parity is not None:
+        p = report.parity
+        lines.extend(
+            [
+                "",
+                "Descriptor parity (query preprocess ↔ index primary):",
+                f"  color={p.color:.3f}  texture={p.texture:.3f}  "
+                f"edge={p.edge:.3f}  pattern={p.pattern:.3f}",
+                "  These should match explain_search hybrid components for the",
+                "  same pair (embedding / compat / color_penalty are separate).",
+                f"  query_letterbox: {p.query_letterbox_path}",
+                f"  index_letterbox:  {p.index_letterbox_path}",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "",
+                "Descriptor parity: NOT computed (pass --query PATH to compare",
+                "  against production hybrid color/texture/edge/pattern).",
+            ]
+        )
+
     lines.append("")
     lines.append("Saved PNGs:")
     for path in report.saved_paths:

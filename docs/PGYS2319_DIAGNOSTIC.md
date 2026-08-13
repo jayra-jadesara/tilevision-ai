@@ -121,7 +121,14 @@ python scripts/explain_search.py "$QUERY" --catalog "$CATALOG" \
 ## Task 2 — Index crop inspection
 
 ```bash
-python scripts/explain_search.py \
+# Production-parity crop dump + hybrid descriptor components vs query:
+python scripts/show_index_crop.py "$PGYS_SHEET" \
+  --query "$QUERY" \
+  --output-dir /tmp/index_crop_debug
+
+# Or via explain_search (passes --query into the crop tool automatically):
+python scripts/explain_search.py "$QUERY" \
+  --catalog "$CATALOG" \
   --show-index-crop "$PGYS_SHEET" \
   --output-dir /tmp/index_crop_debug
 ```
@@ -135,12 +142,29 @@ python scripts/explain_search.py \
   --output-dir /tmp/index_crop_debug
 ```
 
+**Parity rules (read before trusting PNG metrics):**
+
+- Primary letterbox comes from `prepare_index_primary()` — the same helper
+  `extract_index_vectors()` uses. Do not treat older parallel reconstructions
+  as ground truth.
+- **SAM2 is not in catalog indexing.** Startup log
+  `SAM2 precise-crop setting ON` only enables the UI Precise Crop & Search
+  button. Drop-search uses OpenCV isolation; index uses heuristic panel crop.
+- Hybrid `color/texture/edge/pattern` in `explain_search` compare
+  `preprocess_for_query(query)` vs **indexed** primary descriptors. Comparing
+  two index letterboxes (or two content-padded crops) **overstates** edge/pattern.
+  Always pass `--query` for component parity.
+- Real production (client, rebuilt index): `color≈0.968 texture≈0.910
+  edge≈0.476 pattern≈0.342`. An index-only PNG pair reading `edge≈0.97` is
+  the wrong comparison, not proof the index is wrong.
+
 Inspect PNGs under `/tmp/index_crop_debug/`:
 
 - `*_view0_primary.png` — full sheet (primary FAISS vector)
 - `*_view*_panel*.png` — left-panel aux vector (critical for texture crops)
 - `*_primary_texture_panel.png` — direct `primary_texture_panel()` output
 - `*_primary_preprocess_letterbox.png` — letterboxed primary embed input
+- `*_query_preprocess_letterbox.png` — query path (only with `--query`)
 
 **Verdict:** panel PNG must show **only the marble slab** (left ~35–45%).
 If logo, Chinese text, or photo-grid appear in panel/aux views, the indexed
@@ -262,6 +286,18 @@ their machine. These steps are the **closing criteria** for this issue:
 
 Until steps 2, 4, and 5 pass on the client machine, this issue remains open
 even if index-time crops look clean in isolation.
+
+## UI vs CLI full-list order (Task 4)
+
+`SearchView` renders `_current_results` in the order
+`SearchTilesUseCase.execute()` returns — no secondary sort. `explain_search.py`
+mirrors the same hybrid + weak-filter path and prints an **UI order check**
+block listing every kept row (`#rank final display% file`).
+
+After a search, expand the results table to all kept rows and compare
+filename order 1..N against that CLI block. A mismatch means a regression of
+Issue A (self-hit weak-filter) or a different catalog/index, not a display
+rounding quirk.
 
 ## Issue A — UI shows 1 result while CLI keeps 9 (same catalog)
 

@@ -586,6 +586,22 @@ def format_report(report: ExplainReport) -> str:
                 f"  tile_id={row.tile_id} final={row.final_score:.3f} "
                 f"faiss={row.faiss_cos:.3f} file={row.file_name}"
             )
+
+    kept_ordered = sorted(
+        [r for r in report.candidates if r.weak_filter_kept and r.rank is not None],
+        key=lambda r: int(r.rank),
+    )
+    if kept_ordered:
+        lines.append("")
+        lines.append(
+            "UI order check (kept rows, same order SearchTilesUseCase returns; "
+            "UI does not re-sort):"
+        )
+        for row in kept_ordered:
+            lines.append(
+                f"  #{row.rank}  final={row.final_score:.3f}  "
+                f"display≈{row.final_score * 100:.1f}%  {row.file_name}"
+            )
     return "\n".join(lines)
 
 
@@ -693,6 +709,7 @@ def main(argv: list[str] | None = None) -> int:
                 resolved_crop,
                 output_dir=args.output_dir,
                 feature_extractor=fx,
+                query_path=args.query,
             )
             outputs.append(format_index_crop_report(crop_report))
 
