@@ -30,7 +30,7 @@ Root cause on real `PGYS2319.jpg` was **two independent gate failures**:
 Additional safeguard: center-crop aux is blocked on wide preview-grid sheets
 (center region includes grid photos).
 
-After upgrading, customers must **Rebuild Search Index** (feature_version **15**).
+After upgrading, customers must **Rebuild Search Index** (feature_version **16**).
 
 `panel` top-caption band: **13%** of panel height shaved after content crop
 (v12 used 10%, which left a partial clipped caption line on real PGYS2319 at
@@ -51,6 +51,11 @@ frames (cream/white marble). The old heuristic stretched any L-channel
 v14 routed isolated panels through the primary path. Stretch still runs for
 underexposed/crushed photos (dark mean / highlights well below white). Same
 function is on the query path — cream marble queries are skipped too.
+
+**v16:** `EdgeDescriptor` uses adaptive Canny thresholds from the image's
+own Sobel magnitude (legacy fixed 80/180 found zero edges on cream marble
+→ all-zero histogram → cosine similarity exactly `0.0`). Both-empty
+histograms now score `1.0` (equally unstructured) instead of `0.0`.
 
 ## Which index views become live FAISS vectors
 
@@ -223,13 +228,13 @@ does **not** prove the client's original failed search (`xx.jpg` → missing
 `PGYS2319`) is fixed — that requires their real FAISS index and query on
 their machine. These steps are the **closing criteria** for this issue:
 
-1. **Upgrade** to the build containing feature_version **15** (panel primary
-   TileFeatures + lighting heuristic + prior panel-isolation / self-hit /
-   near-white fixes).
+1. **Upgrade** to the build containing feature_version **16** (panel primary
+   TileFeatures + lighting heuristic + adaptive edge descriptor + prior
+   panel-isolation / self-hit / near-white fixes).
 
 2. Run **Rebuild Search Index** on the catalog that contains `PGYS2319.jpg`.
    Index-time primary vectors **and** stored descriptors changed; existing
-   v10–v14 vectors do not self-heal.
+   v10–v15 vectors do not self-heal.
 
 3. **Zoom-verify** panel crops on the real sheet (see zoom acceptance check
    above) — confirm zero caption text at 2x in the top 80px and intact marble
@@ -335,3 +340,24 @@ Re-check on real files after rebuild:
 python scripts/show_index_crop.py PGYS2319.jpg --output-dir /tmp/index_crop_debug
 # open PGYS2319_primary_preprocess_letterbox.png — expect soft marble
 ```
+
+## Issue D — `edge=0.0` exactly on clean marble panels (v16)
+
+**Symptom:** after v15 lighting fix, real
+`xx_primary_preprocess_letterbox` vs `PGYS2319_primary_preprocess_letterbox`
+gave texture/pattern sensible scores but `EdgeDescriptor.similarity == 0.0`
+exactly. Synthetic panel-primary test showed `edge_before=edge_after=0.000`.
+
+**Cause:** fixed Canny `80/180` found **zero** edge pixels on high-key
+subtle marble → all-zero orientation histogram. Cosine of (zero, anything)
+or the `1e-8` denom path collapsed to exact `0.0`. Detection failure, not
+genuine dissimilarity.
+
+**v16 fix:** adaptive Canny from Sobel-magnitude percentile (floored so
+subtle veins still register), mag-mask fallback if Canny density < 0.2%,
+and both-empty similarity → `1.0`. Granite vs solid stays low.
+
+Synthetic stand-in (content-matched letterboxes): edge ≈ **0.79**; with
+query gray-pad letterbox ≈ **0.51** (pad borders inflate query edges —
+still far from exact 0). Re-run the real-file `EdgeDescriptor.similarity`
+after rebuild and report the number.
