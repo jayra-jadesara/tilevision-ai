@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -19,6 +19,7 @@ from src.ai.descriptors.color_descriptor import ColorDescriptor
 from src.ai.descriptors.edge_descriptor import EdgeDescriptor
 from src.ai.descriptors.pattern_descriptor import PatternDescriptor
 from src.ai.descriptors.texture_descriptor import TextureDescriptor
+from src.ai.models import TileFeatures
 from src.ai.preprocess.image_preprocessor import ImagePreprocessor
 from src.ai.preprocess.index_primary import (
     IndexPrimaryPreparation,
@@ -26,17 +27,21 @@ from src.ai.preprocess.index_primary import (
 )
 from src.ai.search_quality.image_analysis import ImageAnalysis
 
+QueryMode = Literal["auto", "catalog", "fresh", "both"]
+
 
 @dataclass(frozen=True, slots=True)
 class DescriptorParity:
-    """Handcrafted descriptor similarities: query preprocess vs index primary."""
+    """One descriptor-similarity measurement between two feature sets."""
 
+    mode: str
     color: float
     texture: float
     edge: float
     pattern: float
     query_letterbox_path: str
     index_letterbox_path: str
+    notes: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +54,7 @@ class IndexCropReport:
     primary_panel: dict[str, Any] | None
     primary_source: str
     parity: DescriptorParity | None = None
+    parity_alt: DescriptorParity | None = None
 
 
 def show_index_crops(
@@ -57,6 +63,8 @@ def show_index_crops(
     output_dir: str | Path = "/tmp/index_crop_debug",
     feature_extractor: Any | None = None,
     query_path: str | Path | None = None,
+    query_mode: QueryMode = "auto",
+    catalog_repo: Any | None = None,
 ) -> IndexCropReport:
     """
     Re-run the production index-time primary prep and save crop PNGs.
@@ -65,9 +73,19 @@ def show_index_crops(
     to ``FeatureExtractor.extract_index_vectors``. Debug-only: does not mutate
     the FAISS index.
 
-    Pass ``query_path`` to also save the query-time letterbox
-    (``preprocess_for_query``) and print descriptor similarities that match
-    hybrid component scores (except embedding / pattern-compat / penalties).
+    ``query_mode`` controls which hybrid comparison is printed:
+
+    - ``catalog`` — simulate UI catalog-query cache hit: compare
+      ``prepare_index_primary(query)`` descriptors vs index primary
+      (index-time vs index-time). This is what production uses when the
+      log says ``Reusing indexed features for catalog query``.
+    - ``fresh`` — ad-hoc upload path: ``preprocess_for_query(query)`` vs
+      index primary (can diverge when scene-isolation fires on non-square
+      clean tiles).
+    - ``auto`` / ``both`` — print catalog as primary; also print fresh.
+      If ``catalog_repo`` is set and the query path is an indexed tile,
+      catalog mode uses **stored SQLite TileFeatures** (byte-identical to
+      SearchTilesUseCase) instead of a live recompute.
     """
     prep = prepare_index_primary(image_path)
     out = Path(output_dir).expanduser().resolve()
@@ -97,7 +115,6 @@ def show_index_crops(
         prep.panel.save(panel_path)
         saved.append(str(panel_path))
 
-    # Exact production letterbox bytes (not a parallel reconstruction).
     primary_path = out / f"{stem}_primary_preprocess_letterbox.png"
     prep.primary.pil.save(primary_path)
     saved.append(str(primary_path))
@@ -109,14 +126,18 @@ def show_index_crops(
         saved.append(str(legacy_path))
 
     parity: DescriptorParity | None = None
+    parity_alt: DescriptorParity | None = None
     if query_path is not None:
-        parity = _descriptor_parity_vs_query(
+        parity, parity_alt, extra_paths = _descriptor_parity_bundle(
             query_path=query_path,
             index_primary=prep,
             output_dir=out,
             catalog_stem=stem,
+            query_mode=query_mode,
+            catalog_repo=catalog_repo,
+            catalog_image_path=prep.source_path,
         )
-        saved.append(parity.query_letterbox_path)
+        saved.extend(extra_paths)
 
     if feature_extractor is not None:
         _, aux = feature_extractor.extract_index_vectors(str(prep.source_path))
@@ -142,58 +163,167 @@ def show_index_crops(
         primary_panel=panel_info,
         primary_source=prep.primary_source,
         parity=parity,
+        parity_alt=parity_alt,
     )
 
 
-def _descriptor_parity_vs_query(
+def _sims_from_features(query: TileFeatures, candidate: TileFeatures) -> tuple[float, float, float, float]:
+    return (
+        float(
+            ColorDescriptor.similarity(
+                query.color_histogram, candidate.color_histogram
+            )
+        ),
+        float(
+            TextureDescriptor.similarity(
+                query.texture_histogram, candidate.texture_histogram
+            )
+        ),
+        float(
+            EdgeDescriptor.similarity(
+                query.edge_histogram, candidate.edge_histogram
+            )
+        ),
+        float(
+            PatternDescriptor.similarity(
+                query.pattern_features, candidate.pattern_features
+            )
+        ),
+    )
+
+
+def _features_from_preprocessed(pre) -> TileFeatures:
+    return TileFeatures(
+        embedding=np.zeros(8, dtype=np.float32),
+        color_histogram=ColorDescriptor.extract(pre.bgr),
+        texture_histogram=TextureDescriptor.extract(pre.bgr),
+        edge_histogram=EdgeDescriptor.extract(pre.bgr),
+        pattern_features=PatternDescriptor.extract(pre.bgr),
+        dominant_color=ColorDescriptor.dominant_color_rgb(pre.bgr),
+        width=pre.width,
+        height=pre.height,
+    )
+
+
+def _lookup_stored_features(repo: Any, image_path: Path) -> TileFeatures | None:
+    try:
+        from src.utils.image_utils import compute_sha256
+
+        tile = repo.get_by_path(str(image_path.resolve()))
+        if (
+            tile is not None
+            and tile.is_indexed
+            and tile.features is not None
+            and tile.sha256_hash == compute_sha256(image_path)
+        ):
+            return tile.features
+    except Exception:
+        return None
+    return None
+
+
+def _descriptor_parity_bundle(
     *,
     query_path: str | Path,
     index_primary: IndexPrimaryPreparation,
     output_dir: Path,
     catalog_stem: str,
-) -> DescriptorParity:
+    query_mode: QueryMode,
+    catalog_repo: Any | None,
+    catalog_image_path: str,
+) -> tuple[DescriptorParity | None, DescriptorParity | None, list[str]]:
     qpath = Path(query_path).expanduser().resolve()
     if not qpath.is_file():
         raise FileNotFoundError(f"Query image not found: {qpath}")
 
-    query_pre = ImagePreprocessor.preprocess_for_query(qpath)
-    q_letter_path = output_dir / f"{qpath.stem}_query_preprocess_letterbox.png"
-    query_pre.pil.save(q_letter_path)
-
     index_letter_path = (
         output_dir / f"{catalog_stem}_primary_preprocess_letterbox.png"
     )
-    q_bgr = query_pre.bgr
-    i_bgr = index_primary.primary.bgr
+    extra: list[str] = []
 
-    return DescriptorParity(
-        color=float(
-            ColorDescriptor.similarity(
-                ColorDescriptor.extract(q_bgr),
-                ColorDescriptor.extract(i_bgr),
-            )
-        ),
-        texture=float(
-            TextureDescriptor.similarity(
-                TextureDescriptor.extract(q_bgr),
-                TextureDescriptor.extract(i_bgr),
-            )
-        ),
-        edge=float(
-            EdgeDescriptor.similarity(
-                EdgeDescriptor.extract(q_bgr),
-                EdgeDescriptor.extract(i_bgr),
-            )
-        ),
-        pattern=float(
-            PatternDescriptor.similarity(
-                PatternDescriptor.extract(q_bgr),
-                PatternDescriptor.extract(i_bgr),
-            )
-        ),
-        query_letterbox_path=str(q_letter_path),
-        index_letterbox_path=str(index_letter_path),
+    # --- catalog / stored-vs-stored path ---
+    query_index_prep = prepare_index_primary(qpath)
+    q_index_letter = (
+        output_dir / f"{qpath.stem}_index_primary_preprocess_letterbox.png"
     )
+    query_index_prep.primary.pil.save(q_index_letter)
+    extra.append(str(q_index_letter))
+
+    stored_query = (
+        _lookup_stored_features(catalog_repo, qpath) if catalog_repo else None
+    )
+    stored_cand = (
+        _lookup_stored_features(catalog_repo, Path(catalog_image_path))
+        if catalog_repo
+        else None
+    )
+
+    if stored_query is not None and stored_cand is not None:
+        c_color, c_tex, c_edge, c_pat = _sims_from_features(
+            stored_query, stored_cand
+        )
+        catalog_notes = (
+            "STORED SQLite TileFeatures (query) vs STORED (candidate) — "
+            "exact SearchTilesUseCase catalog-cache hybrid components"
+        )
+        catalog_mode_label = "catalog_stored"
+    else:
+        q_feats = _features_from_preprocessed(query_index_prep.primary)
+        i_feats = _features_from_preprocessed(index_primary.primary)
+        c_color, c_tex, c_edge, c_pat = _sims_from_features(q_feats, i_feats)
+        catalog_notes = (
+            "prepare_index_primary(query) vs prepare_index_primary(candidate) — "
+            "simulates catalog-cache when DB features unavailable. "
+            "Pass --catalog to compare actual stored blobs."
+        )
+        catalog_mode_label = "catalog_sim"
+
+    catalog_parity = DescriptorParity(
+        mode=catalog_mode_label,
+        color=c_color,
+        texture=c_tex,
+        edge=c_edge,
+        pattern=c_pat,
+        query_letterbox_path=str(q_index_letter),
+        index_letterbox_path=str(index_letter_path),
+        notes=catalog_notes,
+    )
+
+    # --- fresh ad-hoc query path ---
+    query_pre = ImagePreprocessor.preprocess_for_query(qpath)
+    q_fresh_letter = output_dir / f"{qpath.stem}_query_preprocess_letterbox.png"
+    query_pre.pil.save(q_fresh_letter)
+    extra.append(str(q_fresh_letter))
+
+    fresh_q = _features_from_preprocessed(query_pre)
+    fresh_i = _features_from_preprocessed(index_primary.primary)
+    f_color, f_tex, f_edge, f_pat = _sims_from_features(fresh_q, fresh_i)
+    fresh_parity = DescriptorParity(
+        mode="fresh",
+        color=f_color,
+        texture=f_tex,
+        edge=f_edge,
+        pattern=f_pat,
+        query_letterbox_path=str(q_fresh_letter),
+        index_letterbox_path=str(index_letter_path),
+        notes=(
+            "preprocess_for_query(query) vs live index primary — ad-hoc upload "
+            "path only. Non-square clean tiles may run scene isolation here, "
+            "which catalog-cache skips. Do NOT treat as UI production when "
+            "the log says 'Reusing indexed features for catalog query'."
+        ),
+    )
+
+    mode = query_mode
+    if mode == "auto":
+        mode = "both"
+
+    if mode == "catalog":
+        return catalog_parity, None, extra
+    if mode == "fresh":
+        return fresh_parity, None, extra
+    # both
+    return catalog_parity, fresh_parity, extra
 
 
 def format_index_crop_report(report: IndexCropReport) -> str:
@@ -205,14 +335,15 @@ def format_index_crop_report(report: IndexCropReport) -> str:
         "IMPORTANT — production parity notes:",
         "  • Primary letterbox is from prepare_index_primary() — the SAME",
         "    function FeatureExtractor.extract_index_vectors() uses.",
-        "  • SAM2 / Precise Crop is NOT part of catalog indexing. The",
-        "    startup log 'SAM2 precise-crop setting ON' only enables the",
-        "    UI 'Precise Crop & Search' button (and optional scene path).",
-        "  • Hybrid component scores in explain_search compare",
-        "    preprocess_for_query(query) vs indexed primary descriptors —",
-        "    NOT two index letterboxes. Pass --query to measure that pair.",
-        "  • Re-reading saved PNGs and re-extracting can differ slightly",
-        "    from in-memory arrays (PNG round-trip); prefer --query output.",
+        "  • SAM2 / Precise Crop is NOT part of catalog indexing.",
+        "  • When the UI searches an already-indexed file (xx.jpg.jpeg), it",
+        "    REUSES stored index-time TileFeatures — it does NOT run",
+        "    preprocess_for_query. Log line:",
+        "      'Reusing indexed features for catalog query: …'",
+        "    That stored-vs-stored comparison is mode=catalog_* below.",
+        "  • mode=fresh (preprocess_for_query) is the ad-hoc upload path and",
+        "    can read much higher edge/pattern on real marble (scene",
+        "    isolation / different crop). That is NOT the UI catalog path.",
         "",
         "Image analysis (index-time gates):",
         f"  kind={a.kind.value}  aspect={a.aspect:.3f}  "
@@ -247,26 +378,28 @@ def format_index_crop_report(report: IndexCropReport) -> str:
             "(feeds TileFeatures embedding + descriptors)"
         )
 
-    if report.parity is not None:
-        p = report.parity
+    def _emit(p: DescriptorParity, title: str) -> None:
         lines.extend(
             [
                 "",
-                "Descriptor parity (query preprocess ↔ index primary):",
+                f"{title} [mode={p.mode}]:",
                 f"  color={p.color:.3f}  texture={p.texture:.3f}  "
                 f"edge={p.edge:.3f}  pattern={p.pattern:.3f}",
-                "  These should match explain_search hybrid components for the",
-                "  same pair (embedding / compat / color_penalty are separate).",
+                f"  {p.notes}",
                 f"  query_letterbox: {p.query_letterbox_path}",
                 f"  index_letterbox:  {p.index_letterbox_path}",
             ]
         )
-    else:
+
+    if report.parity is not None:
+        _emit(report.parity, "Descriptor parity (PRIMARY — matches UI when catalog)")
+    if report.parity_alt is not None:
+        _emit(report.parity_alt, "Descriptor parity (ALTERNATE — ad-hoc fresh path)")
+    if report.parity is None:
         lines.extend(
             [
                 "",
-                "Descriptor parity: NOT computed (pass --query PATH to compare",
-                "  against production hybrid color/texture/edge/pattern).",
+                "Descriptor parity: NOT computed (pass --query PATH).",
             ]
         )
 

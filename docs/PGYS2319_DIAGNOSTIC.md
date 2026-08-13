@@ -150,13 +150,16 @@ python scripts/explain_search.py \
 - **SAM2 is not in catalog indexing.** Startup log
   `SAM2 precise-crop setting ON` only enables the UI Precise Crop & Search
   button. Drop-search uses OpenCV isolation; index uses heuristic panel crop.
-- Hybrid `color/texture/edge/pattern` in `explain_search` compare
-  `preprocess_for_query(query)` vs **indexed** primary descriptors. Comparing
-  two index letterboxes (or two content-padded crops) **overstates** edge/pattern.
-  Always pass `--query` for component parity.
-- Real production (client, rebuilt index): `color≈0.968 texture≈0.910
-  edge≈0.476 pattern≈0.342`. An index-only PNG pair reading `edge≈0.97` is
-  the wrong comparison, not proof the index is wrong.
+- **Catalog-query cache hit (the real xx.jpg.jpeg path):** when the query
+  file is itself an indexed tile, `SearchTilesUseCase` logs
+  `Reusing indexed features for catalog query` and hybrid compares
+  **stored index-time TileFeatures vs stored index-time TileFeatures** —
+  not `preprocess_for_query`. `show_index_crop --query` prints that as
+  `mode=catalog_*` (primary). `mode=fresh` is the ad-hoc upload path and
+  can read `edge≈0.97` on real marble while production stays `≈0.48`.
+- For byte-identical stored blobs: pass `--catalog <profile>` with `--query`.
+- Real production (client, rebuilt index, catalog cache): `color≈0.968
+  texture≈0.910 edge≈0.476 pattern≈0.342`.
 
 Inspect PNGs under `/tmp/index_crop_debug/`:
 

@@ -80,6 +80,7 @@ class ExplainReport:
     query_path: str
     query_kind: str
     query_view_count: int
+    query_feature_source: str
     weak_filter_min_raw: float
     weak_filter_top1_cleared: bool
     candidates: tuple[CandidateExplain, ...]
@@ -246,16 +247,26 @@ def explain_search(
 
     from PIL import Image
 
-    preloaded = Image.open(query_path)
-    analysis = analyze_query(preloaded.convert("RGB"))
-
-    query_features, query_embeddings = use_case._feature_extractor.extract_for_search(
-        str(query_path),
-        preloaded=preloaded,
+    # Mirror SearchTilesUseCase.execute: memory cache → catalog stored
+    # features → fresh extract_for_search. Catalog hits reuse index-time
+    # descriptors (the xx.jpg.jpeg self-search path).
+    (
+        query_features,
+        query_embeddings,
+        cache_status,
+        query_sha256,
+        query_dhash,
+        preloaded,
+    ) = use_case.resolve_query_features(
+        query_path,
+        use_memory_cache=True,
     )
+    if preloaded is None:
+        preloaded = ImagePreprocessor.load(query_path)
+    analysis = analyze_query(ImagePreprocessor.to_rgb(preloaded))
     query_pattern_type = PatternClassifier.classify(query_features)
-    query_sha256 = compute_sha256(query_path)
-    query_dhash = compute_dhash(query_path)
+    if not query_dhash:
+        query_dhash = compute_dhash(query_path)
 
     total_vectors = use_case._index.get_total_count()
     if pool_size is not None:
@@ -408,6 +419,7 @@ def explain_search(
         query_path=str(query_path),
         query_kind=analysis.kind.value,
         query_view_count=len(query_embeddings or [query_features.embedding]),
+        query_feature_source=cache_status,
         weak_filter_min_raw=float(min_raw),
         weak_filter_top1_cleared=bool(top1_cleared),
         candidates=tuple(candidates),
@@ -546,6 +558,11 @@ def format_report(report: ExplainReport) -> str:
         f"Query: {report.query_path}",
         f"Query kind: {report.query_kind}",
         f"Query views embedded: {report.query_view_count}",
+        (
+            f"Query feature source: {report.query_feature_source} "
+            "(hit=memory cache, catalog=stored index-time TileFeatures, "
+            "miss=fresh extract_for_search)"
+        ),
         (
             f"FAISS pool: search_k={report.pool_size} "
             f"unique_ids={report.unique_ids_in_pool}"
@@ -710,6 +727,8 @@ def main(argv: list[str] | None = None) -> int:
                 output_dir=args.output_dir,
                 feature_extractor=fx,
                 query_path=args.query,
+                query_mode="auto",
+                catalog_repo=use_case._repo if use_case is not None else None,
             )
             outputs.append(format_index_crop_report(crop_report))
 

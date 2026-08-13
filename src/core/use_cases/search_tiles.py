@@ -219,6 +219,158 @@ class SearchTilesUseCase:
                 f"Could not read the searchable vector index: {exc}"
             ) from exc
 
+    def resolve_query_features(
+        self,
+        query_path: Path,
+        *,
+        timer: PipelineTimer | None = None,
+        on_stage: Optional[Callable[[str], None]] = None,
+        use_memory_cache: bool = True,
+    ) -> tuple[TileFeatures, list, str, str, str, object | None]:
+        """
+        Resolve query TileFeatures the same way ``execute`` does.
+
+        Order: memory cache → catalog indexed features (path+sha256) →
+        fresh ``extract_for_search``. Catalog hits reuse *index-time*
+        descriptors (not ``preprocess_for_query``), which matters when the
+        query file is itself an indexed tile (xx.jpg.jpeg self-search).
+
+        Returns
+        -------
+        features, embeddings, cache_status, sha256, dhash, preloaded_image
+        """
+        query_path = Path(query_path)
+        query_features: TileFeatures | None = None
+        query_embeddings: list = []
+        query_sha256 = ""
+        query_dhash = ""
+        cache_status = "miss"
+        preloaded_image = None
+
+        def stage(name: str, detail: str = "") -> None:
+            if on_stage is not None:
+                log_search_stage(logger, name, detail=detail, on_stage=on_stage)
+
+        if use_memory_cache:
+            cached_query = QUERY_EMBEDDING_CACHE.get(query_path)
+            if cached_query is not None:
+                query_features = cached_query.features
+                query_embeddings = [
+                    np.asarray(e, dtype=np.float32) for e in cached_query.embeddings
+                ]
+                cache_status = "hit"
+                if timer is not None:
+                    timer.timings.record("image_load", 0.0)
+                    timer.timings.record("crop", 0.0)
+                    timer.timings.record("embedding", 0.0)
+                    timer.timings.record("descriptors", 0.0)
+                stage(STAGE_EMBEDDING_CACHE_HIT, query_path.name)
+                logger.info(
+                    "Reusing cached query embedding: %s",
+                    query_path.name,
+                )
+
+        if query_features is None:
+            if timer is not None:
+                with timer.measure("image_load"):
+                    query_sha256 = compute_sha256(query_path)
+            else:
+                query_sha256 = compute_sha256(query_path)
+
+            cached_tile = self._repo.get_by_path(str(query_path.resolve()))
+            if (
+                cached_tile
+                and cached_tile.is_indexed
+                and cached_tile.features is not None
+                and cached_tile.sha256_hash == query_sha256
+            ):
+                query_features = cached_tile.features
+                query_embeddings = [query_features.embedding]
+                cache_status = "catalog"
+                if timer is not None:
+                    timer.timings.record("crop", 0.0)
+                    timer.timings.record("embedding", 0.0)
+                    timer.timings.record("descriptors", 0.0)
+                stage(STAGE_EMBEDDING_CACHE_HIT, f"catalog:{query_path.name}")
+                logger.info(
+                    "Reusing indexed features for catalog query: %s",
+                    query_path.name,
+                )
+
+        if query_features is None:
+            try:
+                if timer is not None:
+                    with timer.measure("image_load"):
+                        preloaded_image = ImagePreprocessor.load(query_path)
+                        if not query_sha256:
+                            query_sha256 = compute_sha256(query_path)
+                        query_dhash = compute_dhash_from_image(preloaded_image)
+                else:
+                    preloaded_image = ImagePreprocessor.load(query_path)
+                    if not query_sha256:
+                        query_sha256 = compute_sha256(query_path)
+                    query_dhash = compute_dhash_from_image(preloaded_image)
+            except Exception as exc:
+                log_search_failure(logger, STAGE_IMAGE_DECODED, exc)
+                raise ValueError(
+                    f"Selected file is not a valid, readable image: "
+                    f"{query_path.name}"
+                ) from exc
+            stage(STAGE_IMAGE_DECODED, query_path.name)
+
+            logger.info("Computing embedding for query image...")
+            extract_for_search = getattr(
+                self._feature_extractor, "extract_for_search", None
+            )
+            if extract_for_search is not None:
+                query_features, query_embeddings = extract_for_search(
+                    str(query_path),
+                    preloaded=preloaded_image,
+                )
+            else:
+                query_features = self._feature_extractor.extract(
+                    str(query_path),
+                    for_query=True,
+                )
+                query_embeddings = [query_features.embedding]
+            if query_features is None or not query_embeddings:
+                raise RuntimeError(
+                    "DINOv2 embedding generation returned no vectors for the query image."
+                )
+            stage(STAGE_PREPROCESS_COMPLETE)
+            stage(
+                STAGE_EMBEDDING_GENERATED,
+                f"crops={len(query_embeddings)} dim={len(query_features.embedding)}",
+            )
+            if timer is not None:
+                extract_timings = self._feature_extractor.last_timings
+                timer.timings.record("crop", extract_timings.preprocessing)
+                timer.timings.record("embedding", extract_timings.dinov2)
+                timer.timings.record("descriptors", extract_timings.descriptors)
+            if use_memory_cache:
+                QUERY_EMBEDDING_CACHE.put(
+                    query_path,
+                    query_features,
+                    query_embeddings,
+                )
+
+        if not query_sha256:
+            if timer is not None:
+                with timer.measure("image_load"):
+                    query_sha256 = compute_sha256(query_path)
+            else:
+                query_sha256 = compute_sha256(query_path)
+
+        assert query_features is not None
+        return (
+            query_features,
+            query_embeddings,
+            cache_status,
+            query_sha256,
+            query_dhash,
+            preloaded_image,
+        )
+
     def execute(
         self,
         query_image_path: str,
@@ -296,109 +448,18 @@ class SearchTilesUseCase:
             timer = PipelineTimer("SEARCH TIMING")
 
             # ── 1. Resolve query features (memory cache → catalog → embed) ──
-            query_features: TileFeatures | None = None
-            query_embeddings: list = []
-            query_sha256 = ""
-            query_dhash = ""
-            cache_status = "miss"
-            preloaded_image = None
-
-            cached_query = QUERY_EMBEDDING_CACHE.get(query_path)
-            if cached_query is not None:
-                query_features = cached_query.features
-                query_embeddings = [
-                    np.asarray(e, dtype=np.float32) for e in cached_query.embeddings
-                ]
-                cache_status = "hit"
-                timer.timings.record("image_load", 0.0)
-                timer.timings.record("crop", 0.0)
-                timer.timings.record("embedding", 0.0)
-                timer.timings.record("descriptors", 0.0)
-                stage(STAGE_EMBEDDING_CACHE_HIT, query_path.name)
-                logger.info(
-                    "Reusing cached query embedding: %s",
-                    query_path.name,
-                )
-
-            if query_features is None:
-                # Cheap byte hash first — may hit the catalog without decoding.
-                with timer.measure("image_load"):
-                    query_sha256 = compute_sha256(query_path)
-
-                cached_tile = self._repo.get_by_path(str(query_path.resolve()))
-                if (
-                    cached_tile
-                    and cached_tile.is_indexed
-                    and cached_tile.features is not None
-                    and cached_tile.sha256_hash == query_sha256
-                ):
-                    query_features = cached_tile.features
-                    query_embeddings = [query_features.embedding]
-                    cache_status = "catalog"
-                    timer.timings.record("crop", 0.0)
-                    timer.timings.record("embedding", 0.0)
-                    timer.timings.record("descriptors", 0.0)
-                    stage(STAGE_EMBEDDING_CACHE_HIT, f"catalog:{query_path.name}")
-                    logger.info(
-                        "Reusing indexed features for catalog query: %s",
-                        query_path.name,
-                    )
-
-            if query_features is None:
-                # Decode the query image exactly once for dHash + embedding.
-                with timer.measure("image_load"):
-                    try:
-                        preloaded_image = ImagePreprocessor.load(query_path)
-                    except Exception as exc:
-                        log_search_failure(logger, STAGE_IMAGE_DECODED, exc)
-                        raise ValueError(
-                            f"Selected file is not a valid, readable image: "
-                            f"{query_path.name}"
-                        ) from exc
-                    if not query_sha256:
-                        query_sha256 = compute_sha256(query_path)
-                    query_dhash = compute_dhash_from_image(preloaded_image)
-                stage(STAGE_IMAGE_DECODED, query_path.name)
-
-                logger.info("Computing embedding for query image...")
-                extract_for_search = getattr(
-                    self._feature_extractor, "extract_for_search", None
-                )
-                if extract_for_search is not None:
-                    query_features, query_embeddings = extract_for_search(
-                        str(query_path),
-                        preloaded=preloaded_image,
-                    )
-                else:
-                    query_features = self._feature_extractor.extract(
-                        str(query_path),
-                        for_query=True,
-                    )
-                    query_embeddings = [query_features.embedding]
-                if query_features is None or not query_embeddings:
-                    raise RuntimeError(
-                        "DINOv2 embedding generation returned no vectors for the query image."
-                    )
-                stage(STAGE_PREPROCESS_COMPLETE)
-                stage(
-                    STAGE_EMBEDDING_GENERATED,
-                    f"crops={len(query_embeddings)} dim={len(query_features.embedding)}",
-                )
-                extract_timings = self._feature_extractor.last_timings
-                # Map internal extract stages onto the required profile labels.
-                timer.timings.record("crop", extract_timings.preprocessing)
-                timer.timings.record("embedding", extract_timings.dinov2)
-                timer.timings.record("descriptors", extract_timings.descriptors)
-                QUERY_EMBEDDING_CACHE.put(
-                    query_path,
-                    query_features,
-                    query_embeddings,
-                )
-
-            # Exact-match SHA for memory-cache hits (no decode required).
-            if not query_sha256:
-                with timer.measure("image_load"):
-                    query_sha256 = compute_sha256(query_path)
+            (
+                query_features,
+                query_embeddings,
+                cache_status,
+                query_sha256,
+                query_dhash,
+                preloaded_image,
+            ) = self.resolve_query_features(
+                query_path,
+                timer=timer,
+                on_stage=stage,
+            )
 
             # Normalize sanity — FAISS search also L2-normalizes; log explicitly.
             emb0 = np.asarray(
