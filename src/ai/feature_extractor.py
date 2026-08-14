@@ -48,6 +48,10 @@ import numpy as np
 from src.ai.embedder import DINOv2Embedder
 from src.ai.models import TileFeatures, PreprocessedImage
 from src.ai.preprocess.image_preprocessor import ImagePreprocessor
+from src.ai.preprocess.index_primary import (
+    finalize_index_pil,
+    prepare_index_primary,
+)
 from src.ai.descriptors.color_descriptor import ColorDescriptor
 from src.ai.descriptors.texture_descriptor import TextureDescriptor
 from src.ai.descriptors.edge_descriptor import EdgeDescriptor
@@ -310,29 +314,11 @@ class FeatureExtractor:
         original_size: tuple[int, int],
         match_pad_to_content: bool = False,
     ) -> PreprocessedImage:
-        """Normalize + letterbox an index crop into a PreprocessedImage."""
-        view = ImagePreprocessor.normalize_lighting(view)
-        pad_color = None
-        if match_pad_to_content:
-            # Portrait panel letterboxes are ~45% pad; neutral gray PAD_COLOR
-            # destroys LAB color/texture histograms (PGYS2319 color=0.07 class).
-            mean = np.asarray(view.convert("RGB"), dtype=np.float32).mean(axis=(0, 1))
-            pad_color = (
-                int(np.clip(mean[0], 0, 255)),
-                int(np.clip(mean[1], 0, 255)),
-                int(np.clip(mean[2], 0, 255)),
-            )
-        view = ImagePreprocessor.resize_letterbox(view, pad_color=pad_color)
-        rgb = ImagePreprocessor.to_numpy(view)
-        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        return PreprocessedImage(
-            pil=view,
-            rgb=rgb,
-            bgr=bgr,
-            gray=gray,
-            width=original_size[0],
-            height=original_size[1],
+        """Normalize + letterbox an index crop (shared with show_index_crop)."""
+        return finalize_index_pil(
+            view,
+            original_size=original_size,
+            match_pad_to_content=match_pad_to_content,
         )
 
     # Skip near-duplicates of primary. 0.97 was too strict for center-50 on
@@ -382,27 +368,18 @@ class FeatureExtractor:
         Aux FAISS vectors still include full-sheet (for sheet self-hit),
         panel_center, and adaptive when beneficial. Near-duplicates are dropped.
         """
-        from src.ai.search_quality.image_analysis import analyze_image
-        from src.ai.search_quality.views import (
-            IndexStrategy,
-            IndexViewType,
-            build_index_views,
-        )
+        from src.ai.search_quality.views import IndexViewType
 
         image_name = Path(image_path).name
         aux: list[np.ndarray] = []
 
         try:
-            # Analyze / crop on the raw sheet. Do NOT trim the full sheet before
-            # panel detection — that shifts the split into the text column.
-            raw = ImagePreprocessor.load(image_path)
-            raw = ImagePreprocessor.to_rgb(raw)
-            analysis = analyze_image(raw)
-            views = build_index_views(
-                raw,
-                IndexStrategy.E_HEURISTIC_MULTIVIEW,
-                analysis=analysis,
-            )
+            # Shared with show_index_crops — do not reconstruct crops in parallel.
+            prep = prepare_index_primary(image_path)
+            raw = prep.raw
+            analysis = prep.analysis
+            views = list(prep.views)
+            panel_pil = prep.panel
             logger.info(
                 "Index view plan for %s: kind=%s views=%s "
                 "panel=%s center=%s",
@@ -413,16 +390,8 @@ class FeatureExtractor:
                 analysis.center_crop_beneficial,
             )
 
-            panel_pil = None
-            if analysis.left_panel_beneficial:
-                panel_pil = ImagePreprocessor.primary_texture_panel(raw)
-
-            if panel_pil is not None:
-                primary_pre = self._finalize_index_pil(
-                    panel_pil,
-                    original_size=raw.size,
-                    match_pad_to_content=True,
-                )
+            if prep.primary_source == "panel" and panel_pil is not None:
+                primary_pre = prep.primary
                 features = self.extract_from_preprocessed(
                     primary_pre,
                     for_query=False,

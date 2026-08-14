@@ -32,7 +32,10 @@ from dataclasses import dataclass
 #      so panel primary is not posterized; rebuild required for catalog sheets.
 # v16: EdgeDescriptor adaptive Canny (+ empty-hist similarity); fixed 80/180
 #      returned all-zero hists on subtle marble → cosine 0.0; rebuild required.
-CURRENT_FEATURE_VERSION = 16
+# v17: folder-scan batch indexing uses extract_index_vectors (panel primary +
+#      aux FAISS) instead of extract_batch full-sheet preprocess; rebuild
+#      required — "Rebuild Search Index" was writing wrong descriptors.
+CURRENT_FEATURE_VERSION = 17
 
 # Bump when pattern descriptor layout or algorithm changes.
 CURRENT_PATTERN_FEATURE_VERSION = 3
