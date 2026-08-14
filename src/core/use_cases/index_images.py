@@ -17,7 +17,7 @@ from typing import Callable, List, Optional, Tuple
 from src.config.indexing_performance import IndexingPerformanceConfig
 from src.core.models import TileImage, ScanResult, IndexedFolderState
 from src.data.repository_interface import IImageRepository, IIndexedFolderRepository
-from src.ai.feature_extractor import FeatureExtractor
+from src.ai.feature_extractor import ExtractTimings, FeatureExtractor
 from src.ai.inference_guard import wait_while_search_priority
 from src.ai.vector_index import FaissIndexManager
 from src.utils.pipeline_timing import PipelineTimer
@@ -394,14 +394,18 @@ class IndexImagesUseCase:
         persist: bool = True,
     ) -> None:
         """
-        Index multiple files using batched DINOv2 inference and batch FAISS insert.
+        Index multiple files from a folder scan.
+
+        Uses the same ``extract_index_vectors()`` path as ``index_single_file``
+        (``prepare_index_primary`` panel isolation + aux FAISS vectors). The
+        old ``extract_batch()`` + ``ImagePreprocessor.preprocess()`` path wrote
+        full-sheet descriptors to SQLite and caused PGYS2319-style hybrid drift.
         """
         if not items:
             return
 
         wait_while_search_priority()
         timer = PipelineTimer("INDEX BATCH TIMING")
-        path_strings = [str(item.path) for item in items]
         tiles: List[TileImage] = []
 
         with timer.measure("image_loading"):
@@ -449,19 +453,39 @@ class IndexImagesUseCase:
                     )
                 )
 
-        features_list = self._feature_extractor.extract_batch(
-            path_strings,
-            preprocess_workers=self._perf.adaptive_preprocess_workers(
-                _max_file_bytes(items)
-            ),
+        features_list = []
+        aux_by_index: List[List] = []
+        total_preprocess = 0.0
+        total_dinov2 = 0.0
+        total_descriptors = 0.0
+
+        with timer.measure("feature_extract"):
+            for item in items:
+                features, aux = self._feature_extractor.extract_index_vectors(
+                    str(item.path)
+                )
+                features_list.append(features)
+                aux_by_index.append(aux)
+                timings = self._feature_extractor.last_timings
+                total_preprocess += timings.preprocessing
+                total_dinov2 += timings.dinov2
+                total_descriptors += timings.descriptors
+
+        batch_size = len(items)
+        per_file = max(1, batch_size)
+        self._feature_extractor._last_timings = ExtractTimings(
+            preprocessing=total_preprocess / per_file,
+            dinov2=total_dinov2 / per_file,
+            descriptors=total_descriptors / per_file,
+            total=(total_preprocess + total_dinov2 + total_descriptors) / per_file,
         )
-        extract_timings = self._feature_extractor.last_timings
-        timer.timings.record("preprocessing", extract_timings.preprocessing * len(items))
-        timer.timings.record("dinov2", extract_timings.dinov2 * len(items))
-        timer.timings.record("descriptors", extract_timings.descriptors * len(items))
+        timer.timings.record("preprocessing", total_preprocess)
+        timer.timings.record("dinov2", total_dinov2)
+        timer.timings.record("descriptors", total_descriptors)
 
         db_ids: List[int] = []
-        vectors: List[List[float]] = []
+        faiss_ids: List[int] = []
+        faiss_vectors: List[List[float]] = []
 
         with timer.measure("database"):
             for tile, features in zip(tiles, features_list):
@@ -470,13 +494,19 @@ class IndexImagesUseCase:
                 tile.id = db_id
                 tile.embedding_id = db_id
                 db_ids.append(db_id)
-                vectors.append(features.embedding)
 
         for item in items:
             generate_thumbnail(item.path, self._thumbnail_dir)
 
+        for db_id, features, aux in zip(db_ids, features_list, aux_by_index):
+            faiss_ids.append(db_id)
+            faiss_vectors.append(features.embedding)
+            for aux_vec in aux:
+                faiss_ids.append(db_id)
+                faiss_vectors.append(aux_vec)
+
         with timer.measure("faiss"):
-            self._index.update_vectors(db_ids, vectors, persist=persist)
+            self._index.update_vectors(faiss_ids, faiss_vectors, persist=persist)
 
         with timer.measure("database"):
             for tile in tiles:
