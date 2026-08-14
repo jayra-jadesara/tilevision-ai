@@ -272,3 +272,30 @@ def collect_query_crop_pils(
         plan.strip_ui,
     )
     return analysis, unique
+
+
+def collect_crop_tool_pils(
+    image: Image.Image,
+    *,
+    max_views_cap: int = 2,
+) -> list[Image.Image]:
+    """
+    Views for Auto / Precise / Manual crop-tool outputs.
+
+    The file is already an isolated tile. Do not re-run scene isolation or
+    aggressive content-crop (that shrinks an already-tight crop further).
+    Primary = light border trim; optional second view = 82% center so FAISS
+    can match a tighter index panel.
+    """
+    working = ImagePreprocessor.to_rgb(image)
+    working = ImagePreprocessor.trim_uniform_borders(working)
+    crops: list[Image.Image] = [working]
+    cap = max(1, int(max_views_cap))
+    if cap >= 2 and min(working.size) >= 200:
+        crops.append(_center_crop(working, 0.82))
+    logger.info(
+        "Crop-tool query views: n=%d sizes=%s",
+        len(crops),
+        [c.size for c in crops],
+    )
+    return crops

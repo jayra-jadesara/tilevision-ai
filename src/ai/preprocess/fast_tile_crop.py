@@ -340,26 +340,59 @@ def _center_crop(image: Image.Image, ratio: float = 0.70) -> Image.Image:
     return image.crop((left, top, left + crop_w, top + crop_h))
 
 
+def _persist_last_crop(kind: str, image: Image.Image, temp_dir: Path) -> Path:
+    """Stable copy for diagnosis after unique-named temp files disappear."""
+    keep_path = temp_dir / f"last_{kind}.jpg"
+    image.convert("RGB").save(str(keep_path), "JPEG", quality=95)
+    return keep_path
+
+
+def _already_full_frame_tile(image: Image.Image) -> bool:
+    from src.ai.search_quality.query_analyzer import analyze_query, is_full_frame_tile
+
+    return is_full_frame_tile(analyze_query(image))
+
+
 def save_auto_tile_crop(image_path: str | Path) -> tuple[Path, TileCropResult]:
     """
     Isolate the tile region and write a JPEG under ``tilevision_crops``.
 
     Used by Search → Auto Crop & Search so the user can run DINOv2 on the
     cropped region explicitly (same temp-folder convention as manual crop).
+
+    Clean close-ups skip floor_band isolation — that heuristic is for room
+    photos and otherwise keeps ~30% of an already-framed tile.
     """
     path = Path(image_path)
     with Image.open(path) as img:
         source = ImageOps.exif_transpose(img.convert("RGB"))
 
-    result = isolate_tile_region(source)
+    width, height = source.size
+    if _already_full_frame_tile(source):
+        result = TileCropResult(
+            image=source,
+            box=(0, 0, width, height),
+            confidence=1.0,
+            method="already_clean",
+        )
+        logger.info(
+            "Auto crop skipped isolation for full-frame tile %s (%dx%d)",
+            path.name,
+            width,
+            height,
+        )
+    else:
+        result = isolate_tile_region(source)
     temp_dir = Path(tempfile.gettempdir()) / "tilevision_crops"
     temp_dir.mkdir(parents=True, exist_ok=True)
     out_path = temp_dir / f"autocrop_{path.stem}_{id(result)}.jpg"
-    result.image.convert("RGB").save(str(out_path), "JPEG", quality=92)
+    result.image.convert("RGB").save(str(out_path), "JPEG", quality=95)
+    keep_path = _persist_last_crop("autocrop", result.image, temp_dir)
     logger.info(
-        "Saved auto tile crop: %s (method=%s conf=%.2f)",
+        "Saved auto tile crop: %s (method=%s conf=%.2f keep=%s)",
         out_path.name,
         result.method,
         result.confidence,
+        keep_path.name,
     )
     return out_path, result

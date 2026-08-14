@@ -46,12 +46,14 @@ class SearchWorker(QThread):
         query_image_path: str,
         top_k: int,
         filters: Optional[dict] = None,
+        query_origin: Optional[str] = None,
     ) -> None:
         super().__init__()
         self._use_case = use_case
         self._query_image_path = query_image_path
         self._top_k = top_k
         self._filters = filters or {}
+        self._query_origin = query_origin
 
     def _emit_cancelled(self, where: str) -> None:
         """Always notify the UI when the worker exits due to interruption."""
@@ -131,6 +133,7 @@ class SearchWorker(QThread):
                         top_k=self._top_k,
                         filters=self._filters,
                         on_stage=_on_stage,
+                        query_origin=self._query_origin,
                     )
                     last_error = None
                     break

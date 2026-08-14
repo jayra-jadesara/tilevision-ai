@@ -213,7 +213,13 @@ class CropDialog(QDialog):
             temp_dir = Path(tempfile.gettempdir()) / "tilevision_crops"
             temp_dir.mkdir(parents=True, exist_ok=True)
             temp_path = temp_dir / f"crop_{self._source_path.stem}_{id(self)}.jpg"
-            cropped.save(str(temp_path), "JPEG", quality=92)
+            cropped.save(str(temp_path), "JPEG", quality=95)
+            try:
+                import shutil
+
+                shutil.copy2(temp_path, temp_dir / "last_manual.jpg")
+            except OSError:
+                pass
 
             self._cropped_image_path = str(temp_path)
             self.accept()
