@@ -285,17 +285,24 @@ def collect_crop_tool_pils(
     The file is already an isolated tile. Do not re-run scene isolation or
     aggressive content-crop (that shrinks an already-tight crop further).
     Primary = light border trim; optional second view = 82% center so FAISS
-    can match a tighter index panel.
+    can match a tighter index panel on partial / room-isolated crops only.
+    Full-frame clean tiles (``already_clean`` Auto/Precise output) stay at
+    one view — same cost as drop-search, ranking preserved without a redundant
+    second DINOv2 forward pass.
     """
+    from src.ai.search_quality.query_analyzer import analyze_query, is_full_frame_tile
+
     working = ImagePreprocessor.to_rgb(image)
     working = ImagePreprocessor.trim_uniform_borders(working)
     crops: list[Image.Image] = [working]
     cap = max(1, int(max_views_cap))
-    if cap >= 2 and min(working.size) >= 200:
+    analysis = analyze_query(working)
+    if cap >= 2 and min(working.size) >= 200 and not is_full_frame_tile(analysis):
         crops.append(_center_crop(working, 0.82))
     logger.info(
-        "Crop-tool query views: n=%d sizes=%s",
+        "Crop-tool query views: n=%d sizes=%s full_frame=%s",
         len(crops),
         [c.size for c in crops],
+        is_full_frame_tile(analysis),
     )
     return crops

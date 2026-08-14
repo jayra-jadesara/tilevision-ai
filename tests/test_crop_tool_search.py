@@ -77,7 +77,8 @@ def test_drop_search_clean_tile_stays_single_view(tmp_path):
     assert len(embeddings) == 1
 
 
-def test_crop_tool_path_uses_complementary_views(tmp_path):
+def test_crop_tool_full_frame_clean_tile_uses_single_view(tmp_path):
+    """already_clean Auto Crop on xx-style close-up — one view, not two."""
     _sheet, crop_path = _make_catalog_sheet(tmp_path)
     crops = tmp_path / "tilevision_crops"
     crops.mkdir()
@@ -85,7 +86,46 @@ def test_crop_tool_path_uses_complementary_views(tmp_path):
     query.write_bytes(crop_path.read_bytes())
     fx = FeatureExtractor(embedder=FakeEmbedder())
     _feat, embeddings = fx.extract_for_search(str(query))
+    assert len(embeddings) == 1
+
+
+def test_crop_tool_room_isolated_crop_uses_two_views(tmp_path):
+    """Room auto-crop output is partial — keep complementary center view."""
+    from src.ai.search_quality.query_views import collect_crop_tool_pils
+
+    path = tmp_path / "room.jpg"
+    _make_room_like_photo(path)
+    _out, result = save_auto_tile_crop(path)
+    assert result.method != "already_clean"
+    pils = collect_crop_tool_pils(result.image, max_views_cap=2)
+    assert len(pils) == 2
+    crops = tmp_path / "tilevision_crops2"
+    crops.mkdir()
+    query = crops / "autocrop_room.jpg_1.jpg"
+    result.image.save(query, quality=95)
+    embedder = FakeEmbedder()
+    fx = FeatureExtractor(embedder=embedder)
+    _feat, embeddings = fx.extract_for_search(str(query))
     assert len(embeddings) == 2
+    assert embedder.calls == 1
+
+
+def test_crop_tool_batched_embed_fuses_all_views(tmp_path, caplog):
+    """Regression: hybrid fuse must use every computed embedding, not only view 0."""
+    import logging
+
+    path = tmp_path / "room.jpg"
+    _make_room_like_photo(path)
+    _out, result = save_auto_tile_crop(path)
+    crops = tmp_path / "tilevision_crops"
+    crops.mkdir()
+    query = crops / "autocrop_room.jpg_1.jpg"
+    result.image.save(query, quality=95)
+    fx = FeatureExtractor(embedder=FakeEmbedder())
+    with caplog.at_level(logging.INFO, logger="tilevision.ai.feature_extractor"):
+        _feat, embeddings = fx.extract_for_search(str(query))
+    assert len(embeddings) == 2
+    assert "input_views=2" in caplog.text
 
 
 def test_crop_tool_hint_works_outside_temp_folder(tmp_path):
@@ -98,7 +138,7 @@ def test_crop_tool_hint_works_outside_temp_folder(tmp_path):
         str(copied), query_origin="crop_tool"
     )
     assert len(plain_emb) == 1
-    assert len(hinted_emb) == 2
+    assert len(hinted_emb) == 1
 
 
 def test_auto_crop_clean_tile_descriptors_match_fresh_drop(tmp_path):

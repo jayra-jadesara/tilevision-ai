@@ -397,6 +397,29 @@ class DINOv2Embedder:
         )
         return final_embedding
 
+    def extract_query_views_batch(
+        self,
+        processed_views: List[PreprocessedImage],
+    ) -> List[np.ndarray]:
+        """
+        Embed multiple letterboxed query views in one batched forward when possible.
+
+        Each ``PreprocessedImage`` is already at TARGET_SIZE (518). Query path
+        uses a single DINO scale per view — batching N views is ~one forward pass
+        instead of N sequential lock acquisitions on CPU.
+        """
+        if not processed_views:
+            return []
+        if len(processed_views) == 1:
+            return [
+                self.extract_from_preprocessed(processed_views[0], for_query=True)
+            ]
+        pils = [view.pil for view in processed_views]
+        batch = self._extract_batch(pils, for_query=True)
+        return [
+            np.asarray(batch[i], dtype=np.float32) for i in range(batch.shape[0])
+        ]
+
     def extract_batch_from_preprocessed(
         self,
         processed_images: List[PreprocessedImage],
