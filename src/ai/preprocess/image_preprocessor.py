@@ -595,7 +595,10 @@ class ImagePreprocessor:
                     image = strip_phone_ui(image)
                 image = cls._isolate_query_tile(image)
 
-        if not is_catalog_sheet:
+        # Crop-tool temp files are already isolated. Perspective warp on a
+        # frontal marble crop invents a quad from vein lines and distorts
+        # the embedding (measured 356×326 → 328×328 on floor_band output).
+        if not is_catalog_sheet and not already_cropped:
             image = cls._maybe_straighten(image)
         image = cls.normalize_lighting(image)
         image = cls.resize_letterbox(image)
@@ -734,8 +737,11 @@ class ImagePreprocessor:
         *,
         original_width: int,
         original_height: int,
+        straighten: bool = True,
     ) -> PreprocessedImage:
-        image = cls._maybe_straighten(image.convert("RGB"))
+        image = image.convert("RGB")
+        if straighten:
+            image = cls._maybe_straighten(image)
         image = cls.normalize_lighting(image)
         image = cls.resize_letterbox(image)
         rgb = cls.to_numpy(image)

@@ -454,15 +454,16 @@ class FeatureExtractor:
         image_path: str,
         *,
         preloaded: Image.Image | None = None,
+        query_origin: str | None = None,
     ) -> tuple[TileFeatures, list[np.ndarray]]:
         """
         Query-only adaptive extract (index unchanged).
 
         Room / phone / partial-crop queries: isolate or complementary
-        multi-crop (Query Analyzer). All other queries: classic
-        ``preprocess_for_query`` single embedding (v1.2.31 path) with the
-        fixed catalogue-sheet gate so room photos are no longer mistaken for
-        marketing sheets.
+        multi-crop (Query Analyzer). Crop-tool outputs (Auto / Precise /
+        Manual) skip re-isolation and perspective straighten — they are
+        already a tile surface. All other queries: classic
+        ``preprocess_for_query`` single embedding (v1.2.31 path).
 
         FAISS merges crops by MAX per tile_id in SearchTilesUseCase.
         """
@@ -474,24 +475,44 @@ class FeatureExtractor:
         )
 
         from src.ai.search_quality.query_analyzer import QueryKind, analyze_query
-        from src.ai.search_quality.query_views import collect_query_crop_pils
+        from src.ai.search_quality.query_origin import QueryOrigin, resolve_query_origin
+        from src.ai.search_quality.query_views import (
+            collect_crop_tool_pils,
+            collect_query_crop_pils,
+        )
 
         analysis = analyze_query(image)
+        origin = resolve_query_origin(path, query_origin)
+        use_crop_tool_views = origin is QueryOrigin.CROP_TOOL
         use_multi = (
-            analysis.kind
+            not use_crop_tool_views
+            and analysis.kind
             in {
                 QueryKind.ROOM_SCENE,
                 QueryKind.PHONE_SCREENSHOT,
                 QueryKind.PARTIAL_CROP,
             }
-        ) and "tilevision_crops" not in path.as_posix().lower()
+            and "tilevision_crops" not in path.as_posix().lower()
+        )
 
-        if use_multi:
+        original_width, original_height = image.size
+        if use_crop_tool_views:
+            max_cap = ImagePreprocessor._capped_query_max_views(2)
+            crop_pils = collect_crop_tool_pils(image, max_views_cap=max_cap)
+            views = [
+                ImagePreprocessor._finalize_query_pil(
+                    crop,
+                    original_width=original_width,
+                    original_height=original_height,
+                    straighten=False,
+                )
+                for crop in crop_pils
+            ]
+        elif use_multi:
             max_cap = ImagePreprocessor._capped_query_max_views(3)
             _, crop_pils = collect_query_crop_pils(
                 image, analysis=analysis, max_views_cap=max_cap
             )
-            original_width, original_height = image.size
             views = [
                 ImagePreprocessor._finalize_query_pil(
                     crop,
@@ -532,9 +553,10 @@ class FeatureExtractor:
             total=time.perf_counter() - total_start,
         )
         logger.info(
-            "Search extract (adaptive query): kind=%s views=%d "
+            "Search extract (adaptive query): kind=%s origin=%s views=%d "
             "preprocess=%.2fs dinov2=%.2fs total=%.2fs",
             analysis.kind.value,
+            origin.value,
             len(embeddings),
             preprocess_elapsed,
             dinov2_elapsed,

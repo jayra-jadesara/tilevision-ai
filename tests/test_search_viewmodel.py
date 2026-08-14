@@ -78,7 +78,7 @@ class FakeSearchUseCase:
         self._delay = delay
         self.calls = []
 
-    def execute(self, query_image_path, top_k=20, filters=None, on_stage=None):
+    def execute(self, query_image_path, top_k=20, filters=None, on_stage=None, query_origin=None):
         self.calls.append((query_image_path, top_k, filters))
         if self._delay:
             time.sleep(self._delay)

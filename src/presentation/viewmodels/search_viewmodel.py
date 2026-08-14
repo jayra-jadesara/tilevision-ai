@@ -156,7 +156,7 @@ class SearchViewModel(QObject):
         return dict(self._active_filters)
 
     @Slot(str)
-    def search_by_image(self, image_path: str) -> None:
+    def search_by_image(self, image_path: str, query_origin: str | None = None) -> None:
         path = Path(image_path)
         if not path.exists() or not path.is_file():
             self._set_state(SearchState.ERROR)
@@ -263,7 +263,13 @@ class SearchViewModel(QObject):
         self.status_message.emit(f"Searching for tiles similar to '{path.name}'...")
         logger.info("[SEARCH] Starting worker for %s (generation=%s)", path.name, generation)
 
-        self._worker = SearchWorker(self._use_case, str(path), self._top_k, self._active_filters)
+        self._worker = SearchWorker(
+            self._use_case,
+            str(path),
+            self._top_k,
+            self._active_filters,
+            query_origin=query_origin,
+        )
         self._worker.search_completed.connect(
             lambda results, gen=generation: self._on_search_completed(results, gen)
         )

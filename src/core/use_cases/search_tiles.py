@@ -226,6 +226,7 @@ class SearchTilesUseCase:
         timer: PipelineTimer | None = None,
         on_stage: Optional[Callable[[str], None]] = None,
         use_memory_cache: bool = True,
+        query_origin: str | None = None,
     ) -> tuple[TileFeatures, list, str, str, str, object | None]:
         """
         Resolve query TileFeatures the same way ``execute`` does.
@@ -323,10 +324,17 @@ class SearchTilesUseCase:
                 self._feature_extractor, "extract_for_search", None
             )
             if extract_for_search is not None:
-                query_features, query_embeddings = extract_for_search(
-                    str(query_path),
-                    preloaded=preloaded_image,
-                )
+                try:
+                    query_features, query_embeddings = extract_for_search(
+                        str(query_path),
+                        preloaded=preloaded_image,
+                        query_origin=query_origin,
+                    )
+                except TypeError:
+                    query_features, query_embeddings = extract_for_search(
+                        str(query_path),
+                        preloaded=preloaded_image,
+                    )
             else:
                 query_features = self._feature_extractor.extract(
                     str(query_path),
@@ -377,6 +385,7 @@ class SearchTilesUseCase:
         top_k: int = 20,
         filters: Optional[Dict[str, str]] = None,
         on_stage: Optional[Callable[[str], None]] = None,
+        query_origin: str | None = None,
     ) -> List[SearchResult]:
         """
         Execute visual similarity search for a query tile image.
@@ -459,6 +468,7 @@ class SearchTilesUseCase:
                 query_path,
                 timer=timer,
                 on_stage=stage,
+                query_origin=query_origin,
             )
 
             # Normalize sanity — FAISS search also L2-normalizes; log explicitly.
@@ -832,10 +842,13 @@ class SearchTilesUseCase:
 
         filename = normalized.rsplit("/", 1)[-1]
         stem = Path(filename).stem
-        if not stem.startswith("crop_"):
+        for prefix in ("crop_", "autocrop_", "precise_"):
+            if stem.startswith(prefix):
+                remainder = stem[len(prefix) :]
+                break
+        else:
             return None
 
-        remainder = stem[5:]
         if "_" in remainder:
             base, suffix = remainder.rsplit("_", 1)
             if suffix.isdigit():

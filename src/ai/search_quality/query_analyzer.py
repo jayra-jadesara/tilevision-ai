@@ -248,3 +248,27 @@ def analyze_query(image: Image.Image) -> QueryAnalysis:
         band_color_delta=float(band_delta),
         confidence=float(confidence),
     )
+
+
+def is_full_frame_tile(analysis: QueryAnalysis) -> bool:
+    """
+    True when the image is already a tile surface, not a room/sheet to isolate.
+
+    Auto/Precise Crop must not run floor_band / SAM2 on these — that path
+    is for furniture/ceiling scenes and over-crops clean close-ups
+    (measured 32% area keep on a 600×600 marble crop).
+    """
+    if analysis.kind == QueryKind.CLEAN_TILE:
+        return True
+    if analysis.kind in {
+        QueryKind.CATALOG_SHEET,
+        QueryKind.ROOM_SCENE,
+        QueryKind.PHONE_SCREENSHOT,
+    }:
+        return False
+    return (
+        analysis.tile_coverage_ratio >= 0.70
+        and analysis.background_ratio < 0.35
+        and analysis.band_color_delta < 30.0
+        and not analysis.has_ui_chrome
+    )

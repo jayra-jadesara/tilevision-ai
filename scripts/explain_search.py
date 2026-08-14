@@ -236,6 +236,7 @@ def explain_search(
     *,
     top_k: int = 10,
     pool_size: int | None = None,
+    query_origin: str | None = None,
 ) -> tuple[
     ExplainReport,
     list[tuple[float, TileImage, bool, float, int | None, Any, float, float]],
@@ -260,6 +261,7 @@ def explain_search(
     ) = use_case.resolve_query_features(
         query_path,
         use_memory_cache=True,
+        query_origin=query_origin,
     )
     if preloaded is None:
         preloaded = ImagePreprocessor.load(query_path)
@@ -650,6 +652,17 @@ def main(argv: list[str] | None = None) -> int:
         help="Report rank/scores for a specific catalog tile (e.g. PGYS2319)",
     )
     parser.add_argument(
+        "--query-origin",
+        type=str,
+        default=None,
+        choices=("auto", "crop_tool"),
+        help=(
+            "Search routing hint. crop_tool = Auto/Precise/Manual crop output "
+            "(skip re-isolation / straighten, use complementary center view). "
+            "Default auto infers from tilevision_crops path."
+        ),
+    )
+    parser.add_argument(
         "--show-index-crop",
         type=str,
         default=None,
@@ -737,6 +750,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.query,
                 top_k=args.top,
                 pool_size=args.pool_size,
+                query_origin=args.query_origin,
             )
             outputs.append(format_report(report))
 

@@ -700,7 +700,9 @@ class SearchView(QWidget):
         dialog = CropDialog(self._current_query_image_path, parent=self, theme=self._theme)
         if dialog.exec() == dialog.DialogCode.Accepted and dialog.cropped_image_path:
             logger.info(f"Searching with cropped region: {dialog.cropped_image_path}")
-            self._viewmodel.search_by_image(dialog.cropped_image_path)
+            self._viewmodel.search_by_image(
+                dialog.cropped_image_path, query_origin="crop_tool"
+            )
 
     def _on_auto_crop_clicked(self) -> None:
         if not self._current_query_image_path:
@@ -760,7 +762,7 @@ class SearchView(QWidget):
             logger.info("Searching with auto-cropped region: %s", crop_path)
 
         self._drop_zone.show_preview(str(crop_path))
-        self._viewmodel.search_by_image(str(crop_path))
+        self._viewmodel.search_by_image(str(crop_path), query_origin="crop_tool")
 
     def _on_background_crop_failed(self, mode: str, message: str) -> None:
         self._crop_busy = False
