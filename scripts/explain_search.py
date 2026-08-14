@@ -346,8 +346,6 @@ def explain_search(
                 if exact or (top_score - score) > ORB_VERIFICATION_BAND:
                     continue
                 try:
-                    from src.ai.preprocess.image_preprocessor import ImagePreprocessor
-
                     cand_gray = ImagePreprocessor.load(Path(tile.file_path)).convert("L")
                     cand_gray = np.asarray(cand_gray)
                     orb_score = float(
