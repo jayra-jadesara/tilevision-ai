@@ -102,7 +102,7 @@ def test_explain_search_reports_component_scores(tmp_path: Path):
         )
     )
 
-    report = explain_search(use_case, query, top_k=2)
+    report, _reranked, _search_context = explain_search(use_case, query, top_k=2)
 
     assert report.query_kind
     assert report.query_view_count == 2
