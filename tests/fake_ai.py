@@ -22,8 +22,9 @@ class FakeEmbedder:
     def load_model(self) -> None:
         pass
 
-    def _rgb_embedding(self, img: Image.Image) -> np.ndarray:
-        self.calls += 1
+    def _rgb_embedding(self, img: Image.Image, *, count_call: bool = True) -> np.ndarray:
+        if count_call:
+            self.calls += 1
         img = img.convert("RGB").resize((8, 8))
         pixels = list(img.getdata())
         r = sum(p[0] for p in pixels) / (len(pixels) * 255.0)
@@ -38,6 +39,14 @@ class FakeEmbedder:
 
     def extract_from_preprocessed(self, processed, *, for_query: bool = False) -> np.ndarray:
         return self._rgb_embedding(processed.pil)
+
+    def extract_query_views_batch(self, processed_views) -> list:
+        if not processed_views:
+            return []
+        self.calls += 1
+        return [
+            self._rgb_embedding(p.pil, count_call=False) for p in processed_views
+        ]
 
     def extract_batch_from_preprocessed(self, processed_images) -> list:
         return [self.extract_from_preprocessed(p) for p in processed_images]

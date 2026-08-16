@@ -532,19 +532,25 @@ class FeatureExtractor:
 
         preprocess_elapsed = time.perf_counter() - t0
 
-        embeddings: list[np.ndarray] = []
-        dinov2_elapsed = 0.0
-        for view in views:
-            t1 = time.perf_counter()
-            emb = np.asarray(
-                self._embedder.extract_from_preprocessed(view, for_query=True),
-                dtype=np.float32,
-            )
-            dinov2_elapsed += time.perf_counter() - t1
-            embeddings.append(emb)
+        t1 = time.perf_counter()
+        batch_fn = getattr(self._embedder, "extract_query_views_batch", None)
+        if batch_fn is not None and len(views) > 1:
+            embeddings = batch_fn(views)
+        else:
+            embeddings = []
+            for view in views:
+                embeddings.append(
+                    np.asarray(
+                        self._embedder.extract_from_preprocessed(
+                            view, for_query=True
+                        ),
+                        dtype=np.float32,
+                    )
+                )
+        dinov2_elapsed = time.perf_counter() - t1
 
         features = self._fuse_query_embeddings(
-            views[0], [embeddings[0]], dinov2_elapsed
+            views[0], embeddings, dinov2_elapsed
         )
         self._last_timings = ExtractTimings(
             preprocessing=preprocess_elapsed,
@@ -553,11 +559,12 @@ class FeatureExtractor:
             total=time.perf_counter() - total_start,
         )
         logger.info(
-            "Search extract (adaptive query): kind=%s origin=%s views=%d "
-            "preprocess=%.2fs dinov2=%.2fs total=%.2fs",
+            "Search extract (adaptive query): kind=%s origin=%s "
+            "embed_views=%d letterbox=%s preprocess=%.2fs dinov2=%.2fs total=%.2fs",
             analysis.kind.value,
             origin.value,
             len(embeddings),
+            [v.pil.size for v in views],
             preprocess_elapsed,
             dinov2_elapsed,
             self._last_timings.total,
@@ -618,7 +625,7 @@ class FeatureExtractor:
         )
 
         logger.info(
-            "Query multi-crop DINOv2 fuse: views=%d dim=%d",
+            "Query multi-crop DINOv2 fuse: input_views=%d dim=%d",
             len(embeddings),
             fused.shape[0],
         )
