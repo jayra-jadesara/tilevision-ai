@@ -177,31 +177,56 @@ class DINOv2Embedder:
             height=edge,
         )
 
-    def warmup_query_inference(self) -> None:
+    def warmup_query_inference(
+        self,
+        *,
+        shapes: tuple[int, ...] = (1,),
+    ) -> dict[str, float]:
         """
-        Prime the crop-tool query embed path so the first real search is fast.
+        Prime crop-tool query embed shapes. Logs n=1 and n=2 separately.
 
-        ``load_model()`` only loads weights. Crop-tool queries then hit
-        ``extract_query_views_batch`` / ``_extract_batch(..., for_query=True)``
-        for the first time — paying PyTorch kernel compilation, activation
-        allocation, and (on Apple Silicon) the query-path MPS→CPU fallback.
-        Catalog drag-and-drop never exercises this because it reuses stored
-        embeddings.
+        Windows oneDNN compiles each batch shape independently — n=1 then
+        n=2 at startup was ~2× the original 44s first-click cost. Default
+        is n=1 only (Auto / Precise Crop). n=2 is opt-in via ``shapes``.
+
+        Aborts remaining shapes if a user search has claimed priority.
         """
-        if self._query_path_warmed:
-            return
+        import time as _time
+
+        from src.ai.inference_guard import search_priority_active
+
+        timings: dict[str, float] = {}
+        if self._query_path_warmed and 1 in shapes and 2 not in shapes:
+            return timings
+        if search_priority_active():
+            logger.info("Query-path warm-up skipped — search already running")
+            return timings
 
         self.load_model()
         dummy = self.dummy_query_view()
-        # n=1: Auto / Precise Crop full-frame path (extract_query_views_batch
-        # delegates to extract_from_preprocessed → _extract_batch).
-        self.extract_query_views_batch([dummy])
-        # n=2: batched _extract_batch shape used by partial crop-tool queries.
-        self.extract_query_views_batch([dummy, dummy])
+
+        if 1 in shapes:
+            t0 = _time.perf_counter()
+            self.extract_query_views_batch([dummy])
+            timings["n1_ms"] = (_time.perf_counter() - t0) * 1000.0
+            logger.info("Query-path warm-up n=1: %.0f ms", timings["n1_ms"])
+
+        if 2 in shapes:
+            if search_priority_active():
+                logger.info("Query-path warm-up n=2: skipped — search requested")
+            else:
+                t0 = _time.perf_counter()
+                self.extract_query_views_batch([dummy, dummy])
+                timings["n2_ms"] = (_time.perf_counter() - t0) * 1000.0
+                logger.info("Query-path warm-up n=2: %.0f ms", timings["n2_ms"])
+        else:
+            logger.info(
+                "Query-path warm-up n=2: skipped "
+                "(first 2-view Manual Crop may pay a one-time cost)"
+            )
+
         self._query_path_warmed = True
-        logger.info(
-            "Query-path inference warm-up complete (n=1 and n=2 crop-tool shapes)."
-        )
+        return timings
 
     def _fallback_mps_to_cpu(self, reason: str) -> None:
         """Move the model to CPU after an unimplemented MPS operator."""

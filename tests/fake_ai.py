@@ -22,8 +22,8 @@ class FakeEmbedder:
     def load_model(self) -> None:
         pass
 
-    def warmup_query_inference(self) -> None:
-        pass
+    def warmup_query_inference(self, *, shapes: tuple[int, ...] = (1,)) -> dict:
+        return {}
 
     def _rgb_embedding(self, img: Image.Image, *, count_call: bool = True) -> np.ndarray:
         if count_call:
@@ -104,10 +104,13 @@ class FakeFeatureExtractor:
     def load_model(self) -> None:
         self._embedder.load_model()
 
-    def warmup_query_inference(self) -> None:
+    def warmup_query_inference(self, *, shapes: tuple[int, ...] = (1,)) -> dict:
         warmup = getattr(self._embedder, "warmup_query_inference", None)
         if callable(warmup):
-            warmup()
+            result = warmup(shapes=shapes)
+            if isinstance(result, dict):
+                return result
+        return {}
 
     def extract(self, image_path: str, *, for_query: bool = False) -> TileFeatures:
         embedding = self._embedder.extract(image_path)
