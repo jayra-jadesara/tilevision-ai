@@ -43,7 +43,7 @@ from src.ai.gpu_info import (
     is_mps_unsupported_op_error,
     mps_autocast_supported,
 )
-from src.ai.preprocess.image_preprocessor import ImagePreprocessor
+from src.ai.preprocess.image_preprocessor import ImagePreprocessor, TARGET_SIZE
 
 logger = logging.getLogger("tilevision.ai.embedder")
 
@@ -91,6 +91,7 @@ class DINOv2Embedder:
         self._processor = None
         self._model = None
         self._mps_cpu_fallback_done = False
+        self._query_path_warmed = False
 
         logger.info(self._runtime.summary_for_log())
         logger.info(
@@ -159,6 +160,48 @@ class DINOv2Embedder:
             logger.info("CPU inference threads: %d", thread_count)
 
         logger.info("DINOv2 model loaded successfully.")
+
+    @staticmethod
+    def dummy_query_view(size: int | None = None) -> PreprocessedImage:
+        """Letterboxed dummy view matching crop-tool query input shape (518²)."""
+        edge = int(size or TARGET_SIZE)
+        image = Image.new("RGB", (edge, edge), color=(128, 132, 140))
+        arr = np.asarray(image, dtype=np.uint8)
+        gray = np.mean(arr, axis=2).astype(np.uint8)
+        return PreprocessedImage(
+            pil=image,
+            rgb=arr,
+            bgr=arr[:, :, ::-1].copy(),
+            gray=gray,
+            width=edge,
+            height=edge,
+        )
+
+    def warmup_query_inference(self) -> None:
+        """
+        Prime the crop-tool query embed path so the first real search is fast.
+
+        ``load_model()`` only loads weights. Crop-tool queries then hit
+        ``extract_query_views_batch`` / ``_extract_batch(..., for_query=True)``
+        for the first time — paying PyTorch kernel compilation, activation
+        allocation, and (on Apple Silicon) the query-path MPS→CPU fallback.
+        Catalog drag-and-drop never exercises this because it reuses stored
+        embeddings.
+        """
+        if self._query_path_warmed:
+            return
+
+        self.load_model()
+        dummy = self.dummy_query_view()
+        # n=1: Auto / Precise Crop full-frame path (extract_query_views_batch
+        # delegates to extract_from_preprocessed → _extract_batch).
+        self.extract_query_views_batch([dummy])
+        # n=2: batched _extract_batch shape used by partial crop-tool queries.
+        self.extract_query_views_batch([dummy, dummy])
+        self._query_path_warmed = True
+        logger.info(
+            "Query-path inference warm-up complete (n=1 and n=2 crop-tool shapes)."
+        )
 
     def _fallback_mps_to_cpu(self, reason: str) -> None:
         """Move the model to CPU after an unimplemented MPS operator."""

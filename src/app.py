@@ -285,11 +285,12 @@ def build_application() -> int:
     )
     find_duplicates_use_case = FindDuplicatesUseCase(image_repository=image_repository, vector_index=vector_index)
 
-    # ── 8b. Warm up the CLIP model and FAISS index now, synchronously, so the
-    #        *first* search a user runs is fast rather than paying model-load
-    #        cost on that click. Loading is a one-time, ~1-3s startup cost;
-    #        after this, both index_images and search_tiles reuse the same
-    #        in-memory model/index instances for the lifetime of the process.
+    # ── 8b. Warm up DINOv2 + FAISS now, synchronously, so the *first* search
+    #        a user runs is fast. load_model() only loads weights — crop-tool
+    #        queries then pay a one-time PyTorch kernel / device-fallback cost
+    #        on their first _extract_batch(for_query=True) forward. Prime that
+    #        exact path here (startup) instead of on the first Auto Crop click.
+    #        Catalog drag-and-drop never hits this; it reuses stored embeddings.
     import time as _time
 
     from src.ai.feature_versions import CURRENT_EMBEDDING_DIMENSION, CURRENT_EMBEDDING_MODEL
@@ -303,6 +304,16 @@ def build_application() -> int:
         t0 = _time.perf_counter()
         feature_extractor.load_model()
         model_ms = (_time.perf_counter() - t0) * 1000.0
+        query_ms = 0.0
+        try:
+            t_query = _time.perf_counter()
+            feature_extractor.warmup_query_inference()
+            query_ms = (_time.perf_counter() - t_query) * 1000.0
+        except Exception as query_exc:
+            logger.warning(
+                "Query-path warm-up failed (first search will pay cold start): %s",
+                query_exc,
+            )
         t1 = _time.perf_counter()
         vector_index.load_index()
         faiss_ms = (_time.perf_counter() - t1) * 1000.0
@@ -321,9 +332,10 @@ def build_application() -> int:
             catalog_size=vector_index.get_total_count(),
         )
         logger.info(
-            "AI engine warm-up complete (model=%.0f ms, faiss=%.0f ms).",
+            "AI engine warm-up complete (model=%.0f ms, faiss=%.0f ms, query=%.0f ms).",
             model_ms,
             faiss_ms,
+            query_ms,
         )
         try:
             import torch as _torch
@@ -357,6 +369,7 @@ def build_application() -> int:
                 "profile_enabled": profiling_enabled(),
                 "log_level": logging.getLevelName(root_logger.level),
                 "model_warmup_ms": round(model_ms, 1),
+                "query_warmup_ms": round(query_ms, 1),
                 "faiss_warmup_ms": round(faiss_ms, 1),
                 "compatibility": compatibility_report.to_dict(),
                 "gpu": embedder.runtime_info.device_name or embedder.runtime_info.active_device,

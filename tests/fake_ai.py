@@ -22,6 +22,9 @@ class FakeEmbedder:
     def load_model(self) -> None:
         pass
 
+    def warmup_query_inference(self) -> None:
+        pass
+
     def _rgb_embedding(self, img: Image.Image, *, count_call: bool = True) -> np.ndarray:
         if count_call:
             self.calls += 1
@@ -100,6 +103,11 @@ class FakeFeatureExtractor:
 
     def load_model(self) -> None:
         self._embedder.load_model()
+
+    def warmup_query_inference(self) -> None:
+        warmup = getattr(self._embedder, "warmup_query_inference", None)
+        if callable(warmup):
+            warmup()
 
     def extract(self, image_path: str, *, for_query: bool = False) -> TileFeatures:
         embedding = self._embedder.extract(image_path)
