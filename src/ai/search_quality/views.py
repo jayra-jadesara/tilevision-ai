@@ -43,7 +43,9 @@ class IndexStrategy(str, Enum):
     C_FULL_ADAPTIVE = "C_full_adaptive"
     D_FULL_TEXTURE = "D_full_texture"
     E_HEURISTIC_MULTIVIEW = "E_heuristic_multiview"
-    # Current shipped production path (v1.2.29) for regression comparison.
+    # Faithful mirror of current production indexing view selection
+    # (``prepare_index_primary`` / ``extract_index_vectors``). Historically
+    # labeled "v1.2.29"; must not drift into a parallel fork again.
     PRODUCTION_V8 = "production_v8"
 
 
@@ -244,29 +246,15 @@ def build_index_views(
         return views
 
     if strategy == IndexStrategy.PRODUCTION_V8:
-        # Mirror feature_extractor.extract_index_vectors view selection.
-        panel = ImagePreprocessor.primary_texture_panel(image)
-        if panel is not None:
-            split = max(1, int(image.size[0] * 0.45))
-            box = (0, 0, split, image.size[1])
-            add(IndexViewType.PANEL, panel, box, 0.95)
-            if min(panel.size) >= 200:
-                pbox = _center_box(panel, 0.72)
-                src_box = (
-                    box[0] + pbox[0],
-                    box[1] + pbox[1],
-                    box[0] + pbox[2],
-                    box[1] + pbox[3],
-                )
-                add(IndexViewType.PANEL_CENTER, panel.crop(pbox), src_box, 0.90)
-        elif min(image.size) >= 400:
-            for ratio in (0.50, 0.40):
-                box = _center_box(image, ratio)
-                before = len(views)
-                add(IndexViewType.CENTER, image.crop(box), box, 0.85)
-                if len(views) > before:
-                    break
-        return views
+        # Share the real production view plan (Strategy E). The old inline
+        # fork skipped ``left_panel_beneficial``, omitted force-adaptive
+        # (feature_v10), and used ungated center fallbacks — confirmed
+        # divergence vs ``prepare_index_primary`` on catalog sheets.
+        return build_index_views(
+            image,
+            IndexStrategy.E_HEURISTIC_MULTIVIEW,
+            analysis=analysis,
+        )
 
     raise ValueError(f"Unknown strategy: {strategy}")
 
