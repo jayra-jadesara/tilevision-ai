@@ -65,8 +65,8 @@ forbidden.
 | B | Full + center 50% |
 | C | Full + adaptive content crop |
 | D | Full + texture-rich window |
-| E | Heuristic multi-view (panel / panel-center / center) |
-| production_v8 | Shipped v1.2.29 path (panel + center) |
+| E | Heuristic multi-view (panel / panel-center / center / adaptive) |
+| production_v8 | **Current production mirror** — same view plan as Strategy E via `prepare_index_primary` / `extract_index_vectors` (panel gated on `left_panel_beneficial`, force-adaptive). Bakeoff indexing for this strategy also uses panel-as-primary routing. Older “v1.2.29 panel+center” fork was removed after it silently drifted. |
 
 Each aux vector shares `tile_id` with the primary. Near-duplicates
 (cos ≥ 0.985 vs primary) are dropped.

@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.ai.embedder import DINOv2Embedder
 from src.ai.feature_extractor import FeatureExtractor
 from src.ai.preprocess.image_preprocessor import ImagePreprocessor, PreprocessedImage
+from src.ai.preprocess.index_primary import prepare_index_primary
 from src.ai.search_quality.fusion import FusionMethod, ScoredHit, fuse_hits, tune_weighted_max
 from src.ai.search_quality.image_analysis import analyze_image
 from src.ai.search_quality.views import IndexStrategy, IndexViewType, build_index_views
@@ -121,6 +122,78 @@ class BakeoffEngine:
             dtype=np.float32,
         )
 
+    def embed_preprocessed(self, pre: PreprocessedImage) -> np.ndarray:
+        """Embed an already-finalized index crop (content-matched pad, etc.)."""
+        return np.asarray(
+            self._embedder.extract_from_preprocessed(pre, for_query=False),
+            dtype=np.float32,
+        )
+
+    def _index_item_vectors(
+        self,
+        item: CatalogItem,
+        strategy: IndexStrategy,
+    ) -> tuple[list[int], list[np.ndarray]]:
+        """
+        Build FAISS id/vector lists for one catalog item.
+
+        ``PRODUCTION_V8`` shares ``prepare_index_primary`` with real indexing
+        (panel-as-primary + aux routing) but only runs the light DINOv2 embed
+        path — not full ``extract_index_vectors`` handcrafted descriptors.
+        """
+        ids: list[int] = []
+        vecs: list[np.ndarray] = []
+
+        if strategy == IndexStrategy.PRODUCTION_V8:
+            prep = prepare_index_primary(item.path)
+            if prep.primary_source == "panel":
+                primary = self.embed_preprocessed(prep.primary)
+            else:
+                primary = self.embed_pil_index(prep.raw)
+            ids.append(item.tile_id)
+            vecs.append(primary)
+
+            for view in prep.views:
+                if view.view_type == IndexViewType.PRIMARY:
+                    if prep.panel is not None:
+                        emb = self.embed_pil_index(view.image)
+                        if _cos(primary, emb) >= 0.985:
+                            continue
+                        if any(_cos(emb, v) >= 0.99 for v in vecs[1:]):
+                            continue
+                        ids.append(item.tile_id)
+                        vecs.append(emb)
+                    continue
+                if view.view_type == IndexViewType.PANEL and prep.panel is not None:
+                    continue
+                emb = self.embed_pil_index(view.image)
+                if _cos(primary, emb) >= 0.985:
+                    continue
+                if any(_cos(emb, v) >= 0.99 for v in vecs[1:]):
+                    continue
+                ids.append(item.tile_id)
+                vecs.append(emb)
+            return ids, vecs
+
+        raw = ImagePreprocessor.to_rgb(ImagePreprocessor.load(item.path))
+        views = build_index_views(raw, strategy)
+        primary = None
+        for view in views:
+            emb = self.embed_pil_index(view.image)
+            if view.view_type == IndexViewType.PRIMARY:
+                primary = emb
+                ids.append(item.tile_id)
+                vecs.append(emb)
+                continue
+            assert primary is not None
+            if _cos(primary, emb) >= 0.985:
+                continue
+            if any(_cos(emb, v) >= 0.99 for v in vecs[1:]):
+                continue
+            ids.append(item.tile_id)
+            vecs.append(emb)
+        return ids, vecs
+
     def embed_query(self, path: Path) -> tuple[list[np.ndarray], float]:
         t0 = time.perf_counter()
         _feats, embs = self.fx.extract_for_search(str(path))
@@ -143,29 +216,8 @@ class BakeoffEngine:
         # Deduplicate by cosine near-dup against primary like production.
         t0 = time.perf_counter()
         for item in items:
-            raw = ImagePreprocessor.to_rgb(ImagePreprocessor.load(item.path))
-            views = build_index_views(raw, strategy)
-            ids: list[int] = []
-            vecs: list[np.ndarray] = []
-            primary = None
-            kept = 0
-            for view in views:
-                emb = self.embed_pil_index(view.image)
-                if view.view_type == IndexViewType.PRIMARY:
-                    primary = emb
-                    ids.append(item.tile_id)
-                    vecs.append(emb)
-                    kept += 1
-                    continue
-                assert primary is not None
-                if _cos(primary, emb) >= 0.985:
-                    continue
-                if any(_cos(emb, v) >= 0.99 for v in vecs[1:]):
-                    continue
-                ids.append(item.tile_id)
-                vecs.append(emb)
-                kept += 1
-            view_counts.append(kept)
+            ids, vecs = self._index_item_vectors(item, strategy)
+            view_counts.append(len(vecs))
             mgr.update_vectors(ids, vecs, persist=False)
         meta.vectors = mgr.get_total_count()
         meta.mean_views = float(np.mean(view_counts)) if view_counts else 0.0

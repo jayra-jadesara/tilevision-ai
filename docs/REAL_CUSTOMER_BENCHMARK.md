@@ -108,6 +108,15 @@ category with or without ORB.
 - `catalogue_page` n=2 is too small to read anything into the flat 0.5.
 - Full JSON reports: `bakeoff_report.json` under the `--out` paths used for
   this run (ORB on / off), not committed to the repo.
+- **`production_v8` fidelity (post-audit):** before the production_v8↔indexing
+  parity fix, the bakeoff's `production_v8` strategy was a parallel fork that
+  omitted Strategy E's force-adaptive view and did not share
+  `prepare_index_primary`. That run's **winning** strategy was `B_full_center`,
+  not `production_v8`, so the headline R@1/R@5 numbers above are not invalidated
+  by that drift — but any historical bakeoff table that treated `production_v8`
+  as "what ships today" needs a mental asterisk until re-run. Query-side
+  PARTIAL_CROP / `already_clean` (PR #46/#47) were never in scope for
+  `production_v8` (index-only).
   
 ## Measured — production path (release gate, n=70)
 

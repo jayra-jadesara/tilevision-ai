@@ -88,10 +88,12 @@ def prepare_index_primary(image_path: str | Path) -> IndexPrimaryPreparation:
     raw = ImagePreprocessor.load(source)
     raw = ImagePreprocessor.to_rgb(raw)
     analysis = analyze_image(raw)
+    # PRODUCTION_V8 delegates to Strategy E — one shared view builder for
+    # real indexing and the bakeoff's production mirror (no parallel fork).
     views = tuple(
         build_index_views(
             raw,
-            IndexStrategy.E_HEURISTIC_MULTIVIEW,
+            IndexStrategy.PRODUCTION_V8,
             analysis=analysis,
         )
     )
