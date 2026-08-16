@@ -251,6 +251,16 @@ def launch_customer_app(
     t0 = _time.perf_counter()
     feature_extractor.load_model()
     model_ms = (_time.perf_counter() - t0) * 1000.0
+    query_ms = 0.0
+    try:
+        t_query = _time.perf_counter()
+        feature_extractor.warmup_query_inference()
+        query_ms = (_time.perf_counter() - t_query) * 1000.0
+    except Exception as query_exc:
+        logger.warning(
+            "Query-path warm-up failed (first search will pay cold start): %s",
+            query_exc,
+        )
     t1 = _time.perf_counter()
     vector_index.load_index()
     faiss_ms = (_time.perf_counter() - t1) * 1000.0
@@ -295,6 +305,7 @@ def launch_customer_app(
             "profile_enabled": profiling_enabled(),
             "log_level": logging.getLevelName(root_logger.level),
             "model_warmup_ms": round(model_ms, 1),
+            "query_warmup_ms": round(query_ms, 1),
             "faiss_warmup_ms": round(faiss_ms, 1),
             "compatibility": compatibility_report.to_dict(),
             "gpu": embedder.runtime_info.device_name or embedder.runtime_info.active_device,
@@ -373,6 +384,7 @@ def launch_customer_app(
 
     artifacts = ArtifactCollector(artifact_dir)
     artifacts.note(f"model_warmup_ms={model_ms:.1f}")
+    artifacts.note(f"query_warmup_ms={query_ms:.1f}")
     artifacts.note(f"faiss_warmup_ms={faiss_ms:.1f}")
     artifacts.note(f"home={home}")
     artifacts.note(f"catalog={catalog_root / 'catalog'}")

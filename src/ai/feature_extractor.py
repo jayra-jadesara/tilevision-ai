@@ -92,6 +92,30 @@ class FeatureExtractor:
     def load_model(self) -> None:
         self._embedder.load_model()
 
+    def warmup_query_inference(self) -> None:
+        """
+        Prime the crop-tool query embed path during app startup.
+
+        ``load_model()`` only loads weights. The first real crop-tool search
+        otherwise pays a one-time ``_extract_batch(for_query=True)`` cold
+        start (PyTorch kernels / MPS→CPU fallback). Catalog queries skip
+        this path entirely because they reuse stored embeddings.
+        """
+        warmup = getattr(self._embedder, "warmup_query_inference", None)
+        if callable(warmup):
+            warmup()
+            return
+
+        dummy = DINOv2Embedder.dummy_query_view()
+        batch_fn = getattr(self._embedder, "extract_query_views_batch", None)
+        if callable(batch_fn):
+            batch_fn([dummy])
+            batch_fn([dummy, dummy])
+            return
+        extract = getattr(self._embedder, "extract_from_preprocessed", None)
+        if callable(extract):
+            extract(dummy, for_query=True)
+
     @staticmethod
     def dominant_color(image_bgr):
         return ColorDescriptor.dominant_color_rgb(image_bgr)

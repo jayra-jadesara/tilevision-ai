@@ -118,6 +118,7 @@ def collect_diagnostics_report(info: dict[str, Any] | None = None) -> dict[str, 
         "profile_enabled": info.get("profile_enabled"),
         "log_level": info.get("log_level"),
         "model_warmup_ms": info.get("model_warmup_ms"),
+        "query_warmup_ms": info.get("query_warmup_ms"),
         "faiss_warmup_ms": info.get("faiss_warmup_ms"),
         "compatibility": info.get("compatibility"),
     }
@@ -152,6 +153,9 @@ def log_startup_diagnostics(info: dict[str, Any]) -> None:
         f"Index Path........... {report.get('index_path', '?')}",
         f"Profile Enabled...... {report.get('profile_enabled', '?')}",
         f"Log Level............ {report.get('log_level', '?')}",
+        f"Model Warmup......... {report.get('model_warmup_ms', '?')} ms",
+        f"Query Warmup......... {report.get('query_warmup_ms', '?')} ms",
+        f"FAISS Warmup......... {report.get('faiss_warmup_ms', '?')} ms",
     ]
     block = "\n".join(lines)
     logger.info("\n%s", block)

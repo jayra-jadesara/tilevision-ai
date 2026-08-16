@@ -51,6 +51,66 @@ def test_query_extract_uses_one_forward(monkeypatch):
     assert calls["batches"] == [(1, True)]
 
 
+def test_dummy_query_view_matches_letterbox_target():
+    from src.ai.preprocess.image_preprocessor import TARGET_SIZE
+
+    view = DINOv2Embedder.dummy_query_view()
+    assert view.pil.size == (TARGET_SIZE, TARGET_SIZE)
+    assert view.rgb.shape == (TARGET_SIZE, TARGET_SIZE, 3)
+
+
+def test_warmup_query_inference_hits_crop_tool_batch_shapes(monkeypatch):
+    """Startup must exercise n=1 and n=2 query _extract_batch(for_query=True)."""
+    embedder = DINOv2Embedder(device_preference="cpu")
+    embedder._model = object()
+    calls = {"batches": []}
+
+    def fake_batch(images, *, for_query=False):
+        calls["batches"].append((len(images), for_query))
+        return np.ones((len(images), 1024), dtype=np.float32)
+
+    monkeypatch.setattr(embedder, "_extract_batch", fake_batch)
+    monkeypatch.setattr(embedder, "load_model", lambda: None)
+
+    embedder.warmup_query_inference()
+    assert calls["batches"] == [(1, True), (2, True)]
+    assert embedder._query_path_warmed is True
+
+    embedder.warmup_query_inference()
+    assert calls["batches"] == [(1, True), (2, True)]
+
+
+def test_feature_extractor_warmup_falls_back_to_batch_fn(monkeypatch):
+    from src.ai.feature_extractor import FeatureExtractor
+
+    class StubEmbedder:
+        def __init__(self):
+            self.calls = []
+
+        def extract_query_views_batch(self, views):
+            self.calls.append(len(views))
+            return [np.ones(1024, dtype=np.float32) for _ in views]
+
+    stub = StubEmbedder()
+    FeatureExtractor(embedder=stub).warmup_query_inference()
+    assert stub.calls == [1, 2]
+
+
+def test_feature_extractor_warmup_delegates_to_embedder(monkeypatch):
+    from src.ai.feature_extractor import FeatureExtractor
+
+    embedder = DINOv2Embedder(device_preference="cpu")
+    embedder._model = object()
+    called = {"n": 0}
+
+    def fake_warmup():
+        called["n"] += 1
+
+    monkeypatch.setattr(embedder, "warmup_query_inference", fake_warmup)
+    FeatureExtractor(embedder=embedder).warmup_query_inference()
+    assert called["n"] == 1
+
+
 def test_index_extract_yields_between_views(monkeypatch):
     embedder = DINOv2Embedder(device_preference="cpu")
     embedder._model = object()

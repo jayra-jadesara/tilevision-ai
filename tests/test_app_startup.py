@@ -46,3 +46,15 @@ def test_app_module_imports_build_application():
     from src.app import build_application
 
     assert callable(build_application)
+
+
+def test_app_py_warms_crop_tool_query_inference_path():
+    """Startup must prime extract_query_views_batch / _extract_batch, not only load_model."""
+    source = Path("src/app.py").read_text(encoding="utf-8")
+    assert "warmup_query_inference" in source
+    load_pos = source.find("feature_extractor.load_model()")
+    warmup_pos = source.find("feature_extractor.warmup_query_inference()")
+    assert load_pos != -1
+    assert warmup_pos != -1
+    assert load_pos < warmup_pos
+    assert "query=%.0f ms" in source
