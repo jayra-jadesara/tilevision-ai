@@ -42,21 +42,48 @@ def _make_marble(h: int, w: int, seed: int = 42) -> Image.Image:
 
 
 def _load_fonts():
-    try:
-        return (
-            ImageFont.truetype(
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 52
-            ),
-            ImageFont.truetype(
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16
-            ),
-            ImageFont.truetype(
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 13
-            ),
+    candidates = [
+        # Linux (GitHub Actions ubuntu-latest)
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        # macOS
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/Library/Fonts/Arial Bold.ttf",
+        "/Library/Fonts/Arial.ttf",
+        # Windows (GitHub Actions windows-latest)
+        "C:\\Windows\\Fonts\\arialbd.ttf",
+        "C:\\Windows\\Fonts\\arial.ttf",
+    ]
+
+    def _first_working(paths, size):
+        for path in paths:
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:
+                continue
+        return None
+
+    bold_candidates = [p for p in candidates if "Bold" in p or "bd" in p]
+    regular_candidates = [p for p in candidates if p not in bold_candidates]
+
+    font_logo = _first_working(bold_candidates, 52) or _first_working(regular_candidates, 52)
+    font_md = _first_working(regular_candidates, 16)
+    font_sm = _first_working(regular_candidates, 13)
+
+    if font_logo is None or font_md is None or font_sm is None:
+        raise RuntimeError(
+            "No TrueType font found on this platform for "
+            "test_crop_search_consistency fixtures — this test's synthetic "
+            "sheets rely on a real scalable font (PIL's ImageFont.load_default() "
+            "renders a tiny fixed-size bitmap font that changes the fixture's "
+            "logo/text proportions enough to flip panel-isolation gate "
+            "decisions; a previous version of this helper silently fell back "
+            "to it and produced platform-specific test failures on Windows "
+            "and macOS CI). Add the correct font path for this platform above "
+            "instead of letting this fall back silently."
         )
-    except Exception:
-        default = ImageFont.load_default()
-        return default, default, default
+    return font_logo, font_md, font_sm
 
 
 def _make_catalog_sheet(tmp_path: Path) -> tuple[Path, Path]:
