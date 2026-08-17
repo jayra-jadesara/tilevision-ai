@@ -48,13 +48,15 @@ def test_app_module_imports_build_application():
     assert callable(build_application)
 
 
-def test_app_py_warms_crop_tool_query_inference_path():
-    """Startup must prime extract_query_views_batch / _extract_batch, not only load_model."""
+def test_app_py_does_not_block_launch_on_query_warmup():
+    """Query-path warmup must start after MainWindow.show(), not on the UI thread."""
     source = Path("src/app.py").read_text(encoding="utf-8")
-    assert "warmup_query_inference" in source
-    load_pos = source.find("feature_extractor.load_model()")
-    warmup_pos = source.find("feature_extractor.warmup_query_inference()")
-    assert load_pos != -1
+    assert "start_background_query_warmup" in source
+    show_pos = source.find("main_window.show()")
+    warmup_pos = source.find("start_background_query_warmup")
+    sync_warmup = source.find("feature_extractor.warmup_query_inference()")
+    assert show_pos != -1
     assert warmup_pos != -1
-    assert load_pos < warmup_pos
-    assert "query=%.0f ms" in source
+    assert show_pos < warmup_pos
+    assert sync_warmup == -1
+    assert "query=background" in source

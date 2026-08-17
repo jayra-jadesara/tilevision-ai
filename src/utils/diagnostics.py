@@ -154,7 +154,12 @@ def log_startup_diagnostics(info: dict[str, Any]) -> None:
         f"Profile Enabled...... {report.get('profile_enabled', '?')}",
         f"Log Level............ {report.get('log_level', '?')}",
         f"Model Warmup......... {report.get('model_warmup_ms', '?')} ms",
-        f"Query Warmup......... {report.get('query_warmup_ms', '?')} ms",
+        f"Query Warmup......... {report.get('query_warmup_ms', '?')}"
+        + (
+            " ms"
+            if isinstance(report.get("query_warmup_ms"), (int, float))
+            else ""
+        ),
         f"FAISS Warmup......... {report.get('faiss_warmup_ms', '?')} ms",
     ]
     block = "\n".join(lines)

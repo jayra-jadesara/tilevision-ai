@@ -82,6 +82,7 @@ class FeatureExtractor:
         self._embedder = embedder or DINOv2Embedder()
         self._preprocess_workers = max(1, int(preprocess_workers))
         self._last_timings = ExtractTimings()
+        self._last_query_features = None
 
     @property
     def last_timings(self) -> ExtractTimings:
@@ -92,29 +93,92 @@ class FeatureExtractor:
     def load_model(self) -> None:
         self._embedder.load_model()
 
-    def warmup_query_inference(self) -> None:
+    def warmup_query_inference(
+        self,
+        *,
+        shapes: tuple[int, ...] = (1,),
+    ) -> dict[str, float]:
         """
-        Prime the crop-tool query embed path during app startup.
+        Prime the real Auto Crop query path (analyzer + letterbox + DINOv2 +
+        descriptors). Logs n=1 / n=2 timings separately.
 
-        ``load_model()`` only loads weights. The first real crop-tool search
-        otherwise pays a one-time ``_extract_batch(for_query=True)`` cold
-        start (PyTorch kernels / MPS→CPU fallback). Catalog queries skip
-        this path entirely because they reuse stored embeddings.
+        Default ``shapes=(1,)`` — n=2 is a distinct Windows cold compile and
+        must not run on the UI thread at launch.
         """
-        warmup = getattr(self._embedder, "warmup_query_inference", None)
-        if callable(warmup):
-            warmup()
-            return
+        from src.ai.inference_guard import search_priority_active
+        from src.ai.query_warmup import write_dummy_clean_tile
 
-        dummy = DINOv2Embedder.dummy_query_view()
-        batch_fn = getattr(self._embedder, "extract_query_views_batch", None)
-        if callable(batch_fn):
-            batch_fn([dummy])
-            batch_fn([dummy, dummy])
-            return
-        extract = getattr(self._embedder, "extract_from_preprocessed", None)
-        if callable(extract):
-            extract(dummy, for_query=True)
+        timings: dict[str, float] = {}
+        if search_priority_active():
+            logger.info("Query-path warm-up skipped — search already running")
+            return timings
+
+        dummy_path: Path | None = None
+        if 1 in shapes:
+            try:
+                dummy_path = write_dummy_clean_tile()
+                t0 = time.perf_counter()
+                features, _embeddings = self.extract_for_search(
+                    str(dummy_path),
+                    query_origin="crop_tool",
+                )
+                timings["n1_ms"] = (time.perf_counter() - t0) * 1000.0
+                timings["n1_dinov2_ms"] = self._last_timings.dinov2 * 1000.0
+                timings["n1_preprocess_ms"] = self._last_timings.preprocessing * 1000.0
+                timings["n1_descriptors_ms"] = self._last_timings.descriptors * 1000.0
+                self._last_query_features = features
+                logger.info(
+                    "Query-path warm-up n=1: %.0f ms "
+                    "(dinov2=%.2fs preprocess=%.2fs descriptors=%.2fs)",
+                    timings["n1_ms"],
+                    self._last_timings.dinov2,
+                    self._last_timings.preprocessing,
+                    self._last_timings.descriptors,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Query-path n=1 extract_for_search warm-up failed (%s) — "
+                    "falling back to embedder batch",
+                    exc,
+                )
+                warmup = getattr(self._embedder, "warmup_query_inference", None)
+                if callable(warmup):
+                    result = warmup(shapes=(1,))
+                    if isinstance(result, dict):
+                        timings.update(result)
+                else:
+                    dummy = DINOv2Embedder.dummy_query_view()
+                    batch_fn = getattr(self._embedder, "extract_query_views_batch", None)
+                    if callable(batch_fn):
+                        t0 = time.perf_counter()
+                        batch_fn([dummy])
+                        timings["n1_ms"] = (time.perf_counter() - t0) * 1000.0
+                        logger.info("Query-path warm-up n=1: %.0f ms", timings["n1_ms"])
+            finally:
+                if dummy_path is not None:
+                    try:
+                        dummy_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+
+        if 2 in shapes:
+            if search_priority_active():
+                logger.info("Query-path warm-up n=2: skipped — search requested")
+            else:
+                dummy = DINOv2Embedder.dummy_query_view()
+                batch_fn = getattr(self._embedder, "extract_query_views_batch", None)
+                if callable(batch_fn):
+                    t0 = time.perf_counter()
+                    batch_fn([dummy, dummy])
+                    timings["n2_ms"] = (time.perf_counter() - t0) * 1000.0
+                    logger.info("Query-path warm-up n=2: %.0f ms", timings["n2_ms"])
+        else:
+            logger.info(
+                "Query-path warm-up n=2: skipped "
+                "(first 2-view Manual Crop may pay a one-time cost)"
+            )
+
+        return timings
 
     @staticmethod
     def dominant_color(image_bgr):
