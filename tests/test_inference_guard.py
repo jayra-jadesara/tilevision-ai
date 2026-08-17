@@ -166,10 +166,7 @@ def test_warmup_caps_torch_threads_while_search_is_active():
         with warmup_compute_scope(torch_threads=1):
             assert torch.get_num_threads() == 1
             begin_search_priority()
-            try:
-                assert torch.get_num_threads() == 1
-            finally:
-                pass
+            assert torch.get_num_threads() == 1
         assert torch.get_num_threads() == interactive_cpu_thread_count()
     finally:
         end_search_priority()
