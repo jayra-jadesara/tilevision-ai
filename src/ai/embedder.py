@@ -35,6 +35,7 @@ from src.ai.inference_guard import (
     search_priority_active,
     synchronized_inference,
     wait_while_search_priority,
+    is_warmup_compute,
 )
 from src.ai.gpu_info import (
     DevicePreference,
@@ -374,6 +375,25 @@ class DINOv2Embedder:
         # Query embeds on Apple Silicon: use CPU to avoid silent MPS hangs.
         if for_query and self._device.type == "mps" and not self._mps_cpu_fallback_done:
             self._fallback_mps_to_cpu("query search prefers CPU (avoid MPS hang)")
+
+        if is_warmup_compute():
+            logger.info(
+                "DINOv2 warmup forward (no inference lock, torch_threads=%s)",
+                torch.get_num_threads() if hasattr(torch, "get_num_threads") else "?",
+            )
+            try:
+                return self._forward_batch(images)
+            except (RuntimeError, ValueError) as exc:
+                message = str(exc)
+                message_l = message.lower()
+                if (
+                    self._device.type == "mps"
+                    and is_mps_unsupported_op_error(message_l)
+                    and not self._mps_cpu_fallback_done
+                ):
+                    self._fallback_mps_to_cpu(message)
+                    return self._extract_batch(images, for_query=for_query)
+                raise
 
         # If Search is waiting, indexing must not start another long forward.
         if not for_query and search_priority_active():

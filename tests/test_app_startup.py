@@ -60,3 +60,6 @@ def test_app_py_does_not_block_launch_on_query_warmup():
     assert show_pos < warmup_pos
     assert sync_warmup == -1
     assert "query=background" in source
+    embedder_src = Path("src/ai/embedder.py").read_text(encoding="utf-8")
+    assert "is_warmup_compute()" in embedder_src
+    assert "DINOv2 warmup forward (no inference lock" in embedder_src

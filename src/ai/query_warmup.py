@@ -74,45 +74,51 @@ def run_query_path_warmup(
 
     Aborts remaining steps if a user search has claimed priority.
     """
-    from src.ai.inference_guard import search_priority_active
+    from src.ai.inference_guard import search_priority_active, warmup_compute_scope
 
     if search_priority_active():
         logger.info("Query-path warm-up skipped — search already running")
         return {}
 
     shapes = shapes or warmup_shapes_from_env()
-    warmup = getattr(feature_extractor, "warmup_query_inference", None)
     timings: dict[str, float] = {}
-    if callable(warmup):
-        result = warmup(shapes=shapes)
-        if isinstance(result, dict):
-            timings.update(result)
+    with warmup_compute_scope(torch_threads=1):
+        if search_priority_active():
+            logger.info("Query-path warm-up skipped — search already running")
+            return {}
+        warmup = getattr(feature_extractor, "warmup_query_inference", None)
+        if callable(warmup):
+            result = warmup(shapes=shapes)
+            if isinstance(result, dict):
+                timings.update(result)
 
-    if (
-        vector_index is not None
-        and not search_priority_active()
-        and hasattr(vector_index, "search_vectors")
-        and hasattr(vector_index, "get_total_count")
-    ):
-        try:
-            if int(vector_index.get_total_count()) > 0:
-                import time as _time
+        if (
+            vector_index is not None
+            and not search_priority_active()
+            and hasattr(vector_index, "search_vectors")
+            and hasattr(vector_index, "get_total_count")
+        ):
+            try:
+                if int(vector_index.get_total_count()) > 0:
+                    import time as _time
 
-                features = getattr(feature_extractor, "_last_query_features", None)
-                embedding = getattr(features, "embedding", None) if features is not None else None
-                if embedding is None:
-                    dim = 1024
-                    dim_fn = getattr(vector_index, "embedding_dimension", None)
-                    if callable(dim_fn):
-                        dim = int(dim_fn())
-                    embedding = np.zeros(dim, dtype=np.float32)
-                    embedding[0] = 1.0
-                t0 = _time.perf_counter()
-                vector_index.search_vectors(embedding, top_k=5)
-                timings["faiss_ms"] = (_time.perf_counter() - t0) * 1000.0
-                logger.info("Query-path warm-up faiss: %.0f ms", timings["faiss_ms"])
-        except Exception as exc:
-            logger.debug("Query-path FAISS warm-up skipped: %s", exc)
+                    features = getattr(feature_extractor, "_last_query_features", None)
+                    embedding = (
+                        getattr(features, "embedding", None) if features is not None else None
+                    )
+                    if embedding is None:
+                        dim = 1024
+                        dim_fn = getattr(vector_index, "embedding_dimension", None)
+                        if callable(dim_fn):
+                            dim = int(dim_fn())
+                        embedding = np.zeros(dim, dtype=np.float32)
+                        embedding[0] = 1.0
+                    t0 = _time.perf_counter()
+                    vector_index.search_vectors(embedding, top_k=5)
+                    timings["faiss_ms"] = (_time.perf_counter() - t0) * 1000.0
+                    logger.info("Query-path warm-up faiss: %.0f ms", timings["faiss_ms"])
+            except Exception as exc:
+                logger.debug("Query-path FAISS warm-up skipped: %s", exc)
 
     logger.info(
         "Query-path warm-up finished (%s)",

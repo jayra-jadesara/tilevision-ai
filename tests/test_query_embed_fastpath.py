@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -177,6 +178,100 @@ def test_feature_extractor_warmup_delegates_to_embedder(monkeypatch):
     monkeypatch.setattr(embedder, "warmup_query_inference", fake_warmup)
     FeatureExtractor(embedder=embedder).warmup_query_inference()
     assert called["n"] == 1
+
+
+def test_warmup_extract_batch_does_not_block_inference_lock(monkeypatch):
+    """Warmup DINOv2 must not take the lock that FAISS ntotal waits on."""
+    import threading
+    import time
+
+    from src.ai.inference_guard import (
+        synchronized_inference,
+        warmup_compute_scope,
+    )
+
+    embedder = DINOv2Embedder(device_preference="cpu")
+    embedder._model = object()
+    started = threading.Event()
+    release = threading.Event()
+
+    def fake_forward(images):
+        started.set()
+        release.wait(timeout=5.0)
+        return np.ones((len(images), 1024), dtype=np.float32)
+
+    monkeypatch.setattr(embedder, "_forward_batch", fake_forward)
+    image = Image.new("RGB", (32, 32), color=(10, 20, 30))
+
+    def warmup():
+        with warmup_compute_scope(torch_threads=1):
+            embedder._extract_batch([image], for_query=True)
+
+    thread = threading.Thread(target=warmup, daemon=True)
+    thread.start()
+    assert started.wait(timeout=2.0)
+
+    t0 = time.monotonic()
+    with synchronized_inference(timeout=1.0, purpose="FAISS ntotal"):
+        waited = time.monotonic() - t0
+    assert waited < 0.25
+
+    release.set()
+    thread.join(timeout=2.0)
+    assert not thread.is_alive()
+
+
+def test_extract_batch_without_warmup_scope_holds_inference_lock(monkeypatch):
+    import threading
+    import time
+
+    from src.ai.inference_guard import InferenceBusyError, synchronized_inference
+
+    embedder = DINOv2Embedder(device_preference="cpu")
+    embedder._model = object()
+    started = threading.Event()
+    release = threading.Event()
+
+    def fake_forward(images):
+        started.set()
+        release.wait(timeout=5.0)
+        return np.ones((len(images), 1024), dtype=np.float32)
+
+    monkeypatch.setattr(embedder, "_forward_batch", fake_forward)
+    image = Image.new("RGB", (32, 32), color=(10, 20, 30))
+
+    def holder():
+        embedder._extract_batch([image], for_query=True)
+
+    thread = threading.Thread(target=holder, daemon=True)
+    thread.start()
+    assert started.wait(timeout=2.0)
+
+    t0 = time.monotonic()
+    with pytest.raises(InferenceBusyError):
+        with synchronized_inference(timeout=0.3, purpose="FAISS ntotal"):
+            pass
+    assert time.monotonic() - t0 >= 0.25
+
+    release.set()
+    thread.join(timeout=2.0)
+
+
+def test_run_query_path_warmup_uses_warmup_compute_scope():
+    from src.ai.inference_guard import is_warmup_compute, warmup_in_progress
+    from src.ai.query_warmup import run_query_path_warmup
+
+    seen = {"compute": False, "in_progress": False}
+
+    class Extractor:
+        def warmup_query_inference(self, *, shapes=(1,)):
+            seen["compute"] = is_warmup_compute()
+            seen["in_progress"] = warmup_in_progress()
+            return {"n1_ms": 1.0}
+
+    run_query_path_warmup(Extractor())
+    assert seen["compute"] is True
+    assert seen["in_progress"] is True
 
 
 def test_index_extract_yields_between_views(monkeypatch):

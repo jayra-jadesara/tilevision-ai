@@ -6,11 +6,18 @@ indexing (QThread / folder monitor) cannot race with active search queries.
 
 Search must NEVER wait forever behind indexing — use timed acquire.
 When the user drops an image to search, indexing must yield so results can return.
+
+Background query warmup must NOT take this lock: a 40–50s dummy DINOv2
+forward held it on Windows and blocked ``get_total_count()`` (Search
+priority ON → Starting worker = 44s) even for catalog-cache hits that
+never need DINOv2.
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -31,18 +38,166 @@ _search_priority_lock = threading.Lock()
 _search_idle = threading.Event()
 _search_idle.set()
 
+# Background warmup: thread-local so only that thread skips the inference lock.
+_warmup_tls = threading.local()
+_warmup_in_progress = threading.Event()
+
 
 class InferenceBusyError(TimeoutError):
     """Raised when the AI engine is busy (usually indexing) too long."""
 
 
+def interactive_cpu_thread_count() -> int:
+    """Intra-op threads for a user-facing search (not background warmup)."""
+    try:
+        from src.utils.platform_info import is_mac_intel
+
+        if is_mac_intel():
+            return 1
+    except Exception:
+        pass
+    return min(8, os.cpu_count() or 4)
+
+
+def _torch_thread_count() -> int | None:
+    try:
+        import torch
+
+        return int(torch.get_num_threads())
+    except Exception:
+        return None
+
+
+def restore_interactive_torch_threads() -> None:
+    """Give a real search the full CPU budget even if warmup reduced it."""
+    try:
+        import torch
+
+        target = interactive_cpu_thread_count()
+        current = int(torch.get_num_threads())
+        if current != target:
+            torch.set_num_threads(target)
+            logger.info(
+                "Search restored torch intra-op threads %s → %s",
+                current,
+                target,
+            )
+    except Exception as exc:
+        logger.debug("Could not restore interactive torch threads: %s", exc)
+
+
+def is_warmup_compute() -> bool:
+    """True only on the background warmup thread inside warmup_compute_scope."""
+    return bool(getattr(_warmup_tls, "active", False))
+
+
+def warmup_in_progress() -> bool:
+    """True while any warmup_compute_scope is entered."""
+    return _warmup_in_progress.is_set()
+
+
+def _lower_os_thread_priority() -> int | None:
+    """Lower this OS thread's priority. Returns previous Windows priority or None."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+
+        k32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = k32.GetCurrentThread()
+        previous = int(k32.GetThreadPriority(handle))
+        thread_priority_below_normal = -1
+        if k32.SetThreadPriority(handle, thread_priority_below_normal):
+            logger.info("Warmup OS thread priority BELOW_NORMAL (was %s)", previous)
+            return previous
+        logger.debug("SetThreadPriority failed err=%s", k32.GetLastError())
+    except Exception as exc:
+        logger.debug("Warmup OS thread priority not set: %s", exc)
+    return None
+
+
+def _restore_os_thread_priority(previous: int | None) -> None:
+    if previous is None or sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        k32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        k32.SetThreadPriority(k32.GetCurrentThread(), int(previous))
+    except Exception:
+        pass
+
+
+@contextmanager
+def warmup_compute_scope(*, torch_threads: int = 1) -> Iterator[None]:
+    """
+    Limit CPU used by background query warmup and skip the inference lock.
+
+    ``torch.set_num_threads`` is process-global: warmup uses 1 intra-op
+    thread so a concurrent catalog search is not starved on a 4-core CPU.
+    Search priority does not restore the full budget until this scope
+    exits — otherwise the in-flight dummy forward would take every core
+    again.
+    """
+    _warmup_tls.active = True
+    _warmup_in_progress.set()
+    prev_os = _lower_os_thread_priority()
+    prev_torch: int | None = None
+    try:
+        import torch
+
+        prev_torch = int(torch.get_num_threads())
+        target = max(1, int(torch_threads))
+        if prev_torch != target:
+            torch.set_num_threads(target)
+        logger.info(
+            "Warmup compute scope ON (torch_threads %s → %s, skip inference lock)",
+            prev_torch,
+            torch.get_num_threads(),
+        )
+    except Exception as exc:
+        logger.debug("Warmup torch thread cap skipped: %s", exc)
+    try:
+        yield
+    finally:
+        _restore_os_thread_priority(prev_os)
+        _warmup_tls.active = False
+        _warmup_in_progress.clear()
+        if search_priority_active():
+            restore_interactive_torch_threads()
+        elif prev_torch is not None:
+            try:
+                import torch
+
+                torch.set_num_threads(prev_torch)
+            except Exception:
+                pass
+        logger.info("Warmup compute scope OFF")
+
+
 def begin_search_priority() -> None:
-    """Mark that a user search is starting — indexing should yield."""
+    """Mark that a user search is starting — indexing / warmup should yield."""
     global _search_priority_count
     with _search_priority_lock:
         _search_priority_count += 1
         _search_idle.clear()
-    logger.info("Search priority ON (active=%s)", _search_priority_count)
+    # torch.set_num_threads is process-global. Restoring the full budget
+    # while warmup is mid-forward would give that dummy oneDNN pass every
+    # core again and starve a catalog-cache-hit search. Leave the cap in
+    # place until warmup_compute_scope exits, then restore.
+    if not warmup_in_progress():
+        restore_interactive_torch_threads()
+    logger.info(
+        "Search priority ON (active=%s inference_lock_held=%s "
+        "warmup_in_progress=%s torch_threads=%s cpu_count=%s "
+        "active_threads=%s)",
+        _search_priority_count,
+        inference_lock_held(),
+        warmup_in_progress(),
+        _torch_thread_count(),
+        os.cpu_count(),
+        threading.active_count(),
+    )
 
 
 def end_search_priority() -> None:
@@ -94,10 +249,21 @@ def synchronized_inference(
             (avoid for search). ``0`` tries once without blocking.
         purpose: Label for logs / error messages.
     """
+    t0 = time.monotonic()
     if timeout is None:
         acquired = _INFERENCE_LOCK.acquire(blocking=True)
     else:
         acquired = _INFERENCE_LOCK.acquire(blocking=True, timeout=float(timeout))
+    waited = time.monotonic() - t0
+    if waited >= 0.1:
+        logger.info(
+            "Inference lock wait %.3fs purpose=%s warmup_in_progress=%s "
+            "search_priority=%s",
+            waited,
+            purpose,
+            warmup_in_progress(),
+            search_priority_active(),
+        )
 
     if not acquired:
         message = (
