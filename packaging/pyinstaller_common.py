@@ -22,6 +22,8 @@ HIDDEN_IMPORTS = [
     "faiss",
     "cv2",
     "PIL",
+    "PIL.Image",
+    "PIL.ImageDraw",
     "pillow_heif",
     "skimage",
     "cryptography",
@@ -32,6 +34,24 @@ HIDDEN_IMPORTS = [
     "certifi",
     "watchdog.observers",
     "watchdog.events",
+    "reportlab",
+    "reportlab.pdfgen",
+    "reportlab.pdfgen.canvas",
+    "reportlab.lib.pagesizes",
+    "reportlab.lib.utils",
+    "onnxruntime",
+    "onnxruntime.capi",
+    "PySide6",
+    "PySide6.QtCore",
+    "PySide6.QtGui",
+    "PySide6.QtWidgets",
+    "PySide6.QtNetwork",
+    "PySide6.QtPrintSupport",
+    "PySide6.QtSvg",
+    "PySide6.QtTest",
+    "shiboken6",
+    # Used by packaged-app release validation (S21 memory stress / collectors).
+    "psutil",
 ]
 
 # Optional SAM2 Precise Crop (lab). Only added when TILEVISION_BUNDLE_SAM2 is on
@@ -107,6 +127,13 @@ EXCLUDES = [
     "tensorboard",
     "triton",
     "IPython",
+    # Release-validation drivers must load from the CI checkout at runtime —
+    # never ship them inside the customer .app (also avoids Analysis pulling
+    # the suite in via main.py --release-validation).
+    "qa_e2e",
+    "pytest",
+    "pytest_qt",
+    "_pytest",
 ]
 
 
@@ -164,6 +191,35 @@ def collect_torch_bundle() -> tuple[list, list, list]:
     hiddenimports: list = []
     for package in ("torch", "torchvision"):
         pkg_datas, pkg_binaries, pkg_hidden = collect_all(package)
+        datas += pkg_datas
+        binaries += pkg_binaries
+        hiddenimports += pkg_hidden
+    return datas, binaries, hiddenimports
+
+
+def collect_extra_package_bundles() -> tuple[list, list, list]:
+    """
+    Collect native-heavy packages PyInstaller often under-bundles on macOS.
+
+    Safe to call when a package is missing (returns empty for that package).
+    """
+    from PyInstaller.utils.hooks import collect_all
+
+    datas: list = []
+    binaries: list = []
+    hiddenimports: list = []
+    packages = ["onnxruntime", "faiss", "reportlab", "PySide6", "psutil"]
+    # NOTE: do NOT collect_all("cv2"). OpenCV's own PyInstaller hooks already
+    # collect it; a second collect_all duplicates Frameworks/Resources layout
+    # and triggers "recursion is detected during loading of cv2" on macOS .app.
+    if should_bundle_sam2_onnx():
+        # Already listed; collect_all is idempotent enough for CI.
+        pass
+    for package in packages:
+        try:
+            pkg_datas, pkg_binaries, pkg_hidden = collect_all(package)
+        except Exception:
+            continue
         datas += pkg_datas
         binaries += pkg_binaries
         hiddenimports += pkg_hidden
