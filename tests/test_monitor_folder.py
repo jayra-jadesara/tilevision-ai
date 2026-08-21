@@ -83,3 +83,45 @@ def test_unchanged_file_emits_skipped(tmp_path: Path, handler) -> None:
 
         time.sleep(0.35)
     assert events[-1][1] == "skipped"
+
+
+def test_inflight_filesystem_events_are_coalesced(tmp_path: Path, handler) -> None:
+    """Second modify while first auto-index runs must not start a parallel pass."""
+    import threading
+    import time
+
+    event_handler, use_case, events = handler
+    image = tmp_path / "PGYS2319.jpg"
+    _write_png(image)
+
+    started = threading.Event()
+    release = threading.Event()
+    calls = {"n": 0}
+
+    def slow_index(path):
+        calls["n"] += 1
+        started.set()
+        release.wait(timeout=2.0)
+        return 99
+
+    use_case.index_changed_file.side_effect = slow_index
+
+    class Event:
+        is_directory = False
+        src_path = str(image)
+
+    with patch("src.core.use_cases.monitor_folder.validate_image", return_value=True):
+        event_handler.on_modified(Event())
+        assert started.wait(timeout=2.0)
+        # Same file changes again while first pass is still settling/indexing.
+        event_handler.on_modified(Event())
+        time.sleep(0.2)
+        assert calls["n"] == 1
+        release.set()
+        time.sleep(0.5)
+
+    # Coalesced follow-up may run once more after the first finishes.
+    assert calls["n"] in (1, 2)
+    assert calls["n"] <= 2
+    indexed = [e for e in events if e[1] == "indexed"]
+    assert 1 <= len(indexed) <= 2
