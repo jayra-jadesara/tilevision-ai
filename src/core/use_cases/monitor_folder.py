@@ -57,6 +57,10 @@ class TileImageEventHandler(FileSystemEventHandler):
         self._pending_timers: Dict[str, threading.Timer] = {}
         self._timer_lock = threading.Lock()
         self._paused = threading.Event()  # set => skip auto-index (Search running)
+        # Coalesce FS events that arrive while a file is already being processed
+        # (macOS often emits create+modify; editors emit a second write after settle).
+        self._inflight_paths: Set[str] = set()
+        self._reprocess_after: Set[str] = set()
 
     def pause_for_search(self) -> None:
         """Stop auto-indexing new files while the user is searching."""
@@ -73,6 +77,17 @@ class TileImageEventHandler(FileSystemEventHandler):
 
     def _schedule_process(self, file_path_str: str) -> None:
         key = str(Path(file_path_str).resolve())
+
+        with self._timer_lock:
+            if key in self._inflight_paths:
+                # Already indexing this path — run once more after it finishes
+                # instead of starting a parallel second pass.
+                self._reprocess_after.add(key)
+                logger.debug(
+                    "Coalesced filesystem event for in-flight file: %s",
+                    Path(key).name,
+                )
+                return
 
         def _run() -> None:
             with self._timer_lock:
@@ -100,6 +115,30 @@ class TileImageEventHandler(FileSystemEventHandler):
 
     def _process_file(self, file_path_str: str) -> None:
         """Verify file write completion and run indexing."""
+        key = str(Path(file_path_str).resolve())
+        with self._timer_lock:
+            if key in self._inflight_paths:
+                self._reprocess_after.add(key)
+                return
+            self._inflight_paths.add(key)
+
+        try:
+            self._process_file_unlocked(key)
+        finally:
+            again = False
+            with self._timer_lock:
+                self._inflight_paths.discard(key)
+                if key in self._reprocess_after:
+                    self._reprocess_after.discard(key)
+                    again = True
+            if again:
+                logger.info(
+                    "Re-scheduling auto-index after coalesced events: %s",
+                    Path(key).name,
+                )
+                self._schedule_process(key)
+
+    def _process_file_unlocked(self, file_path_str: str) -> None:
         if self._paused.is_set():
             logger.info(
                 "Skipping auto-index while Search is active: %s",

@@ -338,6 +338,7 @@ class SearchView(QWidget):
         self._on_open_profiles_settings = on_open_profiles_settings
         self._catalogue_master_service = catalogue_master_service
         self._current_results: List[SearchResult] = []
+        self._results_generation = 0
         self._current_query_image_path: Optional[str] = None
         self._crop_worker: Optional[TileCropWorker] = None
         self._crop_busy = False
@@ -542,6 +543,13 @@ class SearchView(QWidget):
         
     @Slot(dict)
     def _on_filters_available(self, options: dict) -> None:
+        """
+        Refresh filter dropdowns after catalog changes (including auto-index).
+
+        Must not clear displayed search results and must not auto-re-search.
+        A no-op set_filter → search_by_image path previously wiped results when
+        a concurrent auto-index made the feature-version health check look empty.
+        """
         for field, combo in self._filter_combos.items():
             values = options.get(field, [])
             current = combo.currentText()
@@ -555,7 +563,8 @@ class SearchView(QWidget):
                 combo.setCurrentIndex(idx)
             else:
                 combo.setCurrentIndex(0)
-                self._viewmodel.set_filter(field, "")
+                # Stale brand/category/etc. — drop quietly; keep current results.
+                self._viewmodel.drop_filter_quietly(field)
             combo.blockSignals(False)
 
     def _build_progress_bar(self) -> QWidget:
@@ -882,6 +891,7 @@ class SearchView(QWidget):
     @Slot(list)
     def _on_results_ready(self, results: List[SearchResult]) -> None:
         self._current_results = results
+        self._results_generation += 1
         self._populate_table(results)
         self._show_confidence_banner(results)
         if results:
@@ -889,9 +899,17 @@ class SearchView(QWidget):
             self._results_table.setVisible(True)
             logger.info("[SEARCH] UI displaying %d result row(s)", len(results))
         else:
-            logger.warning("[SEARCH] UI received empty result list")
+            logger.warning(
+                "[SEARCH] UI received empty result list (vm_state=%s has_query=%s)",
+                self._viewmodel.state,
+                bool(self._current_query_image_path),
+            )
 
     def _show_confidence_banner(self, results: List[SearchResult]) -> None:
+        # Clear / idle must not show "No similar tiles found" after wiping the table.
+        if self._viewmodel.state == SearchState.IDLE:
+            self._confidence_banner.setVisible(False)
+            return
         message = confidence_message(results)
         if message:
             self._confidence_banner.setText(f"Warning: {message}")
@@ -985,14 +1003,19 @@ class SearchView(QWidget):
                         item.setFont(font)
 
         # Defer pixmap I/O until after the table is visible.
-        QTimer.singleShot(0, self._load_result_thumbnails)
+        generation = self._results_generation
+        QTimer.singleShot(0, lambda gen=generation: self._load_result_thumbnails(gen))
 
-    def _load_result_thumbnails(self) -> None:
+    def _load_result_thumbnails(self, generation: int | None = None) -> None:
         """Lazy-load result icons after search returns (keeps UI responsive)."""
+        if generation is not None and generation != self._results_generation:
+            return
         from src.presentation.thumbnail_cache import THUMBNAIL_PIXMAP_CACHE
 
-        results = self._current_results
+        results = list(self._current_results)
         for row, result in enumerate(results):
+            if generation is not None and generation != self._results_generation:
+                return
             if row >= self._results_table.rowCount():
                 break
             item = self._results_table.item(row, 0)
@@ -1007,6 +1030,8 @@ class SearchView(QWidget):
             # Yield to the event loop every few icons.
             if row > 0 and row % 4 == 0:
                 QApplication.processEvents()
+                if generation is not None and generation != self._results_generation:
+                    return
 
     def _on_row_double_clicked(self, row: int, _column: int) -> None:
         self._open_image_at_row(row)

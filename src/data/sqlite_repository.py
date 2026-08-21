@@ -114,6 +114,9 @@ class SQLiteImageRepository(IImageRepository):
         """
         self._db = db_context
         self._feature_status_cache: FeatureVersionStatus | None = None
+        # Survives invalidate so a transient SQLite read failure during
+        # concurrent auto-index cannot look like an empty catalog.
+        self._last_good_feature_status_cache: FeatureVersionStatus | None = None
 
     def _invalidate_feature_status_cache(self) -> None:
         self._feature_status_cache = None
@@ -803,12 +806,19 @@ class SQLiteImageRepository(IImageRepository):
                         stale_count += 1
         except sqlite3.Error as e:
             logger.error(f"Failed to check feature versions: {e}")
-            return FeatureVersionStatus(
-                is_compatible=False,
-                indexed_count=0,
-                stale_count=0,
-                message="Could not verify feature versions.",
-            )
+            # Never report indexed_count=0 on a read error — Search treats
+            # that as "empty catalog" and emits results_ready([]), wiping
+            # the UI (SISCON / Intel Mac: empty list after auto-index).
+            if self._last_good_feature_status_cache is not None:
+                logger.warning(
+                    "Using last-known feature status after DB read failure "
+                    "(indexed_count=%s)",
+                    self._last_good_feature_status_cache.indexed_count,
+                )
+                return self._last_good_feature_status_cache
+            raise RuntimeError(
+                f"Could not verify feature versions: {e}"
+            ) from e
 
         if indexed_count == 0:
             status = FeatureVersionStatus(
@@ -837,6 +847,7 @@ class SQLiteImageRepository(IImageRepository):
             )
 
         self._feature_status_cache = status
+        self._last_good_feature_status_cache = status
         return status
 
     def mark_as_indexed(self, image_id: int, is_indexed: bool) -> bool:
@@ -872,6 +883,7 @@ class SQLiteImageRepository(IImageRepository):
                 cursor.execute("DELETE FROM tiles;")
                 conn.commit()
             self._invalidate_feature_status_cache()
+            self._last_good_feature_status_cache = None
             # VACUUM needs exclusive access — close pooled connections first.
             try:
                 self._db.close_all()
