@@ -206,16 +206,44 @@ jobs:
       - name: Verify frozen Mac app
         env:
           TILEVISION_BUNDLE_SAM2: "auto"
-        run: bash scripts/verify_frozen_mac_app.sh dist/TileVisionAI.app x86_64
+        run: bash scripts/verify_frozen_mac_app.sh "dist/TileVision AI.app" x86_64
 
-      - name: Create macOS DMG
-        run: bash scripts/create_mac_dmg.sh dist/TileVisionAI.app dist/TileVisionAI-macOS-Intel.dmg "TileVision AI (Intel)"
+      - name: Smoke-launch frozen Mac app
+        env:
+          TILEVISION_BUNDLE_SAM2: "auto"
+          TILEVISION_SMOKE_TIMEOUT_S: "90"
+          QT_QPA_PLATFORM: offscreen
+          OMP_NUM_THREADS: "1"
+          KMP_DUPLICATE_LIB_OK: "TRUE"
+        run: bash scripts/smoke_launch_mac_app.sh "dist/TileVision AI.app"
+
+      - name: Create professional macOS DMG
+        run: |
+          bash scripts/create_mac_dmg.sh "dist/TileVision AI.app" dist/TileVision-AI-Intel.dmg "TileVision AI"
+          cp dist/TileVision-AI-Intel.dmg dist/TileVisionAI-macOS-Intel.dmg
+
+      - name: Packaging reports
+        run: |
+          bash scripts/macos_build_python.sh scripts/generate_macos_packaging_report.py \
+            --app "dist/TileVision AI.app" \
+            --dmg dist/TileVision-AI-Intel.dmg \
+            --arch x86_64 \
+            --out-dir dist/packaging_reports/x86_64
 
       - name: Upload macOS Intel artifact
         uses: actions/upload-artifact@v4
         with:
           name: tilevision-macos-intel
-          path: dist/TileVisionAI-macOS-Intel.dmg
+          path: |
+            dist/TileVision-AI-Intel.dmg
+            dist/TileVisionAI-macOS-Intel.dmg
+          retention-days: 14
+
+      - name: Upload macOS Intel packaging reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: tilevision-macos-intel-reports
+          path: dist/packaging_reports/x86_64/
           retention-days: 14
 
   # ─── macOS Apple Silicon — fully self-contained ─────────────────────────────
@@ -301,16 +329,44 @@ jobs:
       - name: Verify frozen Mac app
         env:
           TILEVISION_BUNDLE_SAM2: "auto"
-        run: bash scripts/verify_frozen_mac_app.sh dist/TileVisionAI.app arm64
+        run: bash scripts/verify_frozen_mac_app.sh "dist/TileVision AI.app" arm64
 
-      - name: Create macOS DMG
-        run: bash scripts/create_mac_dmg.sh dist/TileVisionAI.app dist/TileVisionAI-macOS-AppleSilicon.dmg "TileVision AI (Apple Silicon)"
+      - name: Smoke-launch frozen Mac app
+        env:
+          TILEVISION_BUNDLE_SAM2: "auto"
+          TILEVISION_SMOKE_TIMEOUT_S: "90"
+          QT_QPA_PLATFORM: offscreen
+          OMP_NUM_THREADS: "1"
+          KMP_DUPLICATE_LIB_OK: "TRUE"
+        run: bash scripts/smoke_launch_mac_app.sh "dist/TileVision AI.app"
+
+      - name: Create professional macOS DMG
+        run: |
+          bash scripts/create_mac_dmg.sh "dist/TileVision AI.app" dist/TileVision-AI-AppleSilicon.dmg "TileVision AI"
+          cp dist/TileVision-AI-AppleSilicon.dmg dist/TileVisionAI-macOS-AppleSilicon.dmg
+
+      - name: Packaging reports
+        run: |
+          bash scripts/macos_build_python.sh scripts/generate_macos_packaging_report.py \
+            --app "dist/TileVision AI.app" \
+            --dmg dist/TileVision-AI-AppleSilicon.dmg \
+            --arch arm64 \
+            --out-dir dist/packaging_reports/arm64
 
       - name: Upload macOS Apple Silicon artifact
         uses: actions/upload-artifact@v4
         with:
           name: tilevision-macos-arm64
-          path: dist/TileVisionAI-macOS-AppleSilicon.dmg
+          path: |
+            dist/TileVision-AI-AppleSilicon.dmg
+            dist/TileVisionAI-macOS-AppleSilicon.dmg
+          retention-days: 14
+
+      - name: Upload macOS Apple Silicon packaging reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: tilevision-macos-arm64-reports
+          path: dist/packaging_reports/arm64/
           retention-days: 14
 
   # ─── Linux — fully self-contained ───────────────────────────────────────────
@@ -434,8 +490,10 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           WIN_EXE=$(find release/windows -name "TileVisionAI-Setup-*.exe" | head -n 1)
           ADMIN_EXE=$(find release/admin-vendor -name "TileVisionAI-Admin-VENDOR-ONLY-*.exe" | head -n 1)
-          INTEL_DMG=$(find release/macos-intel -name "*.dmg" | head -n 1)
-          ARM_DMG=$(find release/macos-arm64 -name "*.dmg" | head -n 1)
+          INTEL_DMG=$(find release/macos-intel -name 'TileVision-AI-Intel.dmg' | head -n 1)
+          ARM_DMG=$(find release/macos-arm64 -name 'TileVision-AI-AppleSilicon.dmg' | head -n 1)
+          if [ -z "$INTEL_DMG" ]; then INTEL_DMG=$(find release/macos-intel -name "*.dmg" | head -n 1); fi
+          if [ -z "$ARM_DMG" ]; then ARM_DMG=$(find release/macos-arm64 -name "*.dmg" | head -n 1); fi
 
           if [ -z "$WIN_EXE" ] || [ -z "$INTEL_DMG" ] || [ -z "$ARM_DMG" ]; then
             echo "ERROR: missing release artifact (win=$WIN_EXE intel=$INTEL_DMG arm=$ARM_DMG)" >&2
@@ -444,9 +502,13 @@ jobs:
           fi
 
           cp "$WIN_EXE" "TileVisionAI-Setup-${VERSION}.exe"
+          # Customer-facing names + legacy update-check names.
+          cp "$INTEL_DMG" "TileVision-AI-Intel-${VERSION}.dmg"
+          cp "$ARM_DMG" "TileVision-AI-AppleSilicon-${VERSION}.dmg"
           cp "$INTEL_DMG" "TileVisionAI-macOS-Intel-${VERSION}.dmg"
           cp "$ARM_DMG" "TileVisionAI-macOS-AppleSilicon-${VERSION}.dmg"
           cp packaging/MAC_INSTALL.txt "TileVisionAI-macOS-READ-ME-FIRST.txt"
+          cp packaging/MACOS_RELEASE.md "TileVisionAI-macOS-PACKAGING.md"
           if [ -n "$ADMIN_EXE" ]; then
             cp "$ADMIN_EXE" "TileVisionAI-Admin-VENDOR-ONLY-${VERSION}.exe"
             cp packaging/VENDOR_ADMIN_README.txt "TileVisionAI-Admin-VENDOR-ONLY-README.txt"
@@ -459,7 +521,8 @@ jobs:
           SAFE_MAX=$((GH_MAX - 32 * 1024 * 1024))
           MIN_WIN=$((500 * 1024 * 1024))
           MIN_DMG=$((700 * 1024 * 1024))
-          for f in TileVisionAI-*; do
+          for f in TileVisionAI-* TileVision-AI-*; do
+            [[ -f "$f" ]] || continue
             size=$(stat -c%s "$f")
             echo "$(numfmt --to=iec-i --suffix=B "$size")  $f"
             if [ "$size" -ge "$GH_MAX" ]; then
@@ -523,11 +586,13 @@ jobs:
 
             | File | For |
             |------|-----|
-            | **TileVisionAI-macOS-Intel-*.dmg** | Intel iMac / Intel MacBook (Core i5, i7, i9) |
-            | **TileVisionAI-macOS-AppleSilicon-*.dmg** | M1, M2, M3, M4 Macs |
+            | **TileVision-AI-Intel-*.dmg** | Intel iMac / Intel MacBook (Core i5, i7, i9) |
+            | **TileVision-AI-AppleSilicon-*.dmg** | M1, M2, M3, M4 Macs |
             | **TileVisionAI-macOS-READ-ME-FIRST.txt** | Quick guide — how to pick the right file |
 
-            First launch: Right-click app → **Open** → **Open**
+            There is **no Universal2** single app (Intel torch 2.2.2 vs Silicon current torch).
+
+            First launch (**Unsigned build**): Right-click app → **Open** → **Open**
 
             ## Vendor only (do NOT send to customers)
 
@@ -537,9 +602,12 @@ jobs:
             | **TileVisionAI-Admin-VENDOR-ONLY-README.txt** | Reminder — never send admin to clients |
           files: |
             TileVisionAI-Setup-*.exe
+            TileVision-AI-Intel-*.dmg
+            TileVision-AI-AppleSilicon-*.dmg
             TileVisionAI-macOS-Intel-*.dmg
             TileVisionAI-macOS-AppleSilicon-*.dmg
             TileVisionAI-macOS-READ-ME-FIRST.txt
+            TileVisionAI-macOS-PACKAGING.md
             TileVisionAI-Admin-VENDOR-ONLY-*.exe
             TileVisionAI-Admin-VENDOR-ONLY-README.txt
             update_manifest.json

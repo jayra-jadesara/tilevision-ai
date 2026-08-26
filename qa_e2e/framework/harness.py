@@ -30,6 +30,27 @@ from qa_e2e.framework.session import AppSession
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def _ensure_repo_on_path() -> None:
+    """
+    Make `qa_e2e` importable when running from a checkout.
+
+    When validating a packaged .app, never prepend the checkout root — that
+    would shadow frozen `src` with source-tree `src`. Append only.
+    """
+    import os
+    import sys
+
+    if str(ROOT) in sys.path:
+        return
+    if getattr(sys, "frozen", False) or os.environ.get("TILEVISION_QA_PACKAGED_APP") == "1":
+        sys.path.append(str(ROOT))
+    else:
+        sys.path.insert(0, str(ROOT))
+
+
+_ensure_repo_on_path()
+
+
 def _install_dev_license(db_path: str) -> None:
     from src.core.models import LicenseInfo
     from src.data.db_context import DatabaseContext
