@@ -143,13 +143,38 @@ class SearchViewModel(QObject):
 
     @Slot(str, str)
     def set_filter(self, field: str, value: str) -> None:
+        """
+        Update one metadata filter.
+
+        Re-runs the last query only when the effective filter set changes
+        and the user (or an intentional UI filter change) caused it.
+        Catalog refreshes must call ``drop_filter_quietly`` instead — a
+        no-op ``set_filter(field, "")`` used to auto-search and could wipe
+        displayed results when the health check transiently failed.
+        """
         if not value or value.lower() == "any":
+            changed = field in self._active_filters
             self._active_filters.pop(field, None)
         else:
+            changed = self._active_filters.get(field) != value
             self._active_filters[field] = value
 
-        if self._last_query_path and self._state != SearchState.SEARCHING:
+        if (
+            changed
+            and self._last_query_path
+            and self._state != SearchState.SEARCHING
+        ):
             self.search_by_image(self._last_query_path)
+
+    def drop_filter_quietly(self, field: str) -> None:
+        """Remove a stale filter value without re-running search or clearing results."""
+        if field in self._active_filters:
+            self._active_filters.pop(field, None)
+            logger.info(
+                "[SEARCH] Dropped stale filter %r after catalog refresh "
+                "(keeping displayed results)",
+                field,
+            )
 
     @property
     def active_filters(self) -> dict:
@@ -208,6 +233,11 @@ class SearchViewModel(QObject):
             if indexed <= 0:
                 self._release_search_priority()
                 self._set_state(SearchState.NO_RESULTS)
+                logger.warning(
+                    "[SEARCH] Emitting empty results reason=no_indexed_tiles "
+                    "(was_displaying=%s)",
+                    len(self._last_results),
+                )
                 self.results_ready.emit([])
                 self.status_message.emit(
                     "No tiles indexed yet. Open Index, add your tile folder, then search again."
@@ -267,7 +297,7 @@ class SearchViewModel(QObject):
             self._use_case,
             str(path),
             self._top_k,
-            self._active_filters,
+            dict(self._active_filters),
             query_origin=query_origin,
         )
         self._worker.search_completed.connect(
@@ -315,6 +345,7 @@ class SearchViewModel(QObject):
         self._last_results = []
         self._last_query_path = None
         self._set_state(SearchState.IDLE)
+        logger.info("[SEARCH] Emitting empty results reason=clear_results")
         self.results_ready.emit([])
         self.status_message.emit("Ready. Drag an image or click Browse to search.")
 
@@ -366,7 +397,12 @@ class SearchViewModel(QObject):
                 "No similar tiles found in the indexed catalog. "
                 "Try another photo, Auto Crop, or check that your catalogue is indexed."
             )
-            logger.warning("[SEARCH] Completed with 0 results for %s", self._last_query_path)
+            logger.warning(
+                "[SEARCH] Emitting empty results reason=search_completed_zero "
+                "query=%s generation=%s",
+                self._last_query_path,
+                generation,
+            )
 
         self.results_ready.emit(results)
         self.search_stats_ready.emit(len(results), self._last_elapsed_seconds)

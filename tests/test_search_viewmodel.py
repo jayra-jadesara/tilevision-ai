@@ -98,6 +98,9 @@ class FakeSearchUseCase:
     def get_searchable_count(self):
         return int(getattr(self, "searchable_count", getattr(self, "indexed_count", 1)))
 
+    def get_filter_options(self):
+        return getattr(self, "filter_options", {"brand": ["Acme"], "category": ["Floor"]})
+
 
 def _make_result(score=90.0, path="/tmp/tile.jpg"):
     tile = TileImage(file_path=path, file_name="tile.jpg", file_size=1, dimensions="1x1")
@@ -463,3 +466,77 @@ def test_hang_abort_only_when_unresponsive(qapp, tmp_path):
     vm._on_search_stall()
     assert vm.state == SearchState.ERROR
     assert errors and "stopped responding" in errors[0].lower()
+
+
+def test_set_filter_noop_does_not_research(qapp, tmp_path):
+    """Clearing a filter that was not active must not start a search."""
+    query_file = tmp_path / "query.jpg"
+    _write_query(query_file)
+    use_case = FakeSearchUseCase(results=[_make_result()])
+    vm = SearchViewModel(use_case=use_case)
+    vm.search_by_image(str(query_file))
+    assert _pump_until(lambda: vm.state == SearchState.RESULTS)
+    _drain_worker(vm)
+    assert len(use_case.calls) == 1
+
+    empty_emits = []
+    vm.results_ready.connect(lambda r: empty_emits.append(list(r)))
+    vm.set_filter("brand", "")
+    QCoreApplication.processEvents()
+    assert len(use_case.calls) == 1
+    assert vm.state == SearchState.RESULTS
+    assert all(len(r) > 0 for r in empty_emits) or empty_emits == []
+
+
+def test_catalog_filter_refresh_does_not_clear_displayed_results(qapp, tmp_path):
+    """
+    SISCON repro: auto-index → load_filter_options must not wipe results.
+
+    Simulates MainWindow._on_catalog_changed → load_filter_options after a
+    successful search, including a stale brand value that disappears.
+    """
+    query_file = tmp_path / "query.jpg"
+    _write_query(query_file)
+    use_case = FakeSearchUseCase(results=[_make_result(path=str(tmp_path / "PGYS2319.jpg"))])
+    use_case.filter_options = {
+        "brand": ["Acme"],
+        "category": ["Floor"],
+        "color": [],
+        "size": [],
+    }
+    vm = SearchViewModel(use_case=use_case)
+    vm.search_by_image(str(query_file))
+    assert _pump_until(lambda: vm.state == SearchState.RESULTS)
+    _drain_worker(vm)
+    assert len(vm.last_results) == 1
+
+    # User had a brand filter that the catalog refresh will no longer list.
+    vm._active_filters["brand"] = "GoneBrand"
+    empty_payloads = []
+    vm.results_ready.connect(lambda r: empty_payloads.append(list(r)))
+
+    # Quiet drop (what SearchView._on_filters_available does now).
+    vm.drop_filter_quietly("brand")
+    vm.load_filter_options()
+    QCoreApplication.processEvents()
+
+    assert vm.state == SearchState.RESULTS
+    assert len(vm.last_results) == 1
+    assert "brand" not in vm.active_filters
+    assert len(use_case.calls) == 1  # no auto re-search
+    assert not any(len(p) == 0 for p in empty_payloads)
+
+
+def test_health_check_indexed_zero_logs_reason(qapp, tmp_path):
+    query_file = tmp_path / "query.jpg"
+    _write_query(query_file)
+    use_case = FakeSearchUseCase(results=[_make_result()])
+    use_case.indexed_count = 0
+    vm = SearchViewModel(use_case=use_case)
+    empties = []
+    vm.results_ready.connect(lambda r: empties.append(list(r)))
+    vm.search_by_image(str(query_file))
+    QCoreApplication.processEvents()
+    assert empties and empties[0] == []
+    assert vm.state == SearchState.NO_RESULTS
+    assert use_case.calls == []  # never started worker
