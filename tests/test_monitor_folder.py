@@ -1,6 +1,7 @@
 """Tests for auto folder monitoring event handling."""
 
 import sys
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -14,6 +15,24 @@ from src.core.use_cases.monitor_folder import TileImageEventHandler
 
 def _write_png(path: Path) -> None:
     Image.new("RGB", (8, 8), color=(120, 80, 40)).save(path, format="PNG")
+
+
+def _wait_for_events(
+    events: list,
+    *,
+    timeout: float = 2.0,
+    min_count: int = 1,
+) -> None:
+    """Wait until the monitor callback has recorded events (avoids fixed-sleep flakes)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if len(events) >= min_count:
+            return
+        time.sleep(0.02)
+    raise AssertionError(
+        f"Expected at least {min_count} monitor event(s) within {timeout}s; "
+        f"got {len(events)}: {events!r}"
+    )
 
 
 @pytest.fixture()
@@ -46,9 +65,7 @@ def test_on_modified_schedules_index(tmp_path: Path, handler) -> None:
 
     with patch("src.core.use_cases.monitor_folder.validate_image", return_value=True):
         event_handler.on_modified(Event())
-        import time
-
-        time.sleep(0.35)
+        _wait_for_events(events)
 
     use_case.index_changed_file.assert_called_once()
     assert events[-1][1] == "indexed"
@@ -79,16 +96,13 @@ def test_unchanged_file_emits_skipped(tmp_path: Path, handler) -> None:
 
     with patch("src.core.use_cases.monitor_folder.validate_image", return_value=True):
         event_handler.on_created(Event())
-        import time
-
-        time.sleep(0.35)
+        _wait_for_events(events)
     assert events[-1][1] == "skipped"
 
 
 def test_inflight_filesystem_events_are_coalesced(tmp_path: Path, handler) -> None:
     """Second modify while first auto-index runs must not start a parallel pass."""
     import threading
-    import time
 
     event_handler, use_case, events = handler
     image = tmp_path / "PGYS2319.jpg"
@@ -118,7 +132,7 @@ def test_inflight_filesystem_events_are_coalesced(tmp_path: Path, handler) -> No
         time.sleep(0.2)
         assert calls["n"] == 1
         release.set()
-        time.sleep(0.5)
+        _wait_for_events(events, timeout=3.0)
 
     # Coalesced follow-up may run once more after the first finishes.
     assert calls["n"] in (1, 2)
