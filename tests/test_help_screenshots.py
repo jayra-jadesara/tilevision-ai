@@ -21,5 +21,6 @@ def test_help_step_screenshots_exist_and_are_images():
         assert path.is_file(), f"Missing help screenshot: {path}"
         assert path.stat().st_size > 10_000, f"Screenshot too small: {path}"
         with Image.open(path) as img:
-            assert img.size[0] >= 600
+            # Content-only captures should be wide and readable.
+            assert img.size[0] >= 900
             assert img.size[1] >= 400
