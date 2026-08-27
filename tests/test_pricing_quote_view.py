@@ -162,3 +162,49 @@ def test_pricing_download_copies_pdf(qapp, tmp_path, monkeypatch):
     assert dest.stat().st_size > 0
     viewer.close()
     viewer.deleteLater()
+
+
+def test_refresh_after_worker_deleted_does_not_crash(qapp, tmp_path, monkeypatch):
+    """Regression: deleteLater left a stale _worker; Refresh called isRunning() on it."""
+    from src.services import pricing_quote_service as pqs
+    from tests.test_pricing_quote_service import _sample_payload
+
+    sample = _sample_payload()
+    out = tmp_path / "quote.pdf"
+    calls = {"n": 0}
+
+    def _fake_create(**kwargs):
+        calls["n"] += 1
+        path = pqs.render_pricing_pdf(sample, output_path=out)
+        return pqs.PricingQuoteResult(pdf_path=path, source="bundled", data=sample)
+
+    monkeypatch.setattr(
+        "src.presentation.views.pricing_quote_view.create_pricing_quote_pdf",
+        _fake_create,
+    )
+    monkeypatch.setattr(
+        "src.presentation.views.pricing_quote_view.message_box.warning",
+        lambda *a, **k: None,
+    )
+
+    viewer = PricingQuoteView(theme="dark")
+    viewer.show()
+    qapp.processEvents()
+    _wait_until(lambda: viewer.pages_layout.count() >= 1, qapp=qapp)
+    first_calls = calls["n"]
+    assert first_calls >= 1
+
+    # Simulate the bug condition: Python still holds a dead QThread wrapper.
+    dead = viewer._worker
+    if dead is not None:
+        dead.deleteLater()
+        qapp.processEvents()
+        viewer._worker = dead  # stale ref (what finished+deleteLater used to leave)
+
+    # Must not raise RuntimeError: Internal C++ object already deleted.
+    viewer._load_pdf()
+    qapp.processEvents()
+    _wait_until(lambda: calls["n"] > first_calls, qapp=qapp, timeout=5.0)
+    assert calls["n"] > first_calls
+    viewer.close()
+    viewer.deleteLater()
