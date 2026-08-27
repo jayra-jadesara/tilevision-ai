@@ -1,0 +1,109 @@
+{
+  "version": 1,
+  "currency": "INR",
+  "currency_symbol": "Rs",
+  "location": "Rajkot, Gujarat",
+  "audience": "FOR TILE SHOWROOMS & MANUFACTURERS",
+  "product_name": "TileVision AI",
+  "tagline": "AI Visual Tile Search  ·  Pricing Quote",
+  "hero_title": "Find the right tile from a photo — in seconds.",
+  "hero_body": "Drop a WhatsApp image, phone photo, or crop. TileVision AI searches your catalogue visually and ranks the closest matches.",
+  "features_heading": "What TileVision AI does",
+  "features": [
+    {
+      "title": "Visual search",
+      "body": "Match tiles from customer photos, WhatsApp images, crops & room shots — not file names."
+    },
+    {
+      "title": "Your catalogue",
+      "body": "Indexes your own tile images (hundreds to thousands) into a private searchable AI index."
+    },
+    {
+      "title": "Best match first",
+      "body": "Shows ranked results with similarity % so staff can confirm the right SKU quickly."
+    },
+    {
+      "title": "Crop tools",
+      "body": "Auto Crop / Precise Crop / Manual Crop isolate the tile surface for better matches."
+    },
+    {
+      "title": "PDF catalogue",
+      "body": "Export selected matches as a professional PDF to share with the customer."
+    },
+    {
+      "title": "Works offline",
+      "body": "Desktop software for Windows & Mac — your catalogue stays on your computer."
+    }
+  ],
+  "pricing_heading": "License pricing (INR)",
+  "plans": [
+    {
+      "id": "1y",
+      "label": "1 Year",
+      "price": 38000,
+      "effective_per_year": 38000,
+      "discount_note": "-",
+      "badge": null
+    },
+    {
+      "id": "2y",
+      "label": "2 Year",
+      "price": 68400,
+      "effective_per_year": 34200,
+      "discount_note": "10% off",
+      "badge": null
+    },
+    {
+      "id": "3y",
+      "label": "3 Year",
+      "price": 96900,
+      "effective_per_year": 32300,
+      "discount_note": "15% off",
+      "badge": "Best value"
+    },
+    {
+      "id": "4y",
+      "label": "4 Year",
+      "price": 121600,
+      "effective_per_year": 30400,
+      "discount_note": "20% off",
+      "badge": null
+    },
+    {
+      "id": "lifetime",
+      "label": "Lifetime",
+      "price": 200000,
+      "effective_per_year": null,
+      "effective_label": "One-time",
+      "discount_note": "Best for long-term",
+      "badge": null
+    }
+  ],
+  "included_heading": "Included with every license",
+  "included": [
+    "Single PC activation (extra machines priced separately)",
+    "Software updates for the licensed term (Lifetime: current major version updates)",
+    "Catalogue indexing, visual search, crop tools & PDF export",
+    "Setup guidance for first-time install & first catalogue scan"
+  ],
+  "why_heading": "Why showrooms choose TileVision AI",
+  "why_points": [
+    "Cut the time staff spend matching WhatsApp / phone photos against the physical catalogue.",
+    "Reduce wrong-tile dispatches — show ranked visual matches before the order is confirmed.",
+    "Built for Indian tile businesses (Gujarat & beyond) — works with your existing photo folders."
+  ],
+  "vendor": {
+    "name": "JD Software",
+    "email": "jayrajadesara@gmail.com",
+    "phone": "(+91) 88662 77767",
+    "phone_display": "Mobile / WhatsApp: (+91) 88662 77767"
+  },
+  "footer": {
+    "validity": "Valid for discussion · Prices in INR",
+    "taxes": "Taxes included",
+    "confidential": "TileVision AI  ·  Confidential quote",
+    "made_by_prefix": "Software by"
+  },
+  "updated_at": "2026-08-27",
+  "notes": "Edit this file on GitHub main to change pricing. No new app release required."
+}
