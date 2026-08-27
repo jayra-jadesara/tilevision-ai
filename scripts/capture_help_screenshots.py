@@ -215,10 +215,10 @@ def _build_window(app: QApplication, tmp: Path, tile_paths: list[Path]) -> MainW
         },
         on_check_updates=lambda: None,
     )
-    # Avoid maximized offscreen extremes; Help cards scale screenshots ~720 logical px.
+    # Large window so content-only grabs stay sharp in Help.
     window.showNormal()
-    window.resize(1440, 960)
-    window.setMinimumSize(1440, 960)
+    window.resize(1600, 1000)
+    window.setMinimumSize(1600, 1000)
     app.processEvents()
     return window
 
@@ -232,18 +232,33 @@ def _process(app: QApplication, ms: int = 50) -> None:
             app.processEvents()
 
 
-def _grab_main(window: MainWindow, out_path: Path, app: QApplication) -> None:
-    """Grab the full main window (sidebar + content) — authentic product chrome."""
+def _grab_content(
+    window: MainWindow,
+    out_path: Path,
+    app: QApplication,
+    *,
+    max_height_ratio: float | None = None,
+) -> None:
+    """
+    Grab the content stack only (no sidebar).
+
+    Nested full-window shots inside Help look tiny and blurry — content-only
+    panels stay readable when shown next to the real sidebar.
+    """
     window.raise_()
     window.activateWindow()
-    _process(app, 80)
-    pix = window.grab()
-    # Soft crop to content if somehow oversized
-    if pix.width() > 1600:
-        pix = pix.copy(0, 0, 1440, min(960, pix.height()))
-    # Keep ~2x assets so Help HiDPI display (720 * dpr) stays sharp
-    if pix.width() > 1440:
-        pix = pix.scaledToWidth(1440, Qt.TransformationMode.SmoothTransformation)
+    _process(app, 100)
+    content = window._content_stack
+    pix = content.grab()
+    if pix.isNull() or pix.width() < 200:
+        # Fallback if stack grab fails offscreen.
+        pix = window.centralWidget().grab()
+
+    if max_height_ratio is not None and 0.3 < max_height_ratio < 1.0:
+        h = max(320, int(pix.height() * max_height_ratio))
+        pix = pix.copy(0, 0, pix.width(), min(h, pix.height()))
+
+    # Do not downscale — Help displays at ~980 logical × 2x pixels.
     out_path.parent.mkdir(parents=True, exist_ok=True)
     ok = pix.save(str(out_path), "PNG")
     if not ok:
@@ -392,22 +407,22 @@ def main() -> int:
     # ── Step 1: Choose folder (Index page, idle with folder / Browse) ──
     window._navigate(0)
     _setup_index_idle_with_folder(window)
-    _grab_main(window, HELP_DIR / OUT_NAMES[0], app)
+    _grab_content(window, HELP_DIR / OUT_NAMES[0], app, max_height_ratio=0.72)
 
     # ── Step 2: Indexing in progress ──
     window._navigate(0)
     _setup_index_progress(window)
-    _grab_main(window, HELP_DIR / OUT_NAMES[1], app)
+    _grab_content(window, HELP_DIR / OUT_NAMES[1], app, max_height_ratio=0.78)
 
     # ── Step 3: Upload customer image (empty drop zone ready for drag/browse) ──
     window._navigate(1)
     _setup_search_empty(window, app)
-    _grab_main(window, HELP_DIR / OUT_NAMES[2], app)
+    _grab_content(window, HELP_DIR / OUT_NAMES[2], app, max_height_ratio=0.70)
 
     # ── Step 4: View similar tiles ──
     window._navigate(1)
     _setup_search_results(window, app, tile_paths)
-    _grab_main(window, HELP_DIR / OUT_NAMES[3], app)
+    _grab_content(window, HELP_DIR / OUT_NAMES[3], app)
 
     # ── Step 5: Row selected — double-click / right-click affordance ──
     window._navigate(1)
@@ -418,7 +433,7 @@ def main() -> int:
     sv._status_label.setText(
         "Double-click a row to open the full photo. Right-click for more options."
     )
-    _grab_main(window, HELP_DIR / OUT_NAMES[4], app)
+    _grab_content(window, HELP_DIR / OUT_NAMES[4], app)
 
     print("\nSummary:", flush=True)
     for name in OUT_NAMES:
