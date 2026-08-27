@@ -29,6 +29,11 @@ from src.services.pricing_quote_service import (
 
 logger = logging.getLogger("tilevision.presentation.views.pricing_quote_view")
 
+# On-screen A4 preview width (points ≈ px at 96dpi would be ~794; keep a
+# readable centered sheet with left/right gutters instead of full stretch).
+_A4_PREVIEW_MAX_WIDTH = 680
+_A4_SIDE_GUTTER = 48
+
 try:
     from PySide6.QtPdf import QPdfDocument
 
@@ -106,9 +111,10 @@ class PricingQuoteView(QWidget):
         header.addWidget(self.refresh_btn)
         root.addLayout(header)
 
-        self.status_label = QLabel("Loading latest prices…")
+        self.status_label = QLabel("")
         self.status_label.setObjectName("pricingStatus")
         self.status_label.setWordWrap(True)
+        self.status_label.setVisible(False)
         root.addWidget(self.status_label)
 
         self._progress_bar = QProgressBar()
@@ -122,12 +128,15 @@ class PricingQuoteView(QWidget):
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.NoFrame)
+        self.scroll.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
         self.pages_host = QWidget()
         self.pages_layout = QVBoxLayout(self.pages_host)
-        self.pages_layout.setContentsMargins(8, 8, 8, 8)
+        self.pages_layout.setContentsMargins(
+            _A4_SIDE_GUTTER, 24, _A4_SIDE_GUTTER, 24
+        )
         self.pages_layout.setSpacing(16)
         self.pages_layout.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
         self.scroll.setWidget(self.pages_host)
@@ -185,12 +194,20 @@ class PricingQuoteView(QWidget):
         self.download_btn.setEnabled(not loading and self._pdf_path is not None)
         self._progress_bar.setVisible(loading)
 
+    def _show_status(self, text: str) -> None:
+        self.status_label.setText(text)
+        self.status_label.setVisible(bool(text))
+
+    def _clear_status(self) -> None:
+        self.status_label.clear()
+        self.status_label.setVisible(False)
+
     def _load_pdf(self) -> None:
         if self._worker is not None and self._worker.isRunning():
             return
 
         self._set_loading(True)
-        self.status_label.setText("Fetching latest prices and building PDF…")
+        self._show_status("Fetching latest prices…")
         self._clear_pages()
         self._pdf_path = None
         self.download_btn.setEnabled(False)
@@ -205,23 +222,22 @@ class PricingQuoteView(QWidget):
     def _on_load_ok(self, result: object) -> None:
         assert isinstance(result, PricingQuoteResult)
         self._pdf_path = result.pdf_path
-        source_label = {
-            "remote": "online prices.json",
-            "cache": "cached prices.json",
-            "bundled": "bundled offline prices.json",
-        }.get(result.source, result.source)
         try:
             if not self._render_pdf(result.pdf_path):
                 raise RuntimeError(
                     "Could not render PDF pages inside the app "
                     "(QtPdf / PyMuPDF unavailable)."
                 )
-            self.status_label.setText(
-                f"Showing in-app PDF · prices from {source_label}"
+            # No source/prices.json status line — keep the page clean.
+            self._clear_status()
+            logger.info(
+                "Pricing quote PDF ready in-app (source=%s path=%s)",
+                result.source,
+                result.pdf_path,
             )
         except Exception as exc:
             logger.exception("Failed to render pricing quote PDF in-app")
-            self.status_label.setText(f"Could not load pricing quote: {exc}")
+            self._show_status(f"Could not load pricing quote: {exc}")
             message_box.warning(
                 self,
                 "Pricing Quote",
@@ -231,7 +247,7 @@ class PricingQuoteView(QWidget):
             self._set_loading(False)
 
     def _on_load_err(self, message: str, is_pricing_error: bool) -> None:
-        self.status_label.setText(f"Could not load pricing quote: {message}")
+        self._show_status(f"Could not load pricing quote: {message}")
         if is_pricing_error:
             message_box.warning(
                 self,
@@ -270,7 +286,7 @@ class PricingQuoteView(QWidget):
             path += ".pdf"
         try:
             shutil.copy2(self._pdf_path, path)
-            self.status_label.setText(f"PDF saved to {path}")
+            self._show_status(f"PDF saved to {path}")
             logger.info("Pricing quote PDF downloaded to %s", path)
         except OSError as exc:
             logger.exception("Failed to save pricing quote PDF")
@@ -281,14 +297,18 @@ class PricingQuoteView(QWidget):
             )
 
     def _logical_target_width(self) -> int:
-        viewport_w = self.scroll.viewport().width() - 40
-        return max(720, viewport_w if viewport_w > 0 else 720)
+        """A4 sheet preview width — never stretch to full content width."""
+        viewport_w = self.scroll.viewport().width()
+        available = viewport_w - (2 * _A4_SIDE_GUTTER)
+        if available <= 0:
+            available = _A4_PREVIEW_MAX_WIDTH
+        return max(420, min(_A4_PREVIEW_MAX_WIDTH, available))
 
     def _device_pixel_ratio(self) -> float:
         return max(1.0, float(self.devicePixelRatioF() or 1.0))
 
     def _render_pdf(self, path: Path) -> bool:
-        """Render PDF pages as crisp HiDPI images. Never opens a browser."""
+        """Render PDF pages as crisp HiDPI A4 previews. Never opens a browser."""
         if _HAS_QTPDF and QPdfDocument is not None:
             return self._render_with_qtpdf(path)
         return self._render_with_pymupdf(path)
@@ -307,7 +327,9 @@ class PricingQuoteView(QWidget):
 
         dpr = self._device_pixel_ratio()
         logical_width = self._logical_target_width()
-        pixel_width = int(logical_width * dpr)
+        # Extra sharpness: render at least 2x even on 1.0 DPR displays.
+        render_scale = max(dpr, 2.0)
+        pixel_width = int(logical_width * render_scale)
 
         for i in range(page_count):
             point_size = doc.pagePointSize(i)
@@ -322,8 +344,8 @@ class PricingQuoteView(QWidget):
             if image.isNull():
                 continue
             pixmap = QPixmap.fromImage(image)
-            pixmap.setDevicePixelRatio(dpr)
-            self._add_page_pixmap(pixmap)
+            pixmap.setDevicePixelRatio(render_scale)
+            self._add_page_pixmap(pixmap, logical_width)
         doc.deleteLater()
         return self.pages_layout.count() > 0
 
@@ -336,10 +358,11 @@ class PricingQuoteView(QWidget):
             doc = fitz.open(str(path))
             dpr = self._device_pixel_ratio()
             logical_width = self._logical_target_width()
-            pixel_width = int(logical_width * dpr)
+            render_scale = max(dpr, 2.0)
+            pixel_width = int(logical_width * render_scale)
             for page in doc:
                 rect = page.rect
-                scale = pixel_width / float(rect.width) if rect.width else 2.0 * dpr
+                scale = pixel_width / float(rect.width) if rect.width else 2.0 * render_scale
                 pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
                 image = QImage(
                     pix.samples,
@@ -349,20 +372,24 @@ class PricingQuoteView(QWidget):
                     QImage.Format_RGB888,
                 ).copy()
                 pixmap = QPixmap.fromImage(image)
-                pixmap.setDevicePixelRatio(dpr)
-                self._add_page_pixmap(pixmap)
+                pixmap.setDevicePixelRatio(render_scale)
+                self._add_page_pixmap(pixmap, logical_width)
             doc.close()
             return self.pages_layout.count() > 0
         except Exception:
             logger.exception("PyMuPDF PDF render failed")
             return False
 
-    def _add_page_pixmap(self, pixmap: QPixmap) -> None:
+    def _add_page_pixmap(self, pixmap: QPixmap, logical_width: int) -> None:
         page = QLabel()
         page.setAlignment(Qt.AlignCenter)
         page.setPixmap(pixmap)
+        # Lock to A4 preview width so the sheet does not stretch edge-to-edge.
+        dpr = max(1.0, float(pixmap.devicePixelRatio() or 1.0))
+        logical_height = int(round(pixmap.height() / dpr))
+        page.setFixedSize(logical_width, logical_height)
         page.setStyleSheet(
             "QLabel { background: white; border: 1px solid #94a3b8; "
-            "border-radius: 4px; }"
+            "border-radius: 2px; }"
         )
-        self.pages_layout.addWidget(page)
+        self.pages_layout.addWidget(page, 0, Qt.AlignHCenter)
