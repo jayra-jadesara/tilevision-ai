@@ -1,13 +1,14 @@
-"""In-app Pricing Quote PDF viewer (never opens a browser)."""
+"""In-app Pricing Quote page (stack page — never opens a browser)."""
 
 from __future__ import annotations
 
+import logging
+import shutil
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize, QTimer
+from PySide6.QtCore import Qt, QSize, QThread, Signal
 from PySide6.QtGui import QPixmap, QImage
 from PySide6.QtWidgets import (
-    QDialog,
     QVBoxLayout,
     QHBoxLayout,
     QLabel,
@@ -15,13 +16,14 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QWidget,
     QFrame,
+    QProgressBar,
+    QFileDialog,
 )
-
-import logging
 
 from src.presentation.dialogs import message_box
 from src.services.pricing_quote_service import (
     PricingQuoteError,
+    PricingQuoteResult,
     create_pricing_quote_pdf,
 )
 
@@ -36,24 +38,53 @@ except ImportError:  # pragma: no cover
     _HAS_QTPDF = False
 
 
-class PricingQuoteView(QDialog):
-    """Modal dialog that generates and displays the Pricing Quote PDF inside the app."""
+class _PricingLoadWorker(QThread):
+    """Fetch prices.json + build PDF off the UI thread so the loader can animate."""
+
+    finished_ok = Signal(object)
+    finished_err = Signal(str, bool)  # message, is_pricing_quote_error
+
+    def run(self) -> None:
+        try:
+            result = create_pricing_quote_pdf()
+            self.finished_ok.emit(result)
+        except PricingQuoteError as exc:
+            self.finished_err.emit(str(exc), True)
+        except Exception as exc:  # pragma: no cover - surfaced to UI
+            logger.exception("Pricing quote worker failed")
+            self.finished_err.emit(str(exc), False)
+
+
+class PricingQuoteView(QWidget):
+    """Content-stack page that generates and displays the Pricing Quote PDF."""
 
     def __init__(self, parent=None, theme: str = "dark"):
         super().__init__(parent)
         self._theme = theme if theme in ("dark", "light") else "dark"
         self._pdf_path: Path | None = None
-        self.setWindowTitle("Pricing Quote")
-        self.setMinimumSize(720, 860)
-        self.resize(780, 920)
-        self.setModal(True)
+        self._worker: _PricingLoadWorker | None = None
+        self._loaded_once = False
+        self.setObjectName("PricingQuoteView")
         self._build_ui()
         self._apply_theme()
-        QTimer.singleShot(0, self._load_pdf)
+
+    def set_theme(self, theme: str) -> None:
+        self._theme = theme if theme in ("dark", "light") else "dark"
+        self._apply_theme()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        if not self._loaded_once:
+            self._loaded_once = True
+            self.refresh_prices()
+
+    def refresh_prices(self) -> None:
+        """Public entry used by Refresh button and first show."""
+        self._load_pdf()
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 16, 16, 16)
+        root.setContentsMargins(24, 20, 24, 16)
         root.setSpacing(12)
 
         header = QHBoxLayout()
@@ -61,6 +92,13 @@ class PricingQuoteView(QDialog):
         title.setObjectName("pricingTitle")
         header.addWidget(title)
         header.addStretch()
+
+        self.download_btn = QPushButton("Download PDF")
+        self.download_btn.setCursor(Qt.PointingHandCursor)
+        self.download_btn.setEnabled(False)
+        self.download_btn.setToolTip("Save the pricing quote PDF to your computer")
+        self.download_btn.clicked.connect(self._download_pdf)
+        header.addWidget(self.download_btn)
 
         self.refresh_btn = QPushButton("Refresh prices")
         self.refresh_btn.setCursor(Qt.PointingHandCursor)
@@ -72,6 +110,14 @@ class PricingQuoteView(QDialog):
         self.status_label.setObjectName("pricingStatus")
         self.status_label.setWordWrap(True)
         root.addWidget(self.status_label)
+
+        self._progress_bar = QProgressBar()
+        self._progress_bar.setObjectName("PricingProgressBar")
+        self._progress_bar.setRange(0, 0)  # indeterminate — matches Search/Duplicates
+        self._progress_bar.setTextVisible(False)
+        self._progress_bar.setFixedHeight(4)
+        self._progress_bar.setVisible(False)
+        root.addWidget(self._progress_bar)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -87,22 +133,18 @@ class PricingQuoteView(QDialog):
         self.scroll.setWidget(self.pages_host)
         root.addWidget(self.scroll, 1)
 
-        footer = QHBoxLayout()
-        footer.addStretch()
-        close_btn = QPushButton("Close")
-        close_btn.setCursor(Qt.PointingHandCursor)
-        close_btn.clicked.connect(self.accept)
-        footer.addWidget(close_btn)
-        root.addLayout(footer)
-
     def _apply_theme(self) -> None:
         if self._theme == "light":
             self.setStyleSheet(
                 """
-                QDialog { background: #f4f7fb; color: #0f172a; }
+                #PricingQuoteView { background: #f4f7fb; color: #0f172a; }
                 QLabel#pricingTitle { font-size: 20px; font-weight: 700; color: #0b1f3a; }
                 QLabel#pricingStatus { color: #475569; font-size: 12px; }
                 QScrollArea { background: #e8eef6; border: 1px solid #cbd5e1; border-radius: 10px; }
+                QProgressBar#PricingProgressBar {
+                    background: #e2e8f0; border: none; border-radius: 2px;
+                }
+                QProgressBar#PricingProgressBar::chunk { background: #0284c7; }
                 QPushButton {
                     background: #0b1f3a; color: white; border: none;
                     border-radius: 8px; padding: 8px 14px; font-weight: 600;
@@ -114,10 +156,14 @@ class PricingQuoteView(QDialog):
         else:
             self.setStyleSheet(
                 """
-                QDialog { background: #0b1220; color: #e2e8f0; }
+                #PricingQuoteView { background: #0b1220; color: #e2e8f0; }
                 QLabel#pricingTitle { font-size: 20px; font-weight: 700; color: #f8fafc; }
                 QLabel#pricingStatus { color: #94a3b8; font-size: 12px; }
                 QScrollArea { background: #111827; border: 1px solid #334155; border-radius: 10px; }
+                QProgressBar#PricingProgressBar {
+                    background: #1e293b; border: none; border-radius: 2px;
+                }
+                QProgressBar#PricingProgressBar::chunk { background: #38bdf8; }
                 QPushButton {
                     background: #38bdf8; color: #0b1f3a; border: none;
                     border-radius: 8px; padding: 8px 14px; font-weight: 600;
@@ -134,38 +180,47 @@ class PricingQuoteView(QDialog):
             if widget is not None:
                 widget.deleteLater()
 
+    def _set_loading(self, loading: bool) -> None:
+        self.refresh_btn.setEnabled(not loading)
+        self.download_btn.setEnabled(not loading and self._pdf_path is not None)
+        self._progress_bar.setVisible(loading)
+
     def _load_pdf(self) -> None:
-        self.refresh_btn.setEnabled(False)
+        if self._worker is not None and self._worker.isRunning():
+            return
+
+        self._set_loading(True)
         self.status_label.setText("Fetching latest prices and building PDF…")
         self._clear_pages()
+        self._pdf_path = None
+        self.download_btn.setEnabled(False)
+
+        worker = _PricingLoadWorker(self)
+        worker.finished_ok.connect(self._on_load_ok)
+        worker.finished_err.connect(self._on_load_err)
+        worker.finished.connect(worker.deleteLater)
+        self._worker = worker
+        worker.start()
+
+    def _on_load_ok(self, result: object) -> None:
+        assert isinstance(result, PricingQuoteResult)
+        self._pdf_path = result.pdf_path
+        source_label = {
+            "remote": "online prices.json",
+            "cache": "cached prices.json",
+            "bundled": "bundled offline prices.json",
+        }.get(result.source, result.source)
         try:
-            result = create_pricing_quote_pdf()
-            self._pdf_path = result.pdf_path
-            source_label = {
-                "remote": "online prices.json",
-                "cache": "cached prices.json",
-                "bundled": "bundled offline prices.json",
-            }.get(result.source, result.source)
-            self.status_label.setText(
-                f"Showing in-app PDF · prices from {source_label}"
-            )
             if not self._render_pdf(result.pdf_path):
                 raise RuntimeError(
                     "Could not render PDF pages inside the app "
                     "(QtPdf / PyMuPDF unavailable)."
                 )
-        except PricingQuoteError as exc:
-            logger.warning("Pricing quote unavailable: %s", exc)
-            self.status_label.setText(f"Could not load pricing quote: {exc}")
-            message_box.warning(
-                self,
-                "Pricing Quote",
-                "Could not load the pricing quote right now.\n\n"
-                f"{exc}\n\n"
-                "Check your internet connection and try again.",
+            self.status_label.setText(
+                f"Showing in-app PDF · prices from {source_label}"
             )
         except Exception as exc:
-            logger.exception("Failed to load pricing quote PDF in-app")
+            logger.exception("Failed to render pricing quote PDF in-app")
             self.status_label.setText(f"Could not load pricing quote: {exc}")
             message_box.warning(
                 self,
@@ -173,10 +228,67 @@ class PricingQuoteView(QDialog):
                 f"Could not load the pricing quote PDF inside the app.\n\n{exc}",
             )
         finally:
-            self.refresh_btn.setEnabled(True)
+            self._set_loading(False)
+
+    def _on_load_err(self, message: str, is_pricing_error: bool) -> None:
+        self.status_label.setText(f"Could not load pricing quote: {message}")
+        if is_pricing_error:
+            message_box.warning(
+                self,
+                "Pricing Quote",
+                "Could not load the pricing quote right now.\n\n"
+                f"{message}\n\n"
+                "Check your internet connection and try again.",
+            )
+        else:
+            message_box.warning(
+                self,
+                "Pricing Quote",
+                f"Could not load the pricing quote PDF inside the app.\n\n{message}",
+            )
+        self._set_loading(False)
+
+    def _download_pdf(self) -> None:
+        if self._pdf_path is None or not self._pdf_path.is_file():
+            message_box.information(
+                self,
+                "Download PDF",
+                "No pricing quote PDF is ready yet. Click Refresh prices first.",
+            )
+            return
+
+        default_name = "TileVision_AI_Pricing_Quote.pdf"
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Download Pricing Quote PDF",
+            str(Path.home() / default_name),
+            "PDF Files (*.pdf)",
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".pdf"):
+            path += ".pdf"
+        try:
+            shutil.copy2(self._pdf_path, path)
+            self.status_label.setText(f"PDF saved to {path}")
+            logger.info("Pricing quote PDF downloaded to %s", path)
+        except OSError as exc:
+            logger.exception("Failed to save pricing quote PDF")
+            message_box.warning(
+                self,
+                "Download PDF",
+                f"Could not save the PDF:\n{exc}",
+            )
+
+    def _logical_target_width(self) -> int:
+        viewport_w = self.scroll.viewport().width() - 40
+        return max(720, viewport_w if viewport_w > 0 else 720)
+
+    def _device_pixel_ratio(self) -> float:
+        return max(1.0, float(self.devicePixelRatioF() or 1.0))
 
     def _render_pdf(self, path: Path) -> bool:
-        """Render PDF pages as images inside the dialog. Never opens a browser."""
+        """Render PDF pages as crisp HiDPI images. Never opens a browser."""
         if _HAS_QTPDF and QPdfDocument is not None:
             return self._render_with_qtpdf(path)
         return self._render_with_pymupdf(path)
@@ -193,12 +305,15 @@ class PricingQuoteView(QDialog):
         if page_count <= 0:
             return False
 
-        target_width = max(640, self.scroll.viewport().width() - 40)
+        dpr = self._device_pixel_ratio()
+        logical_width = self._logical_target_width()
+        pixel_width = int(logical_width * dpr)
+
         for i in range(page_count):
             point_size = doc.pagePointSize(i)
             if point_size.width() <= 0:
                 continue
-            scale = target_width / float(point_size.width())
+            scale = pixel_width / float(point_size.width())
             img_size = QSize(
                 int(point_size.width() * scale),
                 int(point_size.height() * scale),
@@ -206,7 +321,9 @@ class PricingQuoteView(QDialog):
             image: QImage = doc.render(i, img_size)
             if image.isNull():
                 continue
-            self._add_page_pixmap(QPixmap.fromImage(image))
+            pixmap = QPixmap.fromImage(image)
+            pixmap.setDevicePixelRatio(dpr)
+            self._add_page_pixmap(pixmap)
         doc.deleteLater()
         return self.pages_layout.count() > 0
 
@@ -217,10 +334,12 @@ class PricingQuoteView(QDialog):
             return False
         try:
             doc = fitz.open(str(path))
-            target_width = max(640, self.scroll.viewport().width() - 40)
+            dpr = self._device_pixel_ratio()
+            logical_width = self._logical_target_width()
+            pixel_width = int(logical_width * dpr)
             for page in doc:
                 rect = page.rect
-                scale = target_width / float(rect.width) if rect.width else 2.0
+                scale = pixel_width / float(rect.width) if rect.width else 2.0 * dpr
                 pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
                 image = QImage(
                     pix.samples,
@@ -229,7 +348,9 @@ class PricingQuoteView(QDialog):
                     pix.stride,
                     QImage.Format_RGB888,
                 ).copy()
-                self._add_page_pixmap(QPixmap.fromImage(image))
+                pixmap = QPixmap.fromImage(image)
+                pixmap.setDevicePixelRatio(dpr)
+                self._add_page_pixmap(pixmap)
             doc.close()
             return self.pages_layout.count() > 0
         except Exception:

@@ -1,17 +1,11 @@
 """
-Help / User Guide View for TileVision AI (Task E: Help / User Guide).
+Help / User Guide page for TileVision AI.
 
-A modal dialog walking a new user through the core workflow in 5 simple
-steps: choose a folder, index images, upload a customer photo, view
-similar tiles, and double-click to open the match.
-
-Rewritten for clarity after user feedback that the original version was
-"more difficult to understand" — plain, short sentences, one clear action
-per step, and a visual step number instead of dense paragraphs. Ends with
-a small branded footer (logo + "Made by JD Software" + contact number),
-answering a second piece of feedback asking for that credit to appear
-somewhere in the app.
+A normal content-stack page (not a popup) walking a new user through the
+core workflow in 5 simple steps.
 """
+
+from __future__ import annotations
 
 import logging
 from pathlib import Path
@@ -20,11 +14,9 @@ from typing import List, NamedTuple, Optional
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QDialog,
     QVBoxLayout,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QScrollArea,
     QWidget,
     QFrame,
@@ -40,6 +32,9 @@ _LOGO_SMALL_PATH = _RESOURCES_DIR / "logo_small.png"
 _COMPANY_NAME = "JD Software"
 _CONTACT_NUMBER = "88662 77767"
 
+# Logical display width for step screenshots (HiDPI renders at width * dpr).
+_SCREENSHOT_LOGICAL_WIDTH = 720
+
 
 class _HelpStep(NamedTuple):
     number: int
@@ -49,8 +44,6 @@ class _HelpStep(NamedTuple):
     screenshot_filename: str
 
 
-# Kept deliberately short — one plain-language sentence per step, not a
-# paragraph. If it doesn't fit on one line at a glance, it's too long.
 _STEPS: List[_HelpStep] = [
     _HelpStep(
         1, "📂", "Pick Your Tile Photos Folder",
@@ -84,20 +77,18 @@ _STEPS: List[_HelpStep] = [
 ]
 
 
-class HelpView(QDialog):
-    """Modal Help / User Guide dialog."""
+class HelpView(QWidget):
+    """Help / User Guide content page (stack page, not a dialog)."""
 
     def __init__(self, parent: Optional[QWidget] = None, theme: str = "dark") -> None:
         super().__init__(parent)
         self._theme = theme
-        self.setWindowTitle("Help & User Guide")
-        self.resize(900, 720)
-        self.setMinimumSize(860, 680)
+        self.setObjectName("HelpView")
         self._setup_ui()
         self._apply_styles()
 
     def set_theme(self, theme: str) -> None:
-        """Re-skin this dialog for a newly-selected theme."""
+        """Re-skin this page for a newly-selected theme."""
         self._theme = theme
         self._apply_styles()
 
@@ -119,7 +110,7 @@ class HelpView(QDialog):
         steps_container.setObjectName("HelpContent")
         steps_container.setAutoFillBackground(True)
         steps_layout = QVBoxLayout(steps_container)
-        steps_layout.setContentsMargins(10,10,10,10)
+        steps_layout.setContentsMargins(10, 10, 10, 10)
         steps_layout.setSpacing(10)
 
         for step in _STEPS:
@@ -142,7 +133,9 @@ class HelpView(QDialog):
         title.setObjectName("PageTitle")
         layout.addWidget(title)
 
-        subtitle = QLabel("Five simple steps — from a folder of photos to instant matches.")
+        subtitle = QLabel(
+            "Five simple steps — from a folder of photos to instant matches."
+        )
         subtitle.setObjectName("PageSubtitle")
         layout.addWidget(subtitle)
 
@@ -184,17 +177,19 @@ class HelpView(QDialog):
         return card
 
     def _build_screenshot_placeholder(self, step: _HelpStep) -> QWidget:
-        """
-        Shows the real screenshot if one has been dropped into
-        src/resources/help/, otherwise a labeled placeholder box so the
-        layout/spacing is correct ahead of screenshots being captured.
-        """
+        """Show the step screenshot at device-pixel resolution (avoids HiDPI blur)."""
         path = self._screenshot_path(step.screenshot_filename)
         if path.exists():
             pixmap = QPixmap(str(path))
             if not pixmap.isNull():
                 label = QLabel()
-                scaled = pixmap.scaledToWidth(540, Qt.TransformationMode.SmoothTransformation)
+                label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+                dpr = max(1.0, float(self.devicePixelRatioF() or 1.0))
+                target_px = int(_SCREENSHOT_LOGICAL_WIDTH * dpr)
+                scaled = pixmap.scaledToWidth(
+                    target_px, Qt.TransformationMode.SmoothTransformation
+                )
+                scaled.setDevicePixelRatio(dpr)
                 label.setPixmap(scaled)
                 return label
 
@@ -218,46 +213,32 @@ class HelpView(QDialog):
         logo_label = QLabel()
         pixmap = QPixmap(str(_LOGO_SMALL_PATH))
         if not pixmap.isNull():
-            logo_label.setPixmap(
-                pixmap.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            dpr = max(1.0, float(self.devicePixelRatioF() or 1.0))
+            size_px = int(48 * dpr)
+            scaled = pixmap.scaled(
+                size_px,
+                size_px,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
             )
+            scaled.setDevicePixelRatio(dpr)
+            logo_label.setPixmap(scaled)
             layout.addWidget(logo_label)
 
-        credit_label = QLabel(f"TileVision AI — made by {_COMPANY_NAME}  •  📞 {_CONTACT_NUMBER}")
+        credit_label = QLabel(
+            f"TileVision AI — made by {_COMPANY_NAME}  •  📞 {_CONTACT_NUMBER}"
+        )
         credit_label.setObjectName("CreditLabel")
         layout.addWidget(credit_label)
-
         layout.addStretch()
-
-        pricing_button = QPushButton("Pricing Quote (PDF)")
-        pricing_button.setObjectName("PricingButton")
-        pricing_button.setToolTip(
-            "Downloads the latest prices and shows the quote PDF inside the app "
-            "(not in a browser). Works offline using the last saved prices."
-        )
-        pricing_button.clicked.connect(self._on_pricing_quote_clicked)
-        layout.addWidget(pricing_button)
-
-        close_button = QPushButton("Got it")
-        close_button.setObjectName("CloseButton")
-        close_button.clicked.connect(self.accept)
-        layout.addWidget(close_button)
-
         return footer
-
-    def _on_pricing_quote_clicked(self) -> None:
-        """Open the Pricing Quote PDF viewer inside the app (not a browser)."""
-        from src.presentation.views.pricing_quote_view import PricingQuoteView
-
-        viewer = PricingQuoteView(parent=self, theme=self._theme)
-        viewer.exec()
 
     def _apply_styles(self) -> None:
         p = get_palette(self._theme)
         self.setStyleSheet(
             get_shared_view_qss(self._theme)
             + f"""
-            QDialog {{ background-color: {p['bg_app']}; }}
+            #HelpView {{ background-color: {p['bg_app']}; }}
             QWidget {{ color: {p['text_primary']}; }}
             #StepCard {{
                 background-color: {p['bg_panel']}; border: 1px solid {p['border']}; border-radius: 10px;
@@ -278,10 +259,5 @@ class HelpView(QDialog):
             }}
             #Footer {{ border-top: 1px solid {p['border']}; margin-top: 4px; }}
             #CreditLabel {{ color: {p['text_muted']}; font-size: 11px; }}
-            #PricingButton {{
-                background-color: {p['accent']}; color: {p['button_text']};
-                border: none; border-radius: 6px; padding: 8px 14px; font-weight: 600;
-            }}
-            #PricingButton:hover {{ background-color: {p['accent_hover']}; }}
             """
         )

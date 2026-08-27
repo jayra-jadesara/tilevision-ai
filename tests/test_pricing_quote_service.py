@@ -172,8 +172,8 @@ def test_create_pricing_quote_pdf_offline(monkeypatch, tmp_path):
     assert "JD Software" in json.dumps(result.data)
 
 
-def test_help_view_has_pricing_button():
+def test_help_view_has_no_pricing_button():
     source = Path("src/presentation/views/help_view.py").read_text(encoding="utf-8")
-    assert "Pricing Quote (PDF)" in source
-    assert "PricingQuoteView" in source
+    assert "Pricing Quote (PDF)" not in source
+    assert "class HelpView(QWidget)" in source
     assert "QDesktopServices.openUrl" not in source

@@ -47,7 +47,6 @@ from src.core.use_cases.find_duplicates import FindDuplicatesUseCase
 from src.presentation.viewmodels.indexing_viewmodel import IndexingViewModel
 from src.presentation.viewmodels.search_viewmodel import SearchViewModel
 from src.presentation.views.duplicates_view import DuplicatesView
-from src.presentation.views.help_view import HelpView
 from src.presentation.views.license_view import LicenseView
 from src.presentation.views.main_window import DashboardDataProviders, MainWindow
 from src.presentation.views.setup_wizard import SetupWizardDialog
@@ -199,17 +198,25 @@ def test_settings_export_profiles_tab(full_main_window):
 
 def test_all_pages_cycle_without_error(full_main_window):
     window = full_main_window
-    for index in (0, 1, 2, 3, 0, 1):
+    for index in (0, 1, 2, 3, 4, 5, 0, 1):
         window._navigate(index)
         assert window._content_stack.currentIndex() == index
 
 
-def test_help_dialog_opens(full_main_window):
+def test_help_page_opens(full_main_window):
     window = full_main_window
-    dialog = HelpView(parent=window, theme=window._current_theme)
-    dialog.show()
-    assert dialog.windowTitle()
-    dialog.close()
+    window._navigate(4)
+    assert window._content_stack.currentIndex() == 4
+    assert window._help_view is window._content_stack.currentWidget()
+    assert window._nav_help_button.isChecked()
+
+
+def test_pricing_page_opens(full_main_window):
+    window = full_main_window
+    window._navigate(5)
+    assert window._content_stack.currentIndex() == 5
+    assert window._pricing_view is window._content_stack.currentWidget()
+    assert window._nav_pricing_button.isChecked()
 
 
 def test_duplicates_dialog_opens(full_main_window):
