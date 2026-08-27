@@ -202,8 +202,23 @@ class PricingQuoteView(QWidget):
         self.status_label.clear()
         self.status_label.setVisible(False)
 
+    def _worker_is_busy(self) -> bool:
+        """True if a load is in flight. Survives deleteLater of a finished worker."""
+        worker = self._worker
+        if worker is None:
+            return False
+        try:
+            return bool(worker.isRunning())
+        except RuntimeError:
+            # C++ QThread already destroyed (deleteLater) — drop stale Python ref.
+            self._worker = None
+            return False
+
+    def _on_worker_finished(self) -> None:
+        self._worker = None
+
     def _load_pdf(self) -> None:
-        if self._worker is not None and self._worker.isRunning():
+        if self._worker_is_busy():
             return
 
         self._set_loading(True)
@@ -215,6 +230,8 @@ class PricingQuoteView(QWidget):
         worker = _PricingLoadWorker(self)
         worker.finished_ok.connect(self._on_load_ok)
         worker.finished_err.connect(self._on_load_err)
+        # Clear our handle before deleteLater so Refresh never touches a dead QObject.
+        worker.finished.connect(self._on_worker_finished)
         worker.finished.connect(worker.deleteLater)
         self._worker = worker
         worker.start()
