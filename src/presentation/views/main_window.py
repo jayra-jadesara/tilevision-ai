@@ -52,6 +52,7 @@ from src.presentation.views.duplicates_view import DuplicatesView
 from src.presentation.views.settings_view import SettingsView
 from src.presentation.views.dashboard_view import DashboardView
 from src.presentation.views.help_view import HelpView
+from src.presentation.views.pricing_quote_view import PricingQuoteView
 from src.theme.theme_manager import adapt_legacy_stylesheet, get_app_stylesheet, get_palette
 from src.utils.brand_assets import (
     APP_ICON_PATH,
@@ -413,6 +414,13 @@ class MainWindow(QMainWindow):
         self._nav_help_button.clicked.connect(self._on_help_clicked)
         layout.addWidget(self._nav_help_button)
 
+        self._nav_pricing_button = NavButton(
+            "Pricing", "pricing", theme=self._current_theme, checkable=False,
+        )
+        self._nav_pricing_button.setToolTip("Pricing Quote (opens inside the app)")
+        self._nav_pricing_button.clicked.connect(self._on_pricing_clicked)
+        layout.addWidget(self._nav_pricing_button)
+
         layout.addStretch()
 
         # ── Bottom: Version Label (credits JD Software via tooltip — the
@@ -610,6 +618,7 @@ class MainWindow(QMainWindow):
             self._nav_settings_button,
             self._nav_duplicates_button,
             self._nav_help_button,
+            self._nav_pricing_button,
         ]:
             btn.setChecked(False)
 
@@ -669,6 +678,12 @@ class MainWindow(QMainWindow):
         dialog.exec()
         self._sync_nav_selection()
 
+    def _on_pricing_clicked(self) -> None:
+        """Open the Pricing Quote PDF inside the app (never in a browser)."""
+        dialog = PricingQuoteView(parent=self, theme=self._current_theme)
+        dialog.exec()
+        self._sync_nav_selection()
+
     def _on_theme_changed_request(self, theme: str) -> None:
         """
         Apply the new theme app-wide: the MainWindow chrome (via the
@@ -696,6 +711,7 @@ class MainWindow(QMainWindow):
             self._nav_catalog_button,
             self._nav_settings_button,
             self._nav_help_button,
+            self._nav_pricing_button,
         ):
             btn.set_nav_theme(theme)
 
