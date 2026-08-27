@@ -39,7 +39,6 @@ from src.licensing.hardware import get_machine_fingerprint
 from src.presentation.viewmodels.indexing_viewmodel import IndexingViewModel
 from src.presentation.viewmodels.search_viewmodel import SearchViewModel
 from src.presentation.views.duplicates_view import DuplicatesView
-from src.presentation.views.help_view import HelpView
 from src.presentation.views.license_view import LicenseView
 from src.presentation.views.main_window import DashboardDataProviders, MainWindow
 from src.presentation.views.setup_wizard import SetupWizardDialog
@@ -253,10 +252,16 @@ def test_mac_settings_export_profiles_tab(mac_main_window):
 
 def test_mac_help_from_sidebar(mac_main_window):
     window = mac_main_window
-    dialog = HelpView(parent=window, theme=window._current_theme)
-    dialog.show()
-    assert dialog.windowTitle()
-    dialog.close()
+    window._navigate(4)
+    assert window._content_stack.currentIndex() == 4
+    assert window._nav_help_button.isChecked()
+
+
+def test_mac_pricing_from_sidebar(mac_main_window):
+    window = mac_main_window
+    window._navigate(5)
+    assert window._content_stack.currentIndex() == 5
+    assert window._nav_pricing_button.isChecked()
 
 
 def test_mac_duplicates_from_sidebar(mac_main_window):
@@ -275,7 +280,7 @@ def test_mac_all_pages_and_themes(mac_main_window):
     window = mac_main_window
     for theme in ("light", "dark"):
         window._on_theme_changed_request(theme)
-        for index in range(4):
+        for index in range(6):
             window._navigate(index)
             view = window._content_stack.currentWidget()
             assert view is not None

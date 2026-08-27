@@ -215,10 +215,10 @@ def _build_window(app: QApplication, tmp: Path, tile_paths: list[Path]) -> MainW
         },
         on_check_updates=lambda: None,
     )
-    # Avoid maximized offscreen extremes; Help cards scale to ~540px wide.
+    # Avoid maximized offscreen extremes; Help cards scale screenshots ~720 logical px.
     window.showNormal()
-    window.resize(1100, 720)
-    window.setMinimumSize(1100, 720)
+    window.resize(1440, 960)
+    window.setMinimumSize(1440, 960)
     app.processEvents()
     return window
 
@@ -239,11 +239,11 @@ def _grab_main(window: MainWindow, out_path: Path, app: QApplication) -> None:
     _process(app, 80)
     pix = window.grab()
     # Soft crop to content if somehow oversized
-    if pix.width() > 1200:
-        pix = pix.copy(0, 0, 1100, min(720, pix.height()))
-    # Scale down slightly if still huge file-wise
-    if pix.width() > 1100:
-        pix = pix.scaledToWidth(1100, Qt.TransformationMode.SmoothTransformation)
+    if pix.width() > 1600:
+        pix = pix.copy(0, 0, 1440, min(960, pix.height()))
+    # Keep ~2x assets so Help HiDPI display (720 * dpr) stays sharp
+    if pix.width() > 1440:
+        pix = pix.scaledToWidth(1440, Qt.TransformationMode.SmoothTransformation)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     ok = pix.save(str(out_path), "PNG")
     if not ok:

@@ -335,6 +335,14 @@ class MainWindow(QMainWindow):
         else:
             self._content_stack.addWidget(QWidget())  # index 3
 
+        # index 4: Help (normal page, not a popup)
+        self._help_view = HelpView(theme=self._current_theme)
+        self._content_stack.addWidget(self._help_view)
+
+        # index 5: Pricing Quote (normal page, not a popup)
+        self._pricing_view = PricingQuoteView(theme=self._current_theme)
+        self._content_stack.addWidget(self._pricing_view)
+
         # Activate the first nav button by default
         self._nav_index_button.setChecked(True)
         self._content_stack.setCurrentIndex(0)
@@ -407,18 +415,16 @@ class MainWindow(QMainWindow):
         self._nav_button_group.addButton(self._nav_settings_button)
         layout.addWidget(self._nav_settings_button)
 
-        self._nav_help_button = NavButton(
-            "Help", "help", theme=self._current_theme, checkable=False,
-        )
+        self._nav_help_button = NavButton("Help", "help", theme=self._current_theme)
         self._nav_help_button.setToolTip("Help & User Guide")
-        self._nav_help_button.clicked.connect(self._on_help_clicked)
+        self._nav_help_button.clicked.connect(lambda: self._navigate(4))
+        self._nav_button_group.addButton(self._nav_help_button)
         layout.addWidget(self._nav_help_button)
 
-        self._nav_pricing_button = NavButton(
-            "Pricing", "pricing", theme=self._current_theme, checkable=False,
-        )
-        self._nav_pricing_button.setToolTip("Pricing Quote (opens inside the app)")
-        self._nav_pricing_button.clicked.connect(self._on_pricing_clicked)
+        self._nav_pricing_button = NavButton("Pricing", "pricing", theme=self._current_theme)
+        self._nav_pricing_button.setToolTip("Pricing Quote (in-app PDF)")
+        self._nav_pricing_button.clicked.connect(lambda: self._navigate(5))
+        self._nav_button_group.addButton(self._nav_pricing_button)
         layout.addWidget(self._nav_pricing_button)
 
         layout.addStretch()
@@ -426,13 +432,13 @@ class MainWindow(QMainWindow):
         # ── Bottom: Version Label (credits JD Software via tooltip — the
         # sidebar is too narrow to show the full credit line as text; the
         # complete "Made by JD Software" + contact number also appears in
-        # the Help dialog's footer for anyone who wants it front-and-center)
+        # the Help page footer for anyone who wants it front-and-center)
         version_label = QLabel(f"v{APP_VERSION}")
         version_label.setObjectName("VersionLabel")
         version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         version_label.setToolTip(f"TileVision AI v{APP_VERSION}\nMade by JD Software\nContact: 88662 77767")
         version_label.setCursor(Qt.CursorShape.PointingHandCursor)
-        version_label.mousePressEvent = lambda event: self._on_help_clicked()
+        version_label.mousePressEvent = lambda event: self._navigate(4)
         layout.addWidget(version_label)
 
         return sidebar
@@ -628,6 +634,8 @@ class MainWindow(QMainWindow):
             1: self._nav_search_button,
             2: self._nav_catalog_button,
             3: self._nav_settings_button,
+            4: self._nav_help_button,
+            5: self._nav_pricing_button,
         }
         if index in nav_map:
             nav_map[index].setChecked(True)
@@ -672,18 +680,6 @@ class MainWindow(QMainWindow):
         self._navigate(1)
         self._search_viewmodel.repeat_search(query_image_path)
 
-    def _on_help_clicked(self) -> None:
-        """Open the Help & User Guide dialog (Task E)."""
-        dialog = HelpView(parent=self, theme=self._current_theme)
-        dialog.exec()
-        self._sync_nav_selection()
-
-    def _on_pricing_clicked(self) -> None:
-        """Open the Pricing Quote PDF inside the app (never in a browser)."""
-        dialog = PricingQuoteView(parent=self, theme=self._current_theme)
-        dialog.exec()
-        self._sync_nav_selection()
-
     def _on_theme_changed_request(self, theme: str) -> None:
         """
         Apply the new theme app-wide: the MainWindow chrome (via the
@@ -699,7 +695,14 @@ class MainWindow(QMainWindow):
             app.setProperty("tilevision_theme", theme)
         self._apply_styles()
 
-        for view_attr in ("_indexing_view", "_search_view", "_dashboard_view", "_settings_view"):
+        for view_attr in (
+            "_indexing_view",
+            "_search_view",
+            "_dashboard_view",
+            "_settings_view",
+            "_help_view",
+            "_pricing_view",
+        ):
             view = getattr(self, view_attr, None)
             if view is not None and hasattr(view, "set_theme"):
                 view.set_theme(theme)
