@@ -17,10 +17,9 @@ import logging
 from pathlib import Path
 from typing import List, NamedTuple, Optional
 
-from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QPixmap, QDesktopServices, QCursor
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QApplication,
     QDialog,
     QVBoxLayout,
     QHBoxLayout,
@@ -31,7 +30,6 @@ from PySide6.QtWidgets import (
     QFrame,
 )
 
-from src.presentation.dialogs import message_box
 from src.theme.theme_manager import get_palette, get_shared_view_qss
 
 logger = logging.getLogger("tilevision.presentation.views.help_view")
@@ -234,8 +232,8 @@ class HelpView(QDialog):
         pricing_button = QPushButton("Pricing Quote (PDF)")
         pricing_button.setObjectName("PricingButton")
         pricing_button.setToolTip(
-            "Downloads the latest prices online and opens a one-page quote PDF. "
-            "Works offline using the last saved prices."
+            "Downloads the latest prices and shows the quote PDF inside the app "
+            "(not in a browser). Works offline using the last saved prices."
         )
         pricing_button.clicked.connect(self._on_pricing_quote_clicked)
         layout.addWidget(pricing_button)
@@ -248,50 +246,11 @@ class HelpView(QDialog):
         return footer
 
     def _on_pricing_quote_clicked(self) -> None:
-        """Fetch live prices.json (or cache) and open the generated quote PDF."""
-        from src.services.pricing_quote_service import (
-            PricingQuoteError,
-            create_pricing_quote_pdf,
-        )
+        """Open the Pricing Quote PDF viewer inside the app (not a browser)."""
+        from src.presentation.views.pricing_quote_view import PricingQuoteView
 
-        QApplication.setOverrideCursor(QCursor(Qt.CursorShape.WaitCursor))
-        try:
-            result = create_pricing_quote_pdf()
-        except PricingQuoteError as exc:
-            logger.warning("Pricing quote unavailable: %s", exc)
-            message_box.warning(
-                self,
-                "Pricing Quote",
-                "Could not load the pricing quote right now.\n\n"
-                f"{exc}\n\n"
-                "Check your internet connection and try again.",
-            )
-            return
-        except Exception as exc:
-            logger.exception("Pricing quote failed")
-            message_box.critical(
-                self,
-                "Pricing Quote",
-                f"Could not create the pricing PDF:\n{exc}",
-            )
-            return
-        finally:
-            QApplication.restoreOverrideCursor()
-
-        opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(result.pdf_path)))
-        if not opened:
-            message_box.information(
-                self,
-                "Pricing Quote Ready",
-                f"Quote saved to:\n{result.pdf_path}\n\n"
-                f"Source: {result.source}",
-            )
-        else:
-            logger.info(
-                "Opened pricing quote PDF (%s) at %s",
-                result.source,
-                result.pdf_path,
-            )
+        viewer = PricingQuoteView(parent=self, theme=self._theme)
+        viewer.exec()
 
     def _apply_styles(self) -> None:
         p = get_palette(self._theme)

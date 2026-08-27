@@ -175,4 +175,5 @@ def test_create_pricing_quote_pdf_offline(monkeypatch, tmp_path):
 def test_help_view_has_pricing_button():
     source = Path("src/presentation/views/help_view.py").read_text(encoding="utf-8")
     assert "Pricing Quote (PDF)" in source
-    assert "create_pricing_quote_pdf" in source
+    assert "PricingQuoteView" in source
+    assert "QDesktopServices.openUrl" not in source
