@@ -115,9 +115,14 @@ def test_pricing_quote_view_renders_pdf_in_app(qapp, tmp_path, monkeypatch):
 
     assert viewer.pages_layout.count() >= 1
     assert opened_urls == [], "Pricing PDF must stay inside the app (no OS/browser open)"
-    assert "in-app PDF" in viewer.status_label.text()
+    assert not viewer.status_label.isVisible()
+    assert "prices.json" not in viewer.status_label.text()
     assert viewer.download_btn.isEnabled()
     assert viewer._progress_bar.isVisible() is False
+    # A4 preview: page is capped and not full-bleed.
+    page = viewer.pages_layout.itemAt(0).widget()
+    assert page is not None
+    assert page.width() <= 680
     viewer.close()
     viewer.deleteLater()
 
