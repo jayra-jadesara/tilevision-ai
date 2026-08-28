@@ -7,11 +7,13 @@ import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
-    QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -27,11 +29,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from github_pricing_publish import (
-    GitHubPublishError,
-    publish_prices_to_github,
-    verify_github_token,
+from github_connect import (
+    connect_github_automatically,
+    connection_status,
+    normalize_pasted_token,
+    open_github_token_page,
+    publish_target_label,
+    save_github_connection,
+    try_github_cli_token,
 )
+from github_pricing_publish import GitHubPublishError, publish_prices_to_github
 from pricing_manager import (
     apply_editable_fields,
     backup_current,
@@ -42,56 +49,69 @@ from pricing_manager import (
     save_draft,
 )
 from src.services.pricing_quote_service import PricingQuoteError, render_pricing_pdf
+from table_combo import attach_table_combo, combo_value
 from vendor_settings import (
-    DEFAULT_GITHUB_BRANCH,
-    DEFAULT_GITHUB_REPO,
-    ensure_github_defaults,
-    get_github_branch,
-    get_github_repo,
-    get_github_token,
     get_pricing_dropdown_options,
     remember_pricing_dropdown_value,
-    save_vendor_settings,
 )
 
 _PLAN_IDS = ("1y", "2y", "3y", "4y", "lifetime")
-_DROPDOWN_KEYS = ("plan_labels", "per_year", "discount_notes", "badges")
 
 
-def _make_editable_combo(
-    options: list[str],
-    current: str,
-    *,
-    on_remember: Callable[[str], None],
-) -> QComboBox:
-    combo = QComboBox()
-    combo.setEditable(True)
-    combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-    seen: set[str] = set()
-    for value in options:
-        text = str(value)
-        if text in seen:
-            continue
-        seen.add(text)
-        combo.addItem(text)
-    combo.setCurrentText(current)
-    combo.lineEdit().setPlaceholderText("Select or type…")  # type: ignore[union-attr]
-    combo.currentTextChanged.connect(lambda text: on_remember(text.strip()))
-    return combo
+class _GitHubTokenDialog(QDialog):
+  """Paste token after browser opens (one-time setup)."""
+
+  def __init__(self, parent: QWidget | None = None) -> None:
+      super().__init__(parent)
+      self.setWindowTitle("Connect GitHub")
+      self.setMinimumWidth(460)
+      layout = QVBoxLayout(self)
+
+      intro = QLabel(
+          "GitHub opened in your browser.\n"
+          "Click Generate token, copy it, then paste below.\n"
+          "Saved only on this PC — used when you click Save."
+      )
+      intro.setWordWrap(True)
+      layout.addWidget(intro)
+
+      self._token = QLineEdit()
+      self._token.setEchoMode(QLineEdit.EchoMode.Password)
+      self._token.setPlaceholderText("ghp_… or github_pat_…")
+      layout.addWidget(self._token)
+
+      paste_btn = QPushButton("Paste from clipboard")
+      paste_btn.clicked.connect(self._paste_clipboard)
+      layout.addWidget(paste_btn)
+
+      buttons = QDialogButtonBox(
+          QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+      )
+      buttons.accepted.connect(self.accept)
+      buttons.rejected.connect(self.reject)
+      layout.addWidget(buttons)
+
+      clipboard = QGuiApplication.clipboard().text().strip()
+      if clipboard:
+          self._token.setText(normalize_pasted_token(clipboard))
+
+  def _paste_clipboard(self) -> None:
+      text = QGuiApplication.clipboard().text().strip()
+      if text:
+          self._token.setText(normalize_pasted_token(text))
+
+  def token(self) -> str:
+      return self._token.text().strip()
 
 
 class PricingTab(QWidget):
     """Vendor form to edit live pricing JSON and publish to GitHub."""
 
-    def __init__(
-        self,
-        parent: Optional[QWidget] = None,
-    ) -> None:
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._base_payload: dict[str, Any] = {}
-        ensure_github_defaults()
         self._build_ui()
-        self._load_template_into_form()
+        self._load_initial_pricing()
         self._refresh_github_status()
 
     def _build_ui(self) -> None:
@@ -104,8 +124,7 @@ class PricingTab(QWidget):
         outer.addWidget(title)
 
         intro = QLabel(
-            "Edit license pricing and publish to GitHub. "
-            "Customer apps download the live JSON automatically — no installer rebuild."
+            "Edit rates, click Save to push live to all customers, or Preview PDF first."
         )
         intro.setObjectName("Hint")
         intro.setWordWrap(True)
@@ -127,23 +146,16 @@ class PricingTab(QWidget):
         outer.addWidget(scroll, stretch=1)
 
         actions = QHBoxLayout()
-        self._load_live_btn = QPushButton("Load Live")
-        self._load_live_btn.clicked.connect(self._on_load_live)
-        actions.addWidget(self._load_live_btn)
-
-        self._save_draft_btn = QPushButton("Save Draft")
-        self._save_draft_btn.clicked.connect(self._on_save_draft)
-        actions.addWidget(self._save_draft_btn)
+        self._save_btn = QPushButton("Save")
+        self._save_btn.setObjectName("PrimaryButton")
+        self._save_btn.setMinimumWidth(120)
+        self._save_btn.clicked.connect(self._on_save)
+        actions.addWidget(self._save_btn)
 
         self._preview_btn = QPushButton("Preview PDF")
-        self._preview_btn.setObjectName("PrimaryButton")
+        self._preview_btn.setMinimumWidth(120)
         self._preview_btn.clicked.connect(self._on_preview_pdf)
         actions.addWidget(self._preview_btn)
-
-        self._publish_btn = QPushButton("Publish to GitHub")
-        self._publish_btn.setObjectName("PrimaryButton")
-        self._publish_btn.clicked.connect(self._on_publish)
-        actions.addWidget(self._publish_btn)
         actions.addStretch()
         outer.addLayout(actions)
 
@@ -153,44 +165,47 @@ class PricingTab(QWidget):
         outer.addWidget(self._status)
 
     def _build_github_group(self) -> QGroupBox:
-        box = QGroupBox("GitHub publish")
-        form = QFormLayout(box)
+        box = QGroupBox("GitHub")
+        layout = QVBoxLayout(box)
+        layout.setSpacing(8)
 
         self._github_target = QLabel()
         self._github_target.setObjectName("Hint")
         self._github_target.setWordWrap(True)
-        form.addRow("Target", self._github_target)
+        layout.addWidget(self._github_target)
 
-        self._github_token = QLineEdit()
-        self._github_token.setEchoMode(QLineEdit.EchoMode.Password)
-        self._github_token.setPlaceholderText("Paste token once — saved on this PC only")
-        token = get_github_token()
-        if token:
-            self._github_token.setText(token)
-        form.addRow("Access token", self._github_token)
+        self._github_status = QLabel()
+        self._github_status.setObjectName("KeyStatus")
+        layout.addWidget(self._github_status)
 
         row = QHBoxLayout()
+        connect_btn = QPushButton("Connect GitHub")
+        connect_btn.setObjectName("PrimaryButton")
+        connect_btn.clicked.connect(self._on_connect_github)
+        row.addWidget(connect_btn)
+
         test_btn = QPushButton("Test connection")
-        test_btn.setObjectName("PrimaryButton")
-        test_btn.clicked.connect(self._on_test_github)
+        test_btn.clicked.connect(self._on_test_connection)
         row.addWidget(test_btn)
         row.addStretch()
-        form.addRow(row)
+        layout.addLayout(row)
 
         hint = QLabel(
-            "Repository and branch are configured automatically. "
-            "Create a token at GitHub → Settings → Developer settings → "
-            "Personal access tokens (Contents: Read and write)."
+            "First time: Connect GitHub opens your browser with the correct token page. "
+            "If GitHub CLI (gh) is installed and logged in, connection is fully automatic."
         )
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
-        form.addRow(hint)
+        layout.addWidget(hint)
         return box
 
     def _refresh_github_status(self) -> None:
-        repo = get_github_repo() or DEFAULT_GITHUB_REPO
-        branch = get_github_branch() or DEFAULT_GITHUB_BRANCH
-        self._github_target.setText(f"{repo}  ·  branch {branch}  ·  pricing/prices.json")
+        self._github_target.setText(publish_target_label())
+        ok, message = connection_status()
+        self._github_status.setText(message)
+        self._github_status.setProperty("loaded", "true" if ok else "false")
+        self._github_status.style().unpolish(self._github_status)
+        self._github_status.style().polish(self._github_status)
 
     def _build_quote_group(self) -> QGroupBox:
         box = QGroupBox("Quote text")
@@ -231,52 +246,81 @@ class PricingTab(QWidget):
         header = self._plans_table.horizontalHeader()
         header.setStretchLastSection(True)
         self._plans_table.verticalHeader().setVisible(False)
-        self._plans_table.setMinimumHeight(220)
+        self._plans_table.verticalHeader().setDefaultSectionSize(40)
+        self._plans_table.setMinimumHeight(240)
         layout.addWidget(self._plans_table)
         hint = QLabel(
-            "Use dropdowns for Plan, Per year, Discount, and Badge. "
-            "Type a new value in any dropdown to add it to the list."
+            "Click a cell to open the dropdown. Pick a value or type a new one and press Enter."
         )
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
         layout.addWidget(hint)
         return box
 
-    def _dropdown_options(self) -> dict[str, list[str]]:
-        return get_pricing_dropdown_options()
-
     def _set_status(self, message: str) -> None:
         self._status.setText(message)
 
-    def _persist_token(self) -> None:
-        token = self._github_token.text().strip()
-        if token:
-            save_vendor_settings(github_token=token)
-        ensure_github_defaults()
+    def _on_connect_github(self) -> None:
+        cli_token = try_github_cli_token()
+        if cli_token:
+            try:
+                login = save_github_connection(cli_token)
+            except GitHubPublishError as exc:
+                QMessageBox.warning(self, "GitHub connection failed", str(exc))
+                return
+            self._refresh_github_status()
+            QMessageBox.information(
+                self,
+                "GitHub connected",
+                f"Connected automatically via GitHub CLI as {login}.",
+            )
+            return
 
-    def _on_test_github(self) -> None:
-        self._persist_token()
+        open_github_token_page()
+        dialog = _GitHubTokenDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            self._set_status("GitHub connection cancelled.")
+            return
+        token = dialog.token()
+        if not token:
+            QMessageBox.warning(self, "GitHub", "Paste the token from GitHub first.")
+            return
         try:
-            login = verify_github_token(token=self._github_token.text().strip())
+            login = save_github_connection(token)
         except GitHubPublishError as exc:
             QMessageBox.warning(self, "GitHub connection failed", str(exc))
             return
-        QMessageBox.information(
-            self,
-            "GitHub OK",
-            f"Connected as {login}.\n\n"
-            f"Ready to publish to {get_github_repo()} ({get_github_branch()}).",
-        )
-        self._set_status(f"GitHub connection OK ({login}).")
+        self._refresh_github_status()
+        QMessageBox.information(self, "GitHub connected", f"Connected as {login}.")
 
-    def _load_template_into_form(self) -> None:
+    def _on_test_connection(self) -> None:
+        ok, message = connection_status()
+        if ok:
+            QMessageBox.information(self, "GitHub OK", message)
+        else:
+            QMessageBox.warning(
+                self,
+                "Not connected",
+                f"{message}\n\nClick Connect GitHub first.",
+            )
+        self._refresh_github_status()
+
+    def _load_initial_pricing(self) -> None:
+        try:
+            data = fetch_live_prices()
+            self._base_payload = data
+            self._populate_form(data)
+            save_draft(data)
+            self._set_status("Loaded live pricing from GitHub.")
+            return
+        except PricingQuoteError:
+            pass
         try:
             self._base_payload = load_template()
+            self._populate_form(self._base_payload)
+            self._set_status("Loaded local pricing draft.")
         except PricingQuoteError as exc:
             QMessageBox.warning(self, "Pricing load failed", str(exc))
-            return
-        self._populate_form(self._base_payload)
-        self._set_status("Loaded pricing draft/template.")
 
     def _populate_form(self, data: dict[str, Any]) -> None:
         self._location.setText(str(data.get("location", "")))
@@ -292,7 +336,7 @@ class PricingTab(QWidget):
         self._vendor_phone.setText(str(vendor.get("phone", "")))
         self._vendor_phone_display.setText(str(vendor.get("phone_display", "")))
 
-        options = self._dropdown_options()
+        options = get_pricing_dropdown_options()
         plans = data.get("plans") or []
         by_id = {str(p.get("id")): p for p in plans if isinstance(p, dict)}
         self._plans_table.setRowCount(len(_PLAN_IDS))
@@ -302,50 +346,50 @@ class PricingTab(QWidget):
             per_year = normalized.get("effective_label") or normalized.get("effective_per_year")
             badge = normalized.get("badge") or ""
 
-            self._plans_table.setItem(
-                row, 1, QTableWidgetItem(str(normalized["price"]))
-            )
-            self._plans_table.setCellWidget(
+            price_item = QTableWidgetItem(str(normalized["price"]))
+            price_item.setTextAlignment(int(Qt.AlignmentFlag.AlignVCenter))
+            self._plans_table.setItem(row, 1, price_item)
+
+            attach_table_combo(
+                self._plans_table,
                 row,
                 0,
-                _make_editable_combo(
-                    options["plan_labels"],
-                    str(normalized["label"]),
-                    on_remember=lambda v: remember_pricing_dropdown_value("plan_labels", v),
-                ),
+                options["plan_labels"],
+                str(normalized["label"]),
+                on_remember=lambda v, c="plan_labels": remember_pricing_dropdown_value(c, v),
             )
-            self._plans_table.setCellWidget(
+            attach_table_combo(
+                self._plans_table,
                 row,
                 2,
-                _make_editable_combo(
-                    [str(v) for v in options["per_year"]],
-                    str(per_year or ""),
-                    on_remember=lambda v: remember_pricing_dropdown_value("per_year", v),
-                ),
+                [str(v) for v in options["per_year"]],
+                str(per_year or ""),
+                on_remember=lambda v, c="per_year": remember_pricing_dropdown_value(c, v),
             )
-            self._plans_table.setCellWidget(
+            attach_table_combo(
+                self._plans_table,
                 row,
                 3,
-                _make_editable_combo(
-                    options["discount_notes"],
-                    str(normalized["discount_note"]),
-                    on_remember=lambda v: remember_pricing_dropdown_value("discount_notes", v),
-                ),
+                options["discount_notes"],
+                str(normalized["discount_note"]),
+                on_remember=lambda v, c="discount_notes": remember_pricing_dropdown_value(c, v),
             )
-            self._plans_table.setCellWidget(
+            attach_table_combo(
+                self._plans_table,
                 row,
                 4,
-                _make_editable_combo(
-                    options["badges"],
-                    str(badge),
-                    on_remember=lambda v: remember_pricing_dropdown_value("badges", v),
-                ),
+                options["badges"],
+                str(badge),
+                allow_none=True,
+                on_remember=lambda v, c="badges": remember_pricing_dropdown_value(c, v),
             )
 
-    def _cell_combo_text(self, row: int, column: int) -> str:
+    def _cell_combo_text(self, row: int, column: int, *, allow_none: bool = False) -> str:
         widget = self._plans_table.cellWidget(row, column)
-        if isinstance(widget, QComboBox):
-            return widget.currentText().strip()
+        from table_combo import TableComboBox
+
+        if isinstance(widget, TableComboBox):
+            return combo_value(widget, allow_none=allow_none)
         item = self._plans_table.item(row, column)
         return item.text().strip() if item else ""
 
@@ -357,7 +401,7 @@ class PricingTab(QWidget):
             price_text = price_item.text().strip() if price_item else "0"
             per_year_text = self._cell_combo_text(row, 2)
             discount = self._cell_combo_text(row, 3) or "-"
-            badge_raw = self._cell_combo_text(row, 4)
+            badge_raw = self._cell_combo_text(row, 4, allow_none=True)
             badge = badge_raw or None
 
             try:
@@ -403,26 +447,45 @@ class PricingTab(QWidget):
             plans=plans,
         )
 
-    def _on_load_live(self) -> None:
-        try:
-            data = fetch_live_prices()
-        except PricingQuoteError as exc:
-            QMessageBox.warning(self, "Load failed", str(exc))
-            return
-        self._base_payload = data
-        self._populate_form(data)
-        save_draft(data)
-        self._set_status("Loaded live pricing from GitHub and saved as draft.")
+    def _on_save(self) -> None:
+        ok, _ = connection_status()
+        if not ok:
+            answer = QMessageBox.question(
+                self,
+                "Connect GitHub",
+                "GitHub is not connected yet.\n\n"
+                "Connect now? (Required to push live rates to customers)",
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                self._on_connect_github()
+            ok, _ = connection_status()
+            if not ok:
+                return
 
-    def _on_save_draft(self) -> None:
         try:
             data = self._collect_payload()
         except PricingQuoteError as exc:
             QMessageBox.warning(self, "Validation failed", str(exc))
             return
+
+        try:
+            backup_current(data)
+            path = save_draft(data)
+            result = publish_prices_to_github(data)
+        except GitHubPublishError as exc:
+            QMessageBox.warning(self, "Save failed", str(exc))
+            return
+
         self._base_payload = data
-        path = save_draft(data)
-        self._set_status(f"Draft saved to {path}")
+        self._set_status(
+            f"Saved and published at {datetime.now():%H:%M:%S} — "
+            f"customers see new rates on refresh."
+        )
+        QMessageBox.information(
+            self,
+            "Saved",
+            f"Pricing saved locally and published to GitHub.\n\nDraft: {path}",
+        )
 
     def _on_preview_pdf(self) -> None:
         try:
@@ -437,7 +500,7 @@ class PricingTab(QWidget):
             QMessageBox.warning(self, "PDF failed", str(exc))
             return
         self._open_path(out)
-        self._set_status(f"Preview PDF written to {out}")
+        self._set_status(f"Preview PDF: {out}")
 
     def _open_path(self, path: Path) -> None:
         try:
@@ -449,43 +512,3 @@ class PricingTab(QWidget):
                 subprocess.run(["xdg-open", str(path)], check=False)
         except Exception:
             pass
-
-    def _on_publish(self) -> None:
-        self._persist_token()
-        try:
-            data = self._collect_payload()
-        except PricingQuoteError as exc:
-            QMessageBox.warning(self, "Validation failed", str(exc))
-            return
-
-        repo = get_github_repo() or DEFAULT_GITHUB_REPO
-        branch = get_github_branch() or DEFAULT_GITHUB_BRANCH
-        confirm = QMessageBox.question(
-            self,
-            "Publish pricing",
-            "Publish updated pricing to GitHub?\n\n"
-            f"Repository: {repo}\n"
-            f"Branch: {branch}\n\n"
-            "All customers will see new rates when they open Pricing in the app.",
-        )
-        if confirm != QMessageBox.StandardButton.Yes:
-            return
-
-        try:
-            backup_current(data)
-            result = publish_prices_to_github(data, token=self._github_token.text().strip())
-        except GitHubPublishError as exc:
-            QMessageBox.warning(self, "Publish failed", str(exc))
-            return
-
-        self._base_payload = data
-        save_draft(data)
-        paths = "\n".join(f"  • {p}" for p in result.updated_paths)
-        QMessageBox.information(
-            self,
-            "Published",
-            f"Pricing published to {result.repo} ({result.branch}).\n\nUpdated:\n{paths}",
-        )
-        self._set_status(
-            f"Published at {datetime.now():%Y-%m-%d %H:%M:%S} — customers get live rates on refresh."
-        )

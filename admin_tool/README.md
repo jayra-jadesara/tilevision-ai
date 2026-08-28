@@ -87,24 +87,20 @@ The customer app does not phone home. So:
 
 ## Pricing tab (live customer rates)
 
-Use **Pricing** to edit `prices.json` and publish to GitHub. All customer apps
-download the live file — no new installer needed.
+Use **Pricing** in the left sidebar.
 
-1. Open **Pricing** tab.
-2. Paste a GitHub **Personal access token** with `repo` contents write access.
-3. Click **Test connection**, then **Save GitHub settings**.
-4. Click **Load Live from GitHub** (or edit the form).
-5. Change plan prices, location, vendor phone, taxes line, etc.
-6. Click **Preview PDF** to see what customers will get.
-7. Click **Publish to GitHub** — updates:
+1. Click **Connect GitHub** (opens browser with correct token page — paste once).
+2. Edit plan prices and text fields.
+3. Click dropdown cells for Plan / Per year / Discount / Badge.
+4. **Save** — saves locally and publishes live to all customers.
+5. **Preview PDF** — see the customer PDF before saving.
+
+Only two buttons: **Save** and **Preview PDF**.
    - `pricing/prices.json` (live URL customers fetch)
    - `src/resources/pricing/prices.json` (bundled fallback for new installs)
 
 Drafts save to `~/.tilevision_ai_vendor/prices_draft.json`. Backups go to
 `~/.tilevision_ai_vendor/pricing_backups/` before each publish.
-
-Create a token: GitHub → Settings → Developer settings → Personal access tokens
-→ fine-grained or classic with **Contents: Read and write** on the repo.
 
 ## Security
 

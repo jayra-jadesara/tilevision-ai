@@ -41,6 +41,10 @@ def get_github_token() -> str:
     return str(load_vendor_settings().get("github_token", "")).strip()
 
 
+def get_github_login() -> str:
+    return str(load_vendor_settings().get("github_login", "")).strip()
+
+
 def get_github_repo() -> str:
     return str(load_vendor_settings().get("github_repo", DEFAULT_GITHUB_REPO)).strip()
 

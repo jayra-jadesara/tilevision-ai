@@ -123,6 +123,26 @@ def get_admin_qss(theme: str) -> str:
         color: {p['text_primary']};
         background-color: {p['button_hover']};
     }}
+    QComboBox {{
+        background-color: {p['bg_input']};
+        color: {p['text_primary']};
+        border: 1px solid {p['border_strong']};
+        border-radius: 6px;
+        padding: 4px 8px;
+        min-height: 28px;
+    }}
+    QComboBox::drop-down {{
+        border: none;
+        width: 24px;
+    }}
+    QComboBox QAbstractItemView {{
+        background-color: {p['bg_panel']};
+        color: {p['text_primary']};
+        border: 1px solid {p['border_strong']};
+        selection-background-color: {p['highlight_bg']};
+        selection-color: {p['text_primary']};
+        outline: none;
+    }}
     QLineEdit, QPlainTextEdit, QTextEdit {{
         background-color: {p['bg_input']};
         color: {p['text_primary']};
