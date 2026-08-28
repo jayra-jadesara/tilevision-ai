@@ -11,6 +11,7 @@ from typing import Any, Callable, Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
