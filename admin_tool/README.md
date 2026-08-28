@@ -76,7 +76,29 @@ The customer app does not phone home. So:
 - PCs already using the key keep working until it expires, or until you ship an app update with the block list.
 - **Delete Row** removes the row from your table. If you already shipped a block list, update the app to match.
 
+## Pricing tab (live customer rates)
+
+Use **Pricing** to edit `prices.json` and publish to GitHub. All customer apps
+download the live file — no new installer needed.
+
+1. Open **Pricing** tab.
+2. Paste a GitHub **Personal access token** with `repo` contents write access.
+3. Click **Test connection**, then **Save GitHub settings**.
+4. Click **Load Live from GitHub** (or edit the form).
+5. Change plan prices, location, vendor phone, taxes line, etc.
+6. Click **Preview PDF** to see what customers will get.
+7. Click **Publish to GitHub** — updates:
+   - `pricing/prices.json` (live URL customers fetch)
+   - `src/resources/pricing/prices.json` (bundled fallback for new installs)
+
+Drafts save to `~/.tilevision_ai_vendor/prices_draft.json`. Backups go to
+`~/.tilevision_ai_vendor/pricing_backups/` before each publish.
+
+Create a token: GitHub → Settings → Developer settings → Personal access tokens
+→ fine-grained or classic with **Contents: Read and write** on the repo.
+
 ## Security
 
 - Never share your private key file.
 - The "any machine" (wildcard) checkbox is for your testing only — production builds reject it.
+- Never share your GitHub token — it is stored only in `admin_settings.json` on your PC.

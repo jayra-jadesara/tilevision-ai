@@ -185,7 +185,7 @@ class AdminLicenseWindow(QMainWindow):
         title_block.setSpacing(2)
         title = QLabel("TileVision AI")
         title.setObjectName("Title")
-        subtitle = QLabel("Vendor License Manager")
+        subtitle = QLabel("Vendor License & Pricing Manager")
         subtitle.setObjectName("Subtitle")
         title_block.addWidget(title)
         title_block.addWidget(subtitle)
@@ -221,6 +221,10 @@ class AdminLicenseWindow(QMainWindow):
         self._tabs.addTab(self._build_overview_tab(), "Overview")
         self._tabs.addTab(self._build_generate_tab(), "Generate Key")
         self._tabs.addTab(self._build_registry_tab(), "Customers & Licenses")
+        from pricing_tab import PricingTab
+
+        self._pricing_tab = PricingTab()
+        self._tabs.addTab(self._pricing_tab, "Pricing")
         layout.addWidget(self._tabs, stretch=1)
 
     def _build_keypair_section(self) -> QGroupBox:
