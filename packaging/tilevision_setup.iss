@@ -11,7 +11,7 @@
 ;   iscc packaging\tilevision_setup.iss
 
 #define MyAppName "TileVision AI"
-#define MyAppVersion "1.2.39"
+#define MyAppVersion "1.2.40"
 #define MyAppPublisher "JD Software"
 #define MyAppExeName "TileVisionAI.exe"
 #define BuildSource "..\dist\TileVisionAI"
