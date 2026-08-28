@@ -383,4 +383,41 @@ def get_admin_qss(theme: str) -> str:
         border-radius: 5px;
         min-height: 24px;
     }}
+    #Sidebar {{
+        background-color: {p['bg_sidebar']};
+        border-right: 1px solid {p['border']};
+    }}
+    #SidebarTitle {{
+        font-size: 11px;
+        font-weight: 700;
+        color: {p['text_muted']};
+        letter-spacing: 0.5px;
+        padding: 4px 8px;
+        background: transparent;
+    }}
+    #AdminNavButton {{
+        text-align: left;
+        padding: 10px 14px;
+        border: none;
+        border-radius: 8px;
+        background: transparent;
+        color: {p['text_secondary']};
+        font-weight: 500;
+        margin: 2px 8px;
+    }}
+    #AdminNavButton:hover {{
+        background-color: {p['button_hover']};
+        color: {p['text_primary']};
+    }}
+    #AdminNavButton:checked {{
+        background-color: {p['highlight_bg']};
+        color: {p['accent_text']};
+        font-weight: 700;
+    }}
+    #ContentStack {{
+        background-color: {p['bg_app']};
+    }}
+    #ContentHeader {{
+        background: transparent;
+    }}
     """

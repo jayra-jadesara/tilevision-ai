@@ -47,3 +47,54 @@ def get_github_repo() -> str:
 
 def get_github_branch() -> str:
     return str(load_vendor_settings().get("github_branch", DEFAULT_GITHUB_BRANCH)).strip()
+
+
+def ensure_github_defaults() -> None:
+    """Persist default repo/branch so publish works without manual setup."""
+    data = load_vendor_settings()
+    updates: dict[str, str] = {}
+    if not str(data.get("github_repo", "")).strip():
+        updates["github_repo"] = DEFAULT_GITHUB_REPO
+    if not str(data.get("github_branch", "")).strip():
+        updates["github_branch"] = DEFAULT_GITHUB_BRANCH
+    if updates:
+        save_vendor_settings(**updates)
+
+
+_DEFAULT_PRICING_DROPDOWNS: dict[str, list[str]] = {
+    "plan_labels": ["1 Year", "2 Year", "3 Year", "4 Year", "Lifetime"],
+    "per_year": ["38000", "34200", "32300", "30400", "One-time"],
+    "discount_notes": ["-", "5% off", "10% off", "15% off", "20% off", "Best for long-term"],
+    "badges": ["", "Best value", "Popular", "Limited offer"],
+}
+
+
+def get_pricing_dropdown_options() -> dict[str, list[str]]:
+    data = load_vendor_settings()
+    stored = data.get("pricing_dropdowns")
+    merged: dict[str, list[str]] = {}
+    for key, defaults in _DEFAULT_PRICING_DROPDOWNS.items():
+        extra = stored.get(key) if isinstance(stored, dict) else None
+        values: list[str] = list(defaults)
+        if isinstance(extra, list):
+            for item in extra:
+                text = str(item).strip()
+                if text and text not in values:
+                    values.append(text)
+        merged[key] = values
+    return merged
+
+
+def remember_pricing_dropdown_value(category: str, value: str) -> None:
+    text = str(value).strip()
+    if not text:
+        return
+    options = get_pricing_dropdown_options()
+    current = list(options.get(category, []))
+    if text in current:
+        return
+    current.append(text)
+    data = load_vendor_settings()
+    dropdowns = dict(data.get("pricing_dropdowns") or {})
+    dropdowns[category] = current
+    save_vendor_settings(pricing_dropdowns=dropdowns)

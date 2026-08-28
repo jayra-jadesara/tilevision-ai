@@ -1,4 +1,4 @@
-# TileVision AI — Admin License Manager
+# TileVision AI — Vendor Admin
 
 **For you (the vendor) only.** Do not give this tool to customers.
 
@@ -7,6 +7,15 @@
 - Mac: `/Users/You/.tilevision_ai_vendor/`
 
 Full guide: [docs/VENDOR_LICENSING.md](../docs/VENDOR_LICENSING.md)
+
+## Navigation (left sidebar)
+
+| Menu | Purpose |
+|------|---------|
+| **Overview** | Stats and quick steps |
+| **Licenses** | Generate Key + Customers & Licenses (one place) |
+| **Pricing** | Edit live rates and publish to GitHub |
+| **Signing Key** | Import/create key, backup, public key for customer app |
 
 ## Start the tool
 

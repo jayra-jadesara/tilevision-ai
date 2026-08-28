@@ -102,6 +102,22 @@ def test_vendor_settings_store_github_token(vendor_dir):
     assert settings["github_repo"] == DEFAULT_GITHUB_REPO
 
 
+def test_ensure_github_defaults_fills_repo_and_branch(vendor_dir):
+    from vendor_settings import ensure_github_defaults, get_github_branch, get_github_repo
+
+    ensure_github_defaults()
+    assert get_github_repo() == DEFAULT_GITHUB_REPO
+    assert get_github_branch() == "main"
+
+
+def test_remember_pricing_dropdown_value(vendor_dir):
+    from vendor_settings import get_pricing_dropdown_options, remember_pricing_dropdown_value
+
+    remember_pricing_dropdown_value("badges", "New badge")
+    options = get_pricing_dropdown_options()
+    assert "New badge" in options["badges"]
+
+
 def test_plan_row_from_dict_lifetime():
     row = plan_row_from_dict(
         {
