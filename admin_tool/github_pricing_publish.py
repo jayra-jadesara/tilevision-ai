@@ -79,6 +79,12 @@ def _api_request(
         raise GitHubPublishError(f"GitHub request failed: {exc}") from exc
 
 
+def _resolve_auth_token(token: str | None = None) -> str:
+    from github_connect import require_github_token
+
+    return require_github_token(token or get_github_token())
+
+
 def _split_repo(repo: str) -> tuple[str, str]:
     text = repo.strip().strip("/")
     if "/" not in text:
@@ -98,11 +104,7 @@ def get_file_metadata(
 ) -> dict[str, Any]:
     owner, name = _split_repo(repo or get_github_repo() or DEFAULT_GITHUB_REPO)
     branch_name = branch or get_github_branch() or DEFAULT_GITHUB_BRANCH
-    auth = (token or get_github_token()).strip()
-    if not auth:
-        raise GitHubPublishError(
-            "GitHub token is not configured. Add a Personal Access Token in the Pricing tab."
-        )
+    auth = _resolve_auth_token(token)
     url = (
         f"https://api.github.com/repos/{owner}/{name}/contents/{repo_path}"
         f"?ref={branch_name}"
@@ -122,9 +124,7 @@ def update_repo_file(
 ) -> dict[str, Any]:
     owner, name = _split_repo(repo or get_github_repo() or DEFAULT_GITHUB_REPO)
     branch_name = branch or get_github_branch() or DEFAULT_GITHUB_BRANCH
-    auth = (token or get_github_token()).strip()
-    if not auth:
-        raise GitHubPublishError("GitHub token is not configured.")
+    auth = _resolve_auth_token(token)
 
     if sha is None:
         try:
@@ -154,9 +154,7 @@ def verify_github_token(
     repo: str | None = None,
 ) -> str:
     """Return the authenticated GitHub login name."""
-    auth = (token or get_github_token()).strip()
-    if not auth:
-        raise GitHubPublishError("Enter a GitHub Personal Access Token first.")
+    auth = _resolve_auth_token(token)
     data = _api_request("GET", "https://api.github.com/user", auth)
     login = str(data.get("login", "")).strip()
     if not login:

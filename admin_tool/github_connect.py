@@ -23,7 +23,8 @@ _GITHUB_TOKEN_URL = (
     "&scopes=repo"
 )
 
-_TOKEN_PATTERN = re.compile(r"^(gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})")
+_TOKEN_PATTERN = re.compile(r"^(gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})$")
+_TOKEN_FIND = re.compile(r"(gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})")
 
 
 def github_token_creation_url() -> str:
@@ -53,21 +54,32 @@ def try_github_cli_token() -> Optional[str]:
 
 
 def normalize_pasted_token(text: str) -> str:
-    token = text.strip().strip('"').strip("'")
-    if _TOKEN_PATTERN.match(token):
-        return token
-    # User may paste full line like "ghp_xxx" with spaces
-    for part in token.split():
-        if _TOKEN_PATTERN.match(part):
-            return part
+    """Extract a single GitHub token from pasted text (ignores extra lines)."""
+    raw = str(text or "").strip().strip('"').strip("'")
+    if not raw:
+        return ""
+    if _TOKEN_PATTERN.match(raw):
+        return raw
+    match = _TOKEN_FIND.search(raw)
+    if match and _TOKEN_PATTERN.match(match.group(1)):
+        return match.group(1)
+    return ""
+
+
+def require_github_token(text: str) -> str:
+    token = normalize_pasted_token(text)
+    if not token:
+        raise GitHubPublishError(
+            "That does not look like a GitHub token.\n\n"
+            "Copy only the token from GitHub (starts with ghp_ or github_pat_). "
+            "Do not paste shell commands or other text."
+        )
     return token
 
 
 def save_github_connection(token: str) -> str:
     """Verify token, persist it, return GitHub login name."""
-    clean = normalize_pasted_token(token)
-    if not clean:
-        raise GitHubPublishError("GitHub token is empty.")
+    clean = require_github_token(token)
     login = verify_github_token(token=clean)
     save_vendor_settings(github_token=clean, github_login=login)
     return login
@@ -96,12 +108,15 @@ def connect_github_automatically() -> tuple[str, str]:
 def connection_status() -> tuple[bool, str]:
     token = get_github_token()
     login = get_github_login()
-    if token and login:
+    clean = normalize_pasted_token(token)
+    if token and not clean:
+        return False, "Saved token is invalid — click Connect GitHub and paste again"
+    if clean and login:
         return True, f"Connected as {login}"
-    if token:
+    if clean:
         try:
-            login = verify_github_token(token=token)
-            save_vendor_settings(github_login=login)
+            login = verify_github_token(token=clean)
+            save_vendor_settings(github_token=clean, github_login=login)
             return True, f"Connected as {login}"
         except GitHubPublishError:
             return False, "Token saved but connection failed — click Connect GitHub"

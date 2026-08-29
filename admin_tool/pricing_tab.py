@@ -91,14 +91,30 @@ class _GitHubTokenDialog(QDialog):
       buttons.rejected.connect(self.reject)
       layout.addWidget(buttons)
 
-      clipboard = QGuiApplication.clipboard().text().strip()
-      if clipboard:
-          self._token.setText(normalize_pasted_token(clipboard))
+        clipboard = QGuiApplication.clipboard().text().strip()
+        if clipboard:
+            from github_connect import normalize_pasted_token
+
+            token = normalize_pasted_token(clipboard)
+            if token:
+                self._token.setText(token)
 
   def _paste_clipboard(self) -> None:
       text = QGuiApplication.clipboard().text().strip()
-      if text:
-          self._token.setText(normalize_pasted_token(text))
+      if not text:
+          return
+      from github_connect import normalize_pasted_token
+
+      token = normalize_pasted_token(text)
+      if token:
+          self._token.setText(token)
+      else:
+          QMessageBox.warning(
+              self,
+              "Invalid paste",
+              "Clipboard does not contain a GitHub token.\n\n"
+              "Copy only the token from GitHub (ghp_… or github_pat_…).",
+          )
 
   def token(self) -> str:
       return self._token.text().strip()

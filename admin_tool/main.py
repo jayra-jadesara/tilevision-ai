@@ -297,6 +297,12 @@ class AdminLicenseWindow(QMainWindow):
             button.setChecked(page_index == index)
         self._content_stack.setCurrentIndex(index)
 
+    def _go_to_licenses(self, subtab: int = 0) -> None:
+        """Open Licenses page and optional inner tab (0=Generate, 1=Registry)."""
+        self._navigate(PAGE_LICENSES)
+        if hasattr(self, "_license_tabs"):
+            self._license_tabs.setCurrentIndex(max(0, subtab))
+
     def _build_licenses_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -1065,7 +1071,7 @@ class AdminLicenseWindow(QMainWindow):
             Encoding.PEM, PublicFormat.SubjectPublicKeyInfo
         ).decode("utf-8")
 
-        self._tabs.setCurrentIndex(1)
+        self._go_to_licenses(0)
         self._output.setPlainText(
             "Paste into src/licensing/validator.py as EMBEDDED_PUBLIC_KEY_PEM "
             "(replace the existing block, keep the b\"\"\" wrapper):\n\n"
@@ -1202,7 +1208,7 @@ class AdminLicenseWindow(QMainWindow):
         self._renew_from_id = None
         self._renew_label.setText("")
         self._refresh_all()
-        self._tabs.setCurrentIndex(2)
+        self._go_to_licenses(1)
         QMessageBox.information(
             self,
             "License Generated",
@@ -1232,7 +1238,7 @@ class AdminLicenseWindow(QMainWindow):
             self._license_type.setCurrentIndex(idx)
         self._on_license_type_changed(self._license_type.currentText())
         self._renew_label.setText(f"Extending license {rec.license_id[:8]}...")
-        self._tabs.setCurrentIndex(1)
+        self._go_to_licenses(0)
 
     def _on_copy_stored_key(self) -> None:
         rec = self._selected_record()

@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "admin_tool"))
 
-from github_connect import normalize_pasted_token, publish_target_label  # noqa: E402
+from github_connect import normalize_pasted_token, publish_target_label, require_github_token  # noqa: E402
 from table_combo import TableComboBox, combo_value, populate_combo  # noqa: E402
 
 
@@ -25,6 +25,18 @@ def qapp():
 def test_normalize_pasted_token_extracts_ghp():
     token = normalize_pasted_token("  ghp_abc123xyz4567890123456789012345678  ")
     assert token.startswith("ghp_")
+
+
+def test_normalize_rejects_shell_commands():
+    assert normalize_pasted_token(
+        "git pull origin cursor/admin-pricing-github-publish-191a\npython .\\admin_tool\\main.py"
+    ) == ""
+
+
+def test_require_github_token_raises_on_garbage():
+    with pytest.raises(Exception) as exc:
+        require_github_token("git pull origin\npython main.py")
+    assert "GitHub token" in str(exc.value)
 
 
 def test_publish_target_label_contains_repo():

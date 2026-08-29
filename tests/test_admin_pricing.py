@@ -133,19 +133,22 @@ def test_plan_row_from_dict_lifetime():
 
 
 def test_verify_github_token_success(monkeypatch):
-  def fake_api(method, url, token, **kwargs):
-      if url.endswith("/user"):
-          return {"login": "jayra-jadesara"}
-      if "/repos/" in url:
-          return {"full_name": DEFAULT_GITHUB_REPO}
-      raise AssertionError(url)
+    def fake_api(method, url, token, **kwargs):
+        if url.endswith("/user"):
+            return {"login": "jayra-jadesara"}
+        if "/repos/" in url:
+            return {"full_name": DEFAULT_GITHUB_REPO}
+        raise AssertionError(url)
 
-  monkeypatch.setattr(
-      "github_pricing_publish._api_request",
-      fake_api,
-  )
-  login = verify_github_token(token="ghp_x", repo=DEFAULT_GITHUB_REPO)
-  assert login == "jayra-jadesara"
+    monkeypatch.setattr(
+        "github_pricing_publish._api_request",
+        fake_api,
+    )
+    login = verify_github_token(
+        token="ghp_abcdefghijklmnopqrstuvwxyz123456",
+        repo=DEFAULT_GITHUB_REPO,
+    )
+    assert login == "jayra-jadesara"
 
 
 def test_publish_prices_to_github_updates_both_paths(monkeypatch):
@@ -159,7 +162,7 @@ def test_publish_prices_to_github_updates_both_paths(monkeypatch):
     data = _base_payload()
     result = publish_prices_to_github(
         data,
-        token="ghp_x",
+        token="ghp_abcdefghijklmnopqrstuvwxyz123456",
         repo=DEFAULT_GITHUB_REPO,
         branch="main",
     )
