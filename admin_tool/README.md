@@ -1,4 +1,4 @@
-# TileVision AI — Admin License Manager
+# TileVision AI — Vendor Admin
 
 **For you (the vendor) only.** Do not give this tool to customers.
 
@@ -7,6 +7,15 @@
 - Mac: `/Users/You/.tilevision_ai_vendor/`
 
 Full guide: [docs/VENDOR_LICENSING.md](../docs/VENDOR_LICENSING.md)
+
+## Navigation (left sidebar)
+
+| Menu | Purpose |
+|------|---------|
+| **Overview** | Stats and quick steps |
+| **Licenses** | Generate Key + Customers & Licenses (one place) |
+| **Pricing** | Edit live rates and publish to GitHub |
+| **Signing Key** | Import/create key, backup, public key for customer app |
 
 ## Start the tool
 
@@ -76,7 +85,25 @@ The customer app does not phone home. So:
 - PCs already using the key keep working until it expires, or until you ship an app update with the block list.
 - **Delete Row** removes the row from your table. If you already shipped a block list, update the app to match.
 
+## Pricing tab (live customer rates)
+
+Use **Pricing** in the left sidebar.
+
+1. Click **Connect GitHub** (opens browser with correct token page — paste once).
+2. Edit plan prices and text fields.
+3. Click dropdown cells for Plan / Per year / Discount / Badge.
+4. **Save** — saves locally and publishes live to all customers.
+5. **Preview PDF** — see the customer PDF before saving.
+
+Only two buttons: **Save** and **Preview PDF**.
+   - `pricing/prices.json` (live URL customers fetch)
+   - `src/resources/pricing/prices.json` (bundled fallback for new installs)
+
+Drafts save to `~/.tilevision_ai_vendor/prices_draft.json`. Backups go to
+`~/.tilevision_ai_vendor/pricing_backups/` before each publish.
+
 ## Security
 
 - Never share your private key file.
 - The "any machine" (wildcard) checkbox is for your testing only — production builds reject it.
+- Never share your GitHub token — it is stored only in `admin_settings.json` on your PC.

@@ -28,6 +28,7 @@ from PySide6.QtCore import Qt, QDate, QTimer
 from PySide6.QtGui import QBrush, QColor, QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -52,12 +53,21 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QScrollArea,
+    QStackedWidget,
 )
 
 from license_ledger import LicenseLedger, LicenseRecord, is_trial_license_type
 from admin_auth import verify_admin_password
+from admin_nav import (
+    PAGE_LICENSES,
+    PAGE_OVERVIEW,
+    PAGE_PRICING,
+    PAGE_SIGNING_KEY,
+    AdminNavButton,
+)
 from admin_theme import get_admin_qss
 from vendor_backup import get_last_backup_summary, resolve_backup_dir, run_vendor_backup
+from vendor_settings import ensure_github_defaults
 from web_date_picker import WebDatePicker
 from src.licensing.validator import (
     VENDOR_LICENSE_TYPES,
@@ -151,12 +161,13 @@ class AdminLicenseWindow(QMainWindow):
         self._renew_from_id: Optional[str] = None
         self._current_theme = "light"
 
-        self.setWindowTitle("TileVision AI — Vendor License Manager")
+        self.setWindowTitle("TileVision AI — Vendor Admin")
         self.resize(1020, 780)
         icon_path = app_icon_path()
         if icon_path is not None:
             self.setWindowIcon(QIcon(str(icon_path)))
         self._load_settings()
+        ensure_github_defaults()
         self._setup_ui()
         self._apply_styles()
         self._auto_load_signing_key()
@@ -167,12 +178,45 @@ class AdminLicenseWindow(QMainWindow):
     def _setup_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
-        layout = QVBoxLayout(central)
-        layout.setContentsMargins(20, 16, 20, 16)
-        layout.setSpacing(12)
+        root = QHBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
+        root.addWidget(self._build_sidebar())
+
+        content_column = QWidget()
+        content_layout = QVBoxLayout(content_column)
+        content_layout.setContentsMargins(20, 16, 20, 16)
+        content_layout.setSpacing(12)
+
+        content_layout.addLayout(self._build_content_header())
+
+        warning = QLabel(
+            "Vendor tool only — not for customers. "
+            "Generate license keys here and publish live pricing to GitHub."
+        )
+        warning.setObjectName("Warning")
+        warning.setWordWrap(True)
+        content_layout.addWidget(warning)
+
+        self._content_stack = QStackedWidget()
+        self._content_stack.setObjectName("ContentStack")
+        self._content_stack.addWidget(self._build_overview_tab())       # 0
+        self._content_stack.addWidget(self._build_licenses_page())     # 1
+        from pricing_tab import PricingTab
+
+        self._pricing_tab = PricingTab()
+        self._content_stack.addWidget(self._pricing_tab)               # 2
+        self._content_stack.addWidget(self._build_signing_key_page())  # 3
+        content_layout.addWidget(self._content_stack, stretch=1)
+
+        root.addWidget(content_column, stretch=1)
+        self._navigate(PAGE_OVERVIEW)
+
+    def _build_content_header(self) -> QHBoxLayout:
         header = QHBoxLayout()
         header.setSpacing(12)
+        header.setObjectName("ContentHeader")
 
         logo_label = QLabel()
         logo_label.setObjectName("BrandLabel")
@@ -185,7 +229,7 @@ class AdminLicenseWindow(QMainWindow):
         title_block.setSpacing(2)
         title = QLabel("TileVision AI")
         title.setObjectName("Title")
-        subtitle = QLabel("Vendor License Manager")
+        subtitle = QLabel("Vendor Admin")
         subtitle.setObjectName("Subtitle")
         title_block.addWidget(title)
         title_block.addWidget(subtitle)
@@ -203,25 +247,108 @@ class AdminLicenseWindow(QMainWindow):
         self._prepare_form_field(self._theme_combo)
         self._theme_combo.currentTextChanged.connect(self._on_theme_changed)
         header.addWidget(self._theme_combo)
-        layout.addLayout(header)
+        return header
 
-        warning = QLabel(
-            "For you only — not for customers. "
-            "Works on Windows and Mac. "
-            "Make keys here and send them to each customer. "
-            "Trial and full license both need a key from this tool."
+    def _build_sidebar(self) -> QFrame:
+        sidebar = QFrame()
+        sidebar.setObjectName("Sidebar")
+        sidebar.setFixedWidth(188)
+
+        layout = QVBoxLayout(sidebar)
+        layout.setContentsMargins(0, 16, 0, 16)
+        layout.setSpacing(4)
+
+        nav_title = QLabel("MENU")
+        nav_title.setObjectName("SidebarTitle")
+        layout.addWidget(nav_title)
+
+        self._nav_button_group = QButtonGroup(self)
+        self._nav_button_group.setExclusive(True)
+
+        self._nav_overview = AdminNavButton("Overview", PAGE_OVERVIEW)
+        self._nav_overview.clicked.connect(lambda: self._navigate(PAGE_OVERVIEW))
+        self._nav_button_group.addButton(self._nav_overview)
+        layout.addWidget(self._nav_overview)
+
+        self._nav_licenses = AdminNavButton("Licenses", PAGE_LICENSES)
+        self._nav_licenses.clicked.connect(lambda: self._navigate(PAGE_LICENSES))
+        self._nav_button_group.addButton(self._nav_licenses)
+        layout.addWidget(self._nav_licenses)
+
+        self._nav_pricing = AdminNavButton("Pricing", PAGE_PRICING)
+        self._nav_pricing.clicked.connect(lambda: self._navigate(PAGE_PRICING))
+        self._nav_button_group.addButton(self._nav_pricing)
+        layout.addWidget(self._nav_pricing)
+
+        self._nav_signing = AdminNavButton("Signing Key", PAGE_SIGNING_KEY)
+        self._nav_signing.clicked.connect(lambda: self._navigate(PAGE_SIGNING_KEY))
+        self._nav_button_group.addButton(self._nav_signing)
+        layout.addWidget(self._nav_signing)
+
+        layout.addStretch()
+        return sidebar
+
+    def _navigate(self, index: int) -> None:
+        nav_map = {
+            PAGE_OVERVIEW: self._nav_overview,
+            PAGE_LICENSES: self._nav_licenses,
+            PAGE_PRICING: self._nav_pricing,
+            PAGE_SIGNING_KEY: self._nav_signing,
+        }
+        for page_index, button in nav_map.items():
+            button.setChecked(page_index == index)
+        self._content_stack.setCurrentIndex(index)
+
+    def _go_to_licenses(self, subtab: int = 0) -> None:
+        """Open Licenses page and optional inner tab (0=Generate, 1=Registry)."""
+        self._navigate(PAGE_LICENSES)
+        if hasattr(self, "_license_tabs"):
+            self._license_tabs.setCurrentIndex(max(0, subtab))
+
+    def _build_licenses_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        title = QLabel("Licenses")
+        title.setObjectName("Title")
+        layout.addWidget(title)
+
+        hint = QLabel(
+            "Generate keys for customers and manage your license registry in one place."
         )
-        warning.setObjectName("Warning")
-        warning.setWordWrap(True)
-        layout.addWidget(warning)
+        hint.setObjectName("Hint")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        self._license_tabs = QTabWidget()
+        self._license_tabs.addTab(self._build_generate_tab(), "Generate Key")
+        self._license_tabs.addTab(self._build_registry_tab(), "Customers & Licenses")
+        layout.addWidget(self._license_tabs, stretch=1)
+        return page
+
+    def _build_signing_key_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        title = QLabel("Signing Key")
+        title.setObjectName("Title")
+        layout.addWidget(title)
+
+        hint = QLabel(
+            "Your private signing key stays on this PC. "
+            "Import or create it once, then use Backup Now regularly."
+        )
+        hint.setObjectName("Hint")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
 
         layout.addWidget(self._build_keypair_section())
-
-        self._tabs = QTabWidget()
-        self._tabs.addTab(self._build_overview_tab(), "Overview")
-        self._tabs.addTab(self._build_generate_tab(), "Generate Key")
-        self._tabs.addTab(self._build_registry_tab(), "Customers & Licenses")
-        layout.addWidget(self._tabs, stretch=1)
+        layout.addStretch()
+        return page
 
     def _build_keypair_section(self) -> QGroupBox:
         box = QGroupBox("Signing Key")
@@ -279,6 +406,10 @@ class AdminLicenseWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
 
+        title = QLabel("Overview")
+        title.setObjectName("Title")
+        layout.addWidget(title)
+
         grid = QGridLayout()
         self._stat_total = QLabel("0")
         self._stat_active = QLabel("0")
@@ -308,9 +439,10 @@ class AdminLicenseWindow(QMainWindow):
         steps = QLabel(
             "Simple steps:\n"
             "1. Customer sends Machine ID from their TileVision app\n"
-            "2. Generate Key tab → pick type → make key → copy and send\n"
-            "3. Customers & Licenses tab → see all keys, extend, stop, or delete stopped rows\n"
-            "4. Before each app update → Export Block List for the customer app"
+            "2. Licenses → Generate Key → make key → copy and send\n"
+            "3. Licenses → Customers & Licenses → extend, stop, or export block list\n"
+            "4. Pricing → edit rates → Publish to GitHub\n"
+            "5. Signing Key → backup your vendor folder regularly"
         )
         steps.setWordWrap(True)
         steps.setObjectName("Hint")
@@ -941,7 +1073,7 @@ class AdminLicenseWindow(QMainWindow):
             Encoding.PEM, PublicFormat.SubjectPublicKeyInfo
         ).decode("utf-8")
 
-        self._tabs.setCurrentIndex(1)
+        self._go_to_licenses(0)
         self._output.setPlainText(
             "Paste into src/licensing/validator.py as EMBEDDED_PUBLIC_KEY_PEM "
             "(replace the existing block, keep the b\"\"\" wrapper):\n\n"
@@ -1078,7 +1210,7 @@ class AdminLicenseWindow(QMainWindow):
         self._renew_from_id = None
         self._renew_label.setText("")
         self._refresh_all()
-        self._tabs.setCurrentIndex(2)
+        self._go_to_licenses(1)
         QMessageBox.information(
             self,
             "License Generated",
@@ -1108,7 +1240,7 @@ class AdminLicenseWindow(QMainWindow):
             self._license_type.setCurrentIndex(idx)
         self._on_license_type_changed(self._license_type.currentText())
         self._renew_label.setText(f"Extending license {rec.license_id[:8]}...")
-        self._tabs.setCurrentIndex(1)
+        self._go_to_licenses(0)
 
     def _on_copy_stored_key(self) -> None:
         rec = self._selected_record()

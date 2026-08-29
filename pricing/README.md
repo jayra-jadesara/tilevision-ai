@@ -4,7 +4,8 @@
 
 ## How customers get updates
 
-1. Edit `pricing/prices.json` on the `main` branch.
+1. Edit pricing in **TileVision AI Admin → Pricing** tab and click **Publish to GitHub**,  
+   **or** edit `pricing/prices.json` on the `main` branch manually.
 2. Commit and push (no software version bump / installer rebuild).
 3. In TileVision AI → **Help** → **Pricing Quote (PDF)**.
 4. The app downloads this file, caches it locally, and generates a fresh PDF.

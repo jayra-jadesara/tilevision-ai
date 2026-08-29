@@ -123,6 +123,26 @@ def get_admin_qss(theme: str) -> str:
         color: {p['text_primary']};
         background-color: {p['button_hover']};
     }}
+    QComboBox {{
+        background-color: {p['bg_input']};
+        color: {p['text_primary']};
+        border: 1px solid {p['border_strong']};
+        border-radius: 6px;
+        padding: 4px 8px;
+        min-height: 28px;
+    }}
+    QComboBox::drop-down {{
+        border: none;
+        width: 24px;
+    }}
+    QComboBox QAbstractItemView {{
+        background-color: {p['bg_panel']};
+        color: {p['text_primary']};
+        border: 1px solid {p['border_strong']};
+        selection-background-color: {p['highlight_bg']};
+        selection-color: {p['text_primary']};
+        outline: none;
+    }}
     QLineEdit, QPlainTextEdit, QTextEdit {{
         background-color: {p['bg_input']};
         color: {p['text_primary']};
@@ -382,5 +402,42 @@ def get_admin_qss(theme: str) -> str:
         background: {p['border_strong']};
         border-radius: 5px;
         min-height: 24px;
+    }}
+    #Sidebar {{
+        background-color: {p['bg_sidebar']};
+        border-right: 1px solid {p['border']};
+    }}
+    #SidebarTitle {{
+        font-size: 11px;
+        font-weight: 700;
+        color: {p['text_muted']};
+        letter-spacing: 0.5px;
+        padding: 4px 8px;
+        background: transparent;
+    }}
+    #AdminNavButton {{
+        text-align: left;
+        padding: 10px 14px;
+        border: none;
+        border-radius: 8px;
+        background: transparent;
+        color: {p['text_secondary']};
+        font-weight: 500;
+        margin: 2px 8px;
+    }}
+    #AdminNavButton:hover {{
+        background-color: {p['button_hover']};
+        color: {p['text_primary']};
+    }}
+    #AdminNavButton:checked {{
+        background-color: {p['highlight_bg']};
+        color: {p['accent_text']};
+        font-weight: 700;
+    }}
+    #ContentStack {{
+        background-color: {p['bg_app']};
+    }}
+    #ContentHeader {{
+        background: transparent;
     }}
     """
