@@ -91,20 +91,16 @@ class _GitHubTokenDialog(QDialog):
       buttons.rejected.connect(self.reject)
       layout.addWidget(buttons)
 
-        clipboard = QGuiApplication.clipboard().text().strip()
-        if clipboard:
-            from github_connect import normalize_pasted_token
-
-            token = normalize_pasted_token(clipboard)
-            if token:
-                self._token.setText(token)
+      clipboard = QGuiApplication.clipboard().text().strip()
+      if clipboard:
+          token = normalize_pasted_token(clipboard)
+          if token:
+              self._token.setText(token)
 
   def _paste_clipboard(self) -> None:
       text = QGuiApplication.clipboard().text().strip()
       if not text:
           return
-      from github_connect import normalize_pasted_token
-
       token = normalize_pasted_token(text)
       if token:
           self._token.setText(token)

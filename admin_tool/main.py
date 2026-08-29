@@ -67,6 +67,7 @@ from admin_nav import (
 )
 from admin_theme import get_admin_qss
 from vendor_backup import get_last_backup_summary, resolve_backup_dir, run_vendor_backup
+from vendor_settings import ensure_github_defaults
 from web_date_picker import WebDatePicker
 from src.licensing.validator import (
     VENDOR_LICENSE_TYPES,
@@ -166,6 +167,7 @@ class AdminLicenseWindow(QMainWindow):
         if icon_path is not None:
             self.setWindowIcon(QIcon(str(icon_path)))
         self._load_settings()
+        ensure_github_defaults()
         self._setup_ui()
         self._apply_styles()
         self._auto_load_signing_key()

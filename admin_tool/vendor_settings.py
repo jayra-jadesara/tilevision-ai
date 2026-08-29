@@ -38,7 +38,41 @@ def save_vendor_settings(**updates: Any) -> None:
 
 
 def get_github_token() -> str:
-    return str(load_vendor_settings().get("github_token", "")).strip()
+    raw = str(load_vendor_settings().get("github_token", "")).strip()
+    if not raw:
+        return ""
+    try:
+        from github_connect import normalize_pasted_token
+
+        return normalize_pasted_token(raw) or ""
+    except ImportError:
+        return raw
+
+
+def sanitize_stored_github_token() -> bool:
+    """Normalize or clear an invalid saved GitHub token. Returns True if settings changed."""
+    data = load_vendor_settings()
+    if "github_token" not in data:
+        return False
+    stored = str(data.get("github_token", ""))
+    if not stored.strip():
+        if stored:
+            save_vendor_settings(github_token="", github_login="")
+            return True
+        return False
+    try:
+        from github_connect import normalize_pasted_token
+
+        clean = normalize_pasted_token(stored)
+    except ImportError:
+        return False
+    if clean and stored == clean:
+        return False
+    if not clean:
+        save_vendor_settings(github_token="", github_login="")
+        return True
+    save_vendor_settings(github_token=clean)
+    return True
 
 
 def get_github_login() -> str:
@@ -63,6 +97,7 @@ def ensure_github_defaults() -> None:
         updates["github_branch"] = DEFAULT_GITHUB_BRANCH
     if updates:
         save_vendor_settings(**updates)
+    sanitize_stored_github_token()
 
 
 _DEFAULT_PRICING_DROPDOWNS: dict[str, list[str]] = {

@@ -93,13 +93,35 @@ def test_save_draft_and_backup(vendor_dir):
 
 def test_vendor_settings_store_github_token(vendor_dir):
     save_vendor_settings(
-        github_token="ghp_test_token",
+        github_token="ghp_test_token_abcdefghijklmnopqrstuvwxyz",
         github_repo=DEFAULT_GITHUB_REPO,
         github_branch="main",
     )
     settings = load_vendor_settings()
-    assert settings["github_token"] == "ghp_test_token"
+    assert settings["github_token"] == "ghp_test_token_abcdefghijklmnopqrstuvwxyz"
     assert settings["github_repo"] == DEFAULT_GITHUB_REPO
+
+
+def test_sanitize_stored_github_token_clears_shell_paste(vendor_dir):
+    from vendor_settings import get_github_token, sanitize_stored_github_token
+
+    save_vendor_settings(
+        github_token="git pull origin main\npython admin_tool/main.py",
+        github_login="stale-user",
+    )
+    assert sanitize_stored_github_token() is True
+    assert get_github_token() == ""
+    settings = load_vendor_settings()
+    assert settings.get("github_login", "") == ""
+
+
+def test_sanitize_stored_github_token_normalizes_embedded_token(vendor_dir):
+    from vendor_settings import get_github_token, sanitize_stored_github_token
+
+    token = "ghp_abcdefghijklmnopqrstuvwxyz123456"
+    save_vendor_settings(github_token=f"  {token}  ")
+    assert sanitize_stored_github_token() is True
+    assert get_github_token() == token
 
 
 def test_ensure_github_defaults_fills_repo_and_branch(vendor_dir):
@@ -175,3 +197,12 @@ def test_publish_requires_token():
     data = _base_payload()
     with pytest.raises(GitHubPublishError):
         publish_prices_to_github(data, token="")
+
+
+def test_publish_rejects_shell_command_token():
+    data = _base_payload()
+    with pytest.raises(GitHubPublishError, match="GitHub token"):
+        publish_prices_to_github(
+            data,
+            token="git pull origin main\npython admin_tool/main.py",
+        )
