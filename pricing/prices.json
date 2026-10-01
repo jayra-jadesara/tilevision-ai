@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "currency": "INR",
   "currency_symbol": "Rs",
   "location": "Rajkot, Gujarat",
@@ -41,42 +41,42 @@
       "id": "1y",
       "label": "1 Year",
       "price": 38000,
-      "effective_per_year": 38000,
-      "discount_note": "-",
-      "badge": null
+      "discount_note": "Best for long-term",
+      "badge": "Limited offer",
+      "effective_per_year": 38000
     },
     {
       "id": "2y",
       "label": "2 Year",
       "price": 68400,
-      "effective_per_year": 34200,
       "discount_note": "10% off",
-      "badge": null
+      "badge": null,
+      "effective_per_year": 34200
     },
     {
       "id": "3y",
       "label": "3 Year",
       "price": 96900,
-      "effective_per_year": 32300,
       "discount_note": "15% off",
-      "badge": "Best value"
+      "badge": null,
+      "effective_per_year": 32300
     },
     {
       "id": "4y",
       "label": "4 Year",
       "price": 121600,
-      "effective_per_year": 30400,
       "discount_note": "20% off",
-      "badge": null
+      "badge": null,
+      "effective_per_year": 30400
     },
     {
       "id": "lifetime",
       "label": "Lifetime",
       "price": 200000,
-      "effective_per_year": null,
-      "effective_label": "One-time",
       "discount_note": "Best for long-term",
-      "badge": null
+      "badge": null,
+      "effective_label": "One-time",
+      "effective_per_year": null
     }
   ],
   "included_heading": "Included with every license",
@@ -93,7 +93,7 @@
     "Built for Indian tile businesses (Gujarat & beyond) — works with your existing photo folders."
   ],
   "vendor": {
-    "name": "JD Software",
+    "name": "Adesara Tech",
     "email": "jayrajadesara@gmail.com",
     "phone": "(+91) 88662 77767",
     "phone_display": "Mobile / WhatsApp: (+91) 88662 77767"
@@ -104,6 +104,6 @@
     "confidential": "TileVision AI  ·  Confidential quote",
     "made_by_prefix": "Software by"
   },
-  "updated_at": "2026-08-27",
-  "notes": "Edit this file on GitHub main to change pricing. No new app release required."
+  "updated_at": "2026-10-02",
+  "notes": "Updated via TileVision Admin. Customers refresh Pricing in the app to see new rates — no installer rebuild required."
 }
