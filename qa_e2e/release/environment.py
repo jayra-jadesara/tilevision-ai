@@ -46,7 +46,7 @@ def collect_environment(*, session=None) -> Dict[str, Any]:
     Snapshot versions and host facts. Uses live session objects when available
     so DINOv2 / FAISS / license readiness reflect the running app.
     """
-    from src.ai.model_paths import bundled_model_dir, resolve_dinov2_model_source
+    from src.ai.model_paths import bundled_model_dir, resolve_dinov2_model_source, runtime_root
     from src.version import APP_VERSION
 
     dinov2_path = ""
@@ -56,8 +56,9 @@ def collect_environment(*, session=None) -> Dict[str, Any]:
     except Exception as exc:
         dinov2_path = f"error: {exc}"
 
-    sam2_onnx = Path("model_weights/sam2.1-hiera-tiny-onnx")
-    sam2_pt = Path("model_weights/sam2.1-hiera-tiny")
+    root = runtime_root()
+    sam2_onnx = root / "model_weights" / "sam2.1-hiera-tiny-onnx"
+    sam2_pt = root / "model_weights" / "sam2.1-hiera-tiny"
     encoder = sam2_onnx / "sam2.1_hiera_tiny.encoder.onnx"
     decoder = sam2_onnx / "sam2.1_hiera_tiny.decoder.onnx"
     sam2_load_ok = False
@@ -82,12 +83,17 @@ def collect_environment(*, session=None) -> Dict[str, Any]:
         "onnx_decoder": decoder.is_file(),
         "load_ok": sam2_load_ok,
         "load_detail": sam2_load_detail,
+        "onnx_dir": str(sam2_onnx),
     }
 
     payload: Dict[str, Any] = {
         "app_version": APP_VERSION,
         "python": sys.version.split()[0],
         "python_full": sys.version,
+        "frozen": bool(getattr(sys, "frozen", False)),
+        "meipass": str(getattr(sys, "_MEIPASS", "") or ""),
+        "executable": sys.executable,
+        "packaged_app": os.environ.get("TILEVISION_QA_PACKAGED_APP", "") == "1",
         "torch": _safe_import_version("torch"),
         "torchvision": _safe_import_version("torchvision"),
         "faiss": _safe_import_version("faiss"),
@@ -114,6 +120,7 @@ def collect_environment(*, session=None) -> Dict[str, Any]:
             "TILEVISION_OFFLINE_MODEL": os.environ.get("TILEVISION_OFFLINE_MODEL", ""),
             "QT_QPA_PLATFORM": os.environ.get("QT_QPA_PLATFORM", ""),
             "TILEVISION_ENABLE_SAM2": os.environ.get("TILEVISION_ENABLE_SAM2", ""),
+            "TILEVISION_QA_PACKAGED_APP": os.environ.get("TILEVISION_QA_PACKAGED_APP", ""),
         },
     }
 
@@ -149,4 +156,10 @@ def environment_gate_failures(env: Dict[str, Any]) -> list[str]:
         # Allow HF id only when offline is not forced
         if os.environ.get("TILEVISION_OFFLINE_MODEL", "").strip() in {"1", "true", "yes"}:
             fails.append("DINOv2 weights missing while TILEVISION_OFFLINE_MODEL=1")
+    # Packaged-app ship gate: must be the frozen customer binary, not source python.
+    if os.environ.get("TILEVISION_QA_PACKAGED_APP", "").strip() == "1":
+        if not env.get("frozen"):
+            fails.append("TILEVISION_QA_PACKAGED_APP=1 but sys.frozen is false — not the installed .app")
+        if not env.get("packaged_app"):
+            fails.append("packaged_app flag missing from environment snapshot")
     return fails

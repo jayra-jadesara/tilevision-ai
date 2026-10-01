@@ -11,7 +11,13 @@ sudo rm -rf \
   /usr/local/lib/android \
   /opt/hostedtoolcache/CodeQL \
   /Users/runner/Library/Caches/Homebrew \
+  /Users/runner/.nuget \
+  /Users/runner/hostedtoolcache/node \
+  /Users/runner/hostedtoolcache/go \
   || true
+
+# Local build leftovers (idempotent).
+rm -rf build dist/TileVisionAI 2>/dev/null || true
 
 echo "Disk after cleanup:"
 df -h .
