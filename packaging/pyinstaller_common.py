@@ -22,6 +22,8 @@ HIDDEN_IMPORTS = [
     "faiss",
     "cv2",
     "PIL",
+    "PIL.Image",
+    "PIL.ImageDraw",
     "pillow_heif",
     "skimage",
     "cryptography",
@@ -32,6 +34,21 @@ HIDDEN_IMPORTS = [
     "certifi",
     "watchdog.observers",
     "watchdog.events",
+    "reportlab",
+    "reportlab.pdfgen",
+    "reportlab.pdfgen.canvas",
+    "reportlab.lib.pagesizes",
+    "reportlab.lib.utils",
+    "onnxruntime",
+    "onnxruntime.capi",
+    "PySide6",
+    "PySide6.QtCore",
+    "PySide6.QtGui",
+    "PySide6.QtWidgets",
+    "PySide6.QtNetwork",
+    "PySide6.QtPrintSupport",
+    "PySide6.QtSvg",
+    "shiboken6",
 ]
 
 # Optional SAM2 Precise Crop (lab). Only added when TILEVISION_BUNDLE_SAM2 is on
@@ -164,6 +181,32 @@ def collect_torch_bundle() -> tuple[list, list, list]:
     hiddenimports: list = []
     for package in ("torch", "torchvision"):
         pkg_datas, pkg_binaries, pkg_hidden = collect_all(package)
+        datas += pkg_datas
+        binaries += pkg_binaries
+        hiddenimports += pkg_hidden
+    return datas, binaries, hiddenimports
+
+
+def collect_extra_package_bundles() -> tuple[list, list, list]:
+    """
+    Collect native-heavy packages PyInstaller often under-bundles on macOS.
+
+    Safe to call when a package is missing (returns empty for that package).
+    """
+    from PyInstaller.utils.hooks import collect_all
+
+    datas: list = []
+    binaries: list = []
+    hiddenimports: list = []
+    packages = ["onnxruntime", "cv2", "faiss", "reportlab", "PySide6"]
+    if should_bundle_sam2_onnx():
+        # Already listed; collect_all is idempotent enough for CI.
+        pass
+    for package in packages:
+        try:
+            pkg_datas, pkg_binaries, pkg_hidden = collect_all(package)
+        except Exception:
+            continue
         datas += pkg_datas
         binaries += pkg_binaries
         hiddenimports += pkg_hidden
