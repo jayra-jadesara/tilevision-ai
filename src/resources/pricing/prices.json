@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "currency": "INR",
   "currency_symbol": "Rs",
   "location": "Rajkot, Gujarat",
@@ -41,7 +41,7 @@
       "id": "1y",
       "label": "1 Year",
       "price": 38000,
-      "discount_note": "Best for long-term",
+      "discount_note": "-",
       "badge": null,
       "effective_per_year": 38000
     },
