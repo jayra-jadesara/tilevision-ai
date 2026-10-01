@@ -33,6 +33,8 @@ _SEARCH_STATUS_HINT_MS = 45_000
 # Stall detector: abort only when heartbeats stop for this long.
 # Heartbeats fire every ~5s from SearchWorker while the QThread is alive.
 _SEARCH_STALL_MS = 90_000
+# Coalesce burst auto-index catalog updates into one filter dropdown refresh.
+_FILTER_REFRESH_DEBOUNCE_MS = 400
 
 
 def _default_search_timeout_ms() -> int:
@@ -111,6 +113,9 @@ class SearchViewModel(QObject):
         self._on_search_busy_changed = on_search_busy_changed
         self._search_priority_held = False
         self._pending_query_path: Optional[str] = None
+        self._filter_refresh_timer = QTimer(self)
+        self._filter_refresh_timer.setSingleShot(True)
+        self._filter_refresh_timer.timeout.connect(self._emit_filter_options)
 
     @property
     def state(self) -> str:
@@ -134,6 +139,10 @@ class SearchViewModel(QObject):
 
     @Slot()
     def load_filter_options(self) -> None:
+        """Debounce rapid catalog updates (burst auto-index) into one refresh."""
+        self._filter_refresh_timer.start(_FILTER_REFRESH_DEBOUNCE_MS)
+
+    def _emit_filter_options(self) -> None:
         try:
             options = self._use_case.get_filter_options()
             self.filters_available.emit(options)
@@ -232,6 +241,20 @@ class SearchViewModel(QObject):
             indexed = int(getattr(health, "indexed_count", 0) or 0)
             if indexed <= 0:
                 self._release_search_priority()
+                # Background re-search after auto-index can transiently read
+                # indexed_count=0 while SQLite is locked. Never wipe good results.
+                if (
+                    self._last_results
+                    and self._state == SearchState.RESULTS
+                    and str(path) == self._last_query_path
+                ):
+                    logger.warning(
+                        "[SEARCH] Ignoring transient empty index on re-search "
+                        "(keeping %d displayed results for %s)",
+                        len(self._last_results),
+                        path.name,
+                    )
+                    return
                 self._set_state(SearchState.NO_RESULTS)
                 logger.warning(
                     "[SEARCH] Emitting empty results reason=no_indexed_tiles "

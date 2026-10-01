@@ -518,7 +518,10 @@ def test_catalog_filter_refresh_does_not_clear_displayed_results(qapp, tmp_path)
     # Quiet drop (what SearchView._on_filters_available does now).
     vm.drop_filter_quietly("brand")
     vm.load_filter_options()
-    QCoreApplication.processEvents()
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline:
+        QCoreApplication.processEvents()
+        time.sleep(0.02)
 
     assert vm.state == SearchState.RESULTS
     assert len(vm.last_results) == 1
@@ -540,3 +543,48 @@ def test_health_check_indexed_zero_logs_reason(qapp, tmp_path):
     assert empties and empties[0] == []
     assert vm.state == SearchState.NO_RESULTS
     assert use_case.calls == []  # never started worker
+
+
+def test_transient_empty_index_on_research_keeps_displayed_results(qapp, tmp_path):
+    """SISCON log: auto-index re-search with indexed_count=0 must not wipe the table."""
+    query_file = tmp_path / "query.jpg"
+    _write_query(query_file)
+    use_case = FakeSearchUseCase(results=[_make_result(path=str(tmp_path / "tile.jpg"))])
+    vm = SearchViewModel(use_case=use_case)
+    vm.search_by_image(str(query_file))
+    assert _pump_until(lambda: vm.state == SearchState.RESULTS)
+    _drain_worker(vm)
+    assert len(vm.last_results) == 1
+
+    use_case.indexed_count = 0
+    empties = []
+    vm.results_ready.connect(lambda r: empties.append(list(r)))
+    vm.search_by_image(str(query_file))
+    QCoreApplication.processEvents()
+
+    assert vm.state == SearchState.RESULTS
+    assert len(vm.last_results) == 1
+    assert empties == []
+    assert len(use_case.calls) == 1  # original search only
+
+
+def test_load_filter_options_is_debounced(qapp):
+    use_case = FakeSearchUseCase(results=[])
+    use_case.filter_options = {"brand": ["Acme"]}
+    vm = SearchViewModel(use_case=use_case)
+    emitted = []
+    vm.filters_available.connect(lambda opts: emitted.append(dict(opts)))
+
+    vm.load_filter_options()
+    vm.load_filter_options()
+    vm.load_filter_options()
+    QCoreApplication.processEvents()
+    assert emitted == []
+
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and not emitted:
+        QCoreApplication.processEvents()
+        time.sleep(0.02)
+
+    assert len(emitted) == 1
+    assert emitted[0]["brand"] == ["Acme"]
