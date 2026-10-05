@@ -13,6 +13,8 @@ import src.ai.gpu_info as gpu_info
 
 
 def test_cpu_wheel_reports_install_hint(monkeypatch):
+    import src.utils.platform_info as platform_info
+
     fake_torch = SimpleNamespace(
         __version__="2.13.0+cpu",
         cuda=SimpleNamespace(is_available=lambda: False, device_count=lambda: 0),
@@ -22,6 +24,8 @@ def test_cpu_wheel_reports_install_hint(monkeypatch):
     monkeypatch.setattr(gpu_info, "torch", fake_torch)
     monkeypatch.setattr(gpu_info, "detect_display_adapters", lambda: [])
     monkeypatch.setattr(gpu_info, "has_nvidia_gpu", lambda: False)
+    # Pin off Intel-Mac early-return so this asserts the CPU-wheel path on any host.
+    monkeypatch.setattr(platform_info, "is_mac_intel", lambda: False)
 
     info = gpu_info.detect_gpu_runtime(preference="auto")
 
@@ -53,6 +57,8 @@ def test_cuda_auto_selects_gpu(monkeypatch):
 
 
 def test_non_nvidia_adapter_message(monkeypatch):
+    import src.utils.platform_info as platform_info
+
     fake_torch = SimpleNamespace(
         __version__="2.13.0+cpu",
         cuda=SimpleNamespace(is_available=lambda: False, device_count=lambda: 0),
@@ -66,6 +72,8 @@ def test_non_nvidia_adapter_message(monkeypatch):
         lambda: ["AMD Radeon R5 M330", "Intel(R) HD Graphics 520"],
     )
     monkeypatch.setattr(gpu_info, "has_nvidia_gpu", lambda: False)
+    # Pin off Intel-Mac early-return so this asserts the non-NVIDIA adapter path.
+    monkeypatch.setattr(platform_info, "is_mac_intel", lambda: False)
 
     info = gpu_info.detect_gpu_runtime(preference="auto")
 
