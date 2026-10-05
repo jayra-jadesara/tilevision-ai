@@ -460,28 +460,25 @@ class DINOv2Embedder:
         """
         Extract a DINOv2 embedding from an already-preprocessed image.
 
-        Query: single-view (fast). Index: multi-scale fused, yielding between
-        views so drop-search can interrupt long catalogue indexing.
+        Query: single-view (fast). Index: multi-scale views fused in **one**
+        batched forward pass (not N serial single-image calls). Search can
+        still interrupt between images / view-chunks via
+        ``wait_while_search_priority`` before the forward.
         """
         views = self._generate_views(processed.pil, for_query=for_query)
 
-        if for_query or len(views) == 1:
-            view_embeddings = self._extract_batch(views, for_query=for_query)
-            final_embedding = self._fuse_embeddings(view_embeddings)
-        else:
-            # Index path: one view at a time so Search can take the lock between.
-            pieces: List[np.ndarray] = []
-            for view in views:
-                wait_while_search_priority()
-                pieces.append(self._extract_batch([view], for_query=False)[0])
-            stacked = np.vstack(pieces)
-            final_embedding = self._fuse_embeddings(stacked)
+        if not for_query and len(views) > 1:
+            wait_while_search_priority()
+
+        view_embeddings = self._extract_batch(views, for_query=for_query)
+        final_embedding = self._fuse_embeddings(view_embeddings)
 
         logger.debug(
-            "DINOv2 embedding: views=%d dimension=%d for_query=%s",
+            "DINOv2 embedding: views=%d dimension=%d for_query=%s forward_batch=%d",
             len(views),
             final_embedding.shape[0],
             for_query,
+            len(views),
         )
         return final_embedding
 
@@ -508,27 +505,67 @@ class DINOv2Embedder:
             np.asarray(batch[i], dtype=np.float32) for i in range(batch.shape[0])
         ]
 
+    # Max PIL views per DINOv2 forward during catalogue indexing. Keeps peak
+    # RAM bounded on CPU-only showroom PCs while still forming a real batch
+    # (multiple images × multi-scale views) instead of 1-image serial calls.
+    _INDEX_VIEW_FORWARD_CHUNK = 24
+
     def extract_batch_from_preprocessed(
         self,
         processed_images: List[PreprocessedImage],
     ) -> List[np.ndarray]:
         """
-        Extract embeddings for multiple preprocessed images.
+        Extract embeddings for multiple preprocessed catalogue images.
 
-        One image at a time (with multi-scale yield points) so Search can run
-        while a large folder is indexing.
+        Builds every multi-scale view up front, then runs real batched
+        ``_forward_batch`` calls (chunked). Previously this looped
+        one-image-at-a-time with three serial single-view forwards each —
+        the dominant cost on CPU-only full rebuilds (~6–8s/image).
         """
         if not processed_images:
             return []
 
-        results: List[np.ndarray] = []
-        for processed in processed_images:
-            wait_while_search_priority()
-            results.append(self.extract_from_preprocessed(processed, for_query=False))
+        if len(processed_images) == 1:
+            return [
+                self.extract_from_preprocessed(processed_images[0], for_query=False)
+            ]
 
-        logger.debug(
-            "Batched DINOv2 embeddings: images=%d (chunked)",
+        all_views: List[Image.Image] = []
+        views_per_image: List[int] = []
+        for processed in processed_images:
+            views = self._generate_views(processed.pil, for_query=False)
+            views_per_image.append(len(views))
+            all_views.extend(views)
+
+        chunk = max(1, int(os.environ.get(
+            "TILEVISION_INDEX_VIEW_BATCH",
+            str(self._INDEX_VIEW_FORWARD_CHUNK),
+        )))
+        pieces: List[np.ndarray] = []
+        forward_calls = 0
+        for start in range(0, len(all_views), chunk):
+            wait_while_search_priority()
+            batch_views = all_views[start : start + chunk]
+            pieces.append(self._extract_batch(batch_views, for_query=False))
+            forward_calls += 1
+
+        stacked = np.vstack(pieces) if len(pieces) > 1 else pieces[0]
+
+        results: List[np.ndarray] = []
+        offset = 0
+        for n_views in views_per_image:
+            fused = self._fuse_embeddings(stacked[offset : offset + n_views])
+            results.append(fused)
+            offset += n_views
+
+        logger.info(
+            "DINOv2 index batch: images=%d views=%d forward_calls=%d "
+            "views_per_forward~%d (was %d serial single-view calls)",
             len(processed_images),
+            len(all_views),
+            forward_calls,
+            min(chunk, len(all_views)),
+            len(all_views),
         )
         return results
 

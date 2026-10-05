@@ -537,6 +537,191 @@ class FeatureExtractor:
 
         return features, aux
 
+    def extract_index_vectors_batch(
+        self,
+        image_paths: List[str],
+    ) -> List[tuple[TileFeatures, list[np.ndarray]]]:
+        """
+        Batch index-time extract for a folder-scan flush.
+
+        Same ``prepare_index_primary`` + multi-scale DINOv2 fusion + aux
+        FAISS vectors as ``extract_index_vectors``, but runs one (chunked)
+        batched DINOv2 forward across the whole flush instead of serial
+        per-image / per-view calls.
+        """
+        from src.ai.search_quality.views import IndexViewType
+
+        if not image_paths:
+            return []
+        if len(image_paths) == 1:
+            return [self.extract_index_vectors(image_paths[0])]
+
+        total_start = time.perf_counter()
+        t0 = time.perf_counter()
+
+        def _safe_prep(path: str):
+            try:
+                return prepare_index_primary(path), None
+            except Exception as exc:
+                return None, exc
+
+        workers = min(max(1, self._preprocess_workers), len(image_paths))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            prep_results = list(pool.map(_safe_prep, image_paths))
+        preprocess_elapsed = time.perf_counter() - t0
+
+        primaries: list[PreprocessedImage | None] = []
+        for path, (prep, err) in zip(image_paths, prep_results):
+            if prep is None:
+                logger.warning(
+                    "Index prepare failed for %s (%s) — will full-sheet fallback",
+                    path,
+                    err,
+                )
+                primaries.append(None)
+            else:
+                primaries.append(prep.primary)
+
+        valid_indices = [i for i, primary in enumerate(primaries) if primary is not None]
+        valid_primaries = [primaries[i] for i in valid_indices]
+
+        t1 = time.perf_counter()
+        emb_by_index: dict[int, np.ndarray] = {}
+        if valid_primaries:
+            batch_fn = getattr(
+                self._embedder, "extract_batch_from_preprocessed", None
+            )
+            if batch_fn is not None:
+                batch_embs = batch_fn(valid_primaries)
+            else:
+                batch_embs = [
+                    self._embedder.extract_from_preprocessed(p, for_query=False)
+                    for p in valid_primaries
+                ]
+            for idx, emb in zip(valid_indices, batch_embs):
+                emb_by_index[idx] = np.asarray(emb, dtype=np.float32).ravel()
+        dinov2_elapsed = time.perf_counter() - t1
+
+        t2 = time.perf_counter()
+        desc_by_index: dict[int, tuple] = {}
+        if valid_primaries:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                desc_list = list(
+                    pool.map(
+                        self.extract_descriptors_from_preprocessed,
+                        valid_primaries,
+                    )
+                )
+            for idx, desc in zip(valid_indices, desc_list):
+                desc_by_index[idx] = desc
+        descriptors_elapsed = time.perf_counter() - t2
+
+        # Collect aux crops (letterboxed) across the batch, then one batched
+        # DINOv2 pass — same multi-scale fusion as single-file indexing.
+        aux_jobs: list[tuple[int, str, PreprocessedImage]] = []
+        for i, (path, (prep, _err)) in enumerate(zip(image_paths, prep_results)):
+            if prep is None:
+                continue
+            image_name = Path(path).name
+            panel_pil = prep.panel
+            raw = prep.raw
+            primary = emb_by_index.get(i)
+            if primary is None:
+                continue
+            for view in prep.views:
+                if view.view_type == IndexViewType.PRIMARY:
+                    if panel_pil is not None:
+                        aux_jobs.append(
+                            (
+                                i,
+                                "full_sheet",
+                                self._finalize_index_pil(
+                                    view.image, original_size=raw.size
+                                ),
+                            )
+                        )
+                    continue
+                if view.view_type == IndexViewType.PANEL and panel_pil is not None:
+                    continue
+                aux_jobs.append(
+                    (
+                        i,
+                        view.view_type.value,
+                        self._finalize_index_pil(
+                            view.image, original_size=raw.size
+                        ),
+                    )
+                )
+
+        aux_by_index: dict[int, list[np.ndarray]] = {i: [] for i in range(len(image_paths))}
+        if aux_jobs:
+            t_aux = time.perf_counter()
+            aux_pre = [job[2] for job in aux_jobs]
+            batch_fn = getattr(
+                self._embedder, "extract_batch_from_preprocessed", None
+            )
+            if batch_fn is not None:
+                aux_embs = batch_fn(aux_pre)
+            else:
+                aux_embs = [
+                    self._embedder.extract_from_preprocessed(p, for_query=False)
+                    for p in aux_pre
+                ]
+            dinov2_elapsed += time.perf_counter() - t_aux
+            for (img_idx, label, _pre), emb in zip(aux_jobs, aux_embs):
+                image_name = Path(image_paths[img_idx]).name
+                self._maybe_append_aux(
+                    aux_by_index[img_idx],
+                    emb_by_index[img_idx],
+                    np.asarray(emb, dtype=np.float32).ravel(),
+                    label=label,
+                    image_name=image_name,
+                )
+
+        results: list[tuple[TileFeatures, list[np.ndarray]]] = []
+        for i, path in enumerate(image_paths):
+            if i not in emb_by_index or i not in desc_by_index:
+                features, aux = self.extract_index_vectors(path)
+                results.append((features, aux))
+                continue
+            (
+                color_hist,
+                texture_hist,
+                edge_hist,
+                pattern_features,
+                dominant,
+            ) = desc_by_index[i]
+            primary_pre = primaries[i]
+            assert primary_pre is not None
+            features = TileFeatures(
+                embedding=emb_by_index[i],
+                color_histogram=color_hist,
+                texture_histogram=texture_hist,
+                edge_histogram=edge_hist,
+                pattern_features=pattern_features,
+                dominant_color=dominant,
+                width=primary_pre.width,
+                height=primary_pre.height,
+            )
+            results.append((features, aux_by_index.get(i, [])))
+
+        n = len(image_paths)
+        self._last_timings = ExtractTimings(
+            preprocessing=preprocess_elapsed / n,
+            dinov2=dinov2_elapsed / n,
+            descriptors=descriptors_elapsed / n,
+            total=(time.perf_counter() - total_start) / n,
+        )
+        logger.info(
+            "Index batch extract: count=%d preprocess=%.3fs dinov2=%.3fs "
+            "descriptors=%.3fs",
+            n,
+            preprocess_elapsed,
+            dinov2_elapsed,
+            descriptors_elapsed,
+        )
+        return results
+
     def extract_for_search(
         self,
         image_path: str,

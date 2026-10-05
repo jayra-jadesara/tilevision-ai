@@ -17,7 +17,7 @@ from typing import Callable, List, Optional, Tuple
 from src.config.indexing_performance import IndexingPerformanceConfig
 from src.core.models import TileImage, ScanResult, IndexedFolderState
 from src.data.repository_interface import IImageRepository, IIndexedFolderRepository
-from src.ai.feature_extractor import ExtractTimings, FeatureExtractor
+from src.ai.feature_extractor import FeatureExtractor
 from src.ai.inference_guard import wait_while_search_priority
 from src.ai.vector_index import FaissIndexManager
 from src.utils.pipeline_timing import PipelineTimer
@@ -455,33 +455,28 @@ class IndexImagesUseCase:
 
         features_list = []
         aux_by_index: List[List] = []
-        total_preprocess = 0.0
-        total_dinov2 = 0.0
-        total_descriptors = 0.0
 
         with timer.measure("feature_extract"):
-            for item in items:
-                features, aux = self._feature_extractor.extract_index_vectors(
-                    str(item.path)
-                )
+            batch_fn = getattr(
+                self._feature_extractor, "extract_index_vectors_batch", None
+            )
+            if batch_fn is not None and len(items) > 1:
+                extracted = batch_fn([str(item.path) for item in items])
+            else:
+                extracted = [
+                    self._feature_extractor.extract_index_vectors(str(item.path))
+                    for item in items
+                ]
+            for features, aux in extracted:
                 features_list.append(features)
                 aux_by_index.append(aux)
-                timings = self._feature_extractor.last_timings
-                total_preprocess += timings.preprocessing
-                total_dinov2 += timings.dinov2
-                total_descriptors += timings.descriptors
 
+        timings = self._feature_extractor.last_timings
         batch_size = len(items)
-        per_file = max(1, batch_size)
-        self._feature_extractor._last_timings = ExtractTimings(
-            preprocessing=total_preprocess / per_file,
-            dinov2=total_dinov2 / per_file,
-            descriptors=total_descriptors / per_file,
-            total=(total_preprocess + total_dinov2 + total_descriptors) / per_file,
-        )
-        timer.timings.record("preprocessing", total_preprocess)
-        timer.timings.record("dinov2", total_dinov2)
-        timer.timings.record("descriptors", total_descriptors)
+        # last_timings are already per-file averages from the batch helper.
+        timer.timings.record("preprocessing", timings.preprocessing * batch_size)
+        timer.timings.record("dinov2", timings.dinov2 * batch_size)
+        timer.timings.record("descriptors", timings.descriptors * batch_size)
 
         db_ids: List[int] = []
         faiss_ids: List[int] = []
@@ -585,22 +580,33 @@ class IndexImagesUseCase:
         # this folder whose path isn't in this set was removed from disk).
         paths_seen_on_disk: set = set()
         pending_batch: List[_PendingIndexItem] = []
-        indexed_since_checkpoint = 0
+
+        # Rolling wall-clock samples for files that actually re-embed (not skips),
+        # so ETA during a full rebuild reflects real per-image cost.
+        work_samples: List[float] = []
+        work_sample_window = 20
 
         def _flush_pending_batch() -> None:
-            nonlocal new_count, modified_count, failed_count, indexed_since_checkpoint
+            nonlocal new_count, modified_count, failed_count
             if not pending_batch:
                 return
 
             batch_size = len(pending_batch)
+            flush_t0 = time.time()
             try:
-                self._index_file_batch(pending_batch, persist=False)
+                # Persist after every flush so a mid-rebuild kill/restart can
+                # resume via skip-unchanged without orphaning FAISS vectors.
+                self._index_file_batch(pending_batch, persist=True)
                 for item in pending_batch:
                     if item.was_previously_indexed:
                         modified_count += 1
                     else:
                         new_count += 1
-                indexed_since_checkpoint += batch_size
+                per_image = (time.time() - flush_t0) / max(1, batch_size)
+                for _ in range(batch_size):
+                    work_samples.append(per_image)
+                if len(work_samples) > work_sample_window:
+                    del work_samples[: len(work_samples) - work_sample_window]
             except Exception as e:
                 failed_count += batch_size
                 logger.error(
@@ -610,6 +616,24 @@ class IndexImagesUseCase:
                 )
             finally:
                 pending_batch.clear()
+
+        def _eta_seconds(processed: int) -> float:
+            remaining_files = total_files - processed
+            if remaining_files <= 0:
+                return 0.0
+            if work_samples:
+                avg_work = sum(work_samples) / len(work_samples)
+                # Estimate how many of the remaining files still need embeds
+                # using the skip rate observed so far in this run.
+                decided = skipped_count + new_count + modified_count + failed_count
+                if decided > 0:
+                    work_rate = 1.0 - (skipped_count / decided)
+                else:
+                    work_rate = 1.0 if force else 1.0
+                return avg_work * remaining_files * max(0.0, min(1.0, work_rate))
+            if processed > 0:
+                return (time.time() - start_time) / processed * remaining_files
+            return 0.0
 
         for file_path in all_files:
             # 0. Yield to drop-image Search so results can return.
@@ -635,14 +659,7 @@ class IndexImagesUseCase:
             file_name = resolved_path.name
             paths_seen_on_disk.add(str(resolved_path))
 
-            # Calculate ETA
-            elapsed = time.time() - start_time
-            if processed_count > 0:
-                avg_time = elapsed / processed_count
-                remaining_files = total_files - processed_count
-                eta = avg_time * remaining_files
-            else:
-                eta = 0.0
+            eta = _eta_seconds(processed_count)
 
             # Emit progress update before processing
             if progress_callback:
@@ -679,13 +696,6 @@ class IndexImagesUseCase:
             except Exception as e:
                 failed_count += 1
                 logger.error(f"Error indexing file during folder scan: {resolved_path}. Error: {e}")
-
-            if (
-                indexed_since_checkpoint > 0
-                and processed_count % self._perf.checkpoint_interval == 0
-            ):
-                self._index.save_index()
-                indexed_since_checkpoint = 0
 
         _flush_pending_batch()
 
