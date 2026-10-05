@@ -80,11 +80,17 @@ def _sample_payload() -> dict:
     }
 
 
+def _bundled_vendor_name() -> str:
+    """Live vendor name from shipped prices.json (Admin can rename anytime)."""
+    return str(load_prices_file(bundled_prices_path())["vendor"]["name"])
+
+
 def test_bundled_prices_json_exists_and_validates():
     path = bundled_prices_path()
     assert path.is_file(), f"missing bundled prices at {path}"
     data = load_prices_file(path)
-    assert data["vendor"]["name"] == "JD Software"
+    vendor_name = data["vendor"]["name"]
+    assert isinstance(vendor_name, str) and vendor_name.strip()
     assert data["location"] == "Rajkot, Gujarat"
     assert data["footer"]["taxes"] == "Taxes included"
     assert any(p.get("id") == "lifetime" for p in data["plans"])
@@ -126,7 +132,7 @@ def test_load_quote_data_uses_bundled_when_remote_fails(monkeypatch, tmp_path):
     monkeypatch.setattr(svc, "fetch_remote_prices", boom)
     data, source = load_quote_data(prefer_remote=True)
     assert source == "bundled"
-    assert data["vendor"]["name"] == "JD Software"
+    assert data["vendor"]["name"] == _bundled_vendor_name()
 
 
 def test_load_quote_data_prefers_cache(monkeypatch, tmp_path):
@@ -169,7 +175,7 @@ def test_create_pricing_quote_pdf_offline(monkeypatch, tmp_path):
     result = create_pricing_quote_pdf()
     assert result.source == "bundled"
     assert result.pdf_path.is_file()
-    assert "JD Software" in json.dumps(result.data)
+    assert _bundled_vendor_name() in json.dumps(result.data)
 
 
 def test_help_view_has_no_pricing_button():
