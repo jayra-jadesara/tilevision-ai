@@ -115,7 +115,8 @@ def test_changed_file_reindexes_without_duplicating_vector(env):
     assert ids.count(tile.id) == 1
 
 
-def test_checkpoint_saves_periodically_not_per_file(env, monkeypatch):
+def test_checkpoint_saves_after_each_batch_for_crash_safe_resume(env, monkeypatch):
+    """Every flush persists FAISS so a killed rebuild can resume via skips."""
     d = env["images_dir"]
     for i in range(60):
         _make_image(d / f"tile_{i}.jpg", (i % 255, (i * 3) % 255, (i * 7) % 255))
@@ -131,7 +132,8 @@ def test_checkpoint_saves_periodically_not_per_file(env, monkeypatch):
 
     env["use_case"].scan_and_index_directory(d)
 
-    assert 2 <= save_calls["count"] <= 4
+    # batch_size=12 → ~5 flushes (+ final save). Must not be a single end-only save.
+    assert save_calls["count"] >= 5
 
 
 def test_index_single_file_persist_false_does_not_write_disk(env):
@@ -451,3 +453,67 @@ def test_count_indexed_tiles_under_folder_includes_nested_files(tmp_path):
     assert status.folder_path == str(images_dir.resolve())
     assert status.indexed_image_count == 4
     assert use_case._count_indexed_tiles_under(str(images_dir.resolve())) == 4
+
+
+def test_mid_rebuild_cancel_then_resume_skips_completed_files(env):
+    """
+    Task 3: kill/cancel mid-rebuild must not restart from zero — already
+    flushed tiles are skipped on the next scan (FAISS persisted per batch).
+    """
+    import threading
+
+    d = env["images_dir"]
+    for i in range(10):
+        _make_image(d / f"tile_{i}.jpg", (i * 20, i * 10, i * 5))
+
+    cancel_event = threading.Event()
+    calls = {"n": 0}
+
+    def progress_cb(processed, total, filename, eta):
+        calls["n"] += 1
+        # Cancel once a few files have been offered so at least one batch
+        # of work has a chance to flush (batch_size defaults to 12, so we
+        # cancel after several files and rely on the cancel-path flush).
+        if processed >= 4:
+            cancel_event.set()
+
+    first = env["use_case"].scan_and_index_directory(
+        d, progress_callback=progress_cb, cancel_event=cancel_event
+    )
+    assert first.is_completed is False
+    indexed_after_cancel = len(env["repo"].get_all())
+    assert indexed_after_cancel >= 1
+    assert env["vector_index"]._index.ntotal == indexed_after_cancel
+
+    second = env["use_case"].scan_and_index_directory(d)
+    assert second.is_completed is True
+    assert second.skipped_count == indexed_after_cancel
+    assert second.new_count == 10 - indexed_after_cancel
+    assert len(env["repo"].get_all()) == 10
+    assert env["vector_index"]._index.ntotal == 10
+
+
+def test_progress_eta_uses_embed_work_not_skip_dilution(env):
+    """ETA should stay meaningful once real embeds have been timed."""
+    d = env["images_dir"]
+    for i in range(6):
+        _make_image(d / f"tile_{i}.jpg", (i * 30, i * 15, i * 8))
+
+    env["use_case"].scan_and_index_directory(d)
+
+    # Second scan: all skips. ETA may be 0/-- early; when work_samples exist
+    # from a prior flush in the same process they still inform remaining work
+    # rate. Force a rebuild so ETA is driven by real embed samples.
+    etas = []
+
+    def progress_cb(processed, total, filename, eta):
+        etas.append(eta)
+
+    result = env["use_case"].scan_and_index_directory(
+        d, progress_callback=progress_cb, force=True
+    )
+    assert result.modified_count == 6
+    # After the first batch flush, later progress callbacks should report a
+    # positive remaining ETA (until the final file).
+    positive = [e for e in etas if e > 0]
+    assert positive, f"expected positive ETA samples during rebuild, got {etas}"

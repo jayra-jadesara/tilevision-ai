@@ -443,8 +443,7 @@ class IndexingViewModel(QObject):
         seconds = total_secs % 60
 
         if hours > 0:
-            return f"{hours}h {minutes}m {seconds}s"
-        elif minutes > 0:
-            return f"{minutes}m {seconds}s"
-        else:
-            return f"{seconds}s"
+            return f"~{hours}h {minutes}m remaining"
+        if minutes > 0:
+            return f"~{minutes}m {seconds}s remaining"
+        return f"~{seconds}s remaining"
