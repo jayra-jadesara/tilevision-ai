@@ -329,3 +329,118 @@ def test_folder_not_recorded_when_scan_is_cancelled(tmp_path):
     )
 
     assert use_case.get_last_indexed_folder_status() is None
+
+
+def _make_nested_catalog(images_dir: Path) -> dict[str, Path]:
+    """
+    Build a 2-level nested folder layout under images_dir, matching the
+    customer workflow of picking one parent folder and indexing every
+    image underneath it at any depth.
+    """
+    marble = images_dir / "Marble"
+    polished = marble / "Polished"
+    granite = images_dir / "Granite"
+    polished.mkdir(parents=True)
+    granite.mkdir(parents=True)
+
+    paths = {
+        "top": images_dir / "top_level.jpg",
+        "marble_a": marble / "marble_a.jpg",
+        "marble_polished_b": polished / "marble_polished_b.jpg",
+        "granite_c": granite / "granite_c.jpg",
+    }
+    _make_image(paths["top"], (255, 0, 0))
+    _make_image(paths["marble_a"], (0, 255, 0))
+    _make_image(paths["marble_polished_b"], (0, 0, 255))
+    _make_image(paths["granite_c"], (255, 255, 0))
+    return paths
+
+
+def test_scan_finds_images_in_nested_subfolders(env):
+    d = env["images_dir"]
+    paths = _make_nested_catalog(d)
+
+    result = env["use_case"].scan_and_index_directory(d)
+
+    assert result.is_completed is True
+    assert result.new_count == 4
+    assert result.total_files_scanned == 4
+    assert result.indexed_count == 4
+    assert env["vector_index"]._index.ntotal == 4
+    assert len(env["repo"].get_all()) == 4
+
+    for path in paths.values():
+        tile = env["repo"].get_by_path(str(path.resolve()))
+        assert tile is not None, f"missing indexed tile for {path}"
+        assert tile.is_indexed is True
+
+
+def test_second_scan_of_nested_folder_skips_unchanged_and_detects_deletion(env):
+    d = env["images_dir"]
+    paths = _make_nested_catalog(d)
+
+    first = env["use_case"].scan_and_index_directory(d)
+    assert first.new_count == 4
+    assert env["vector_index"]._index.ntotal == 4
+
+    deleted_path = paths["marble_polished_b"]
+    deleted_resolved = str(deleted_path.resolve())
+    deleted_path.unlink()
+
+    new_nested = d / "Granite" / "granite_d.jpg"
+    _make_image(new_nested, (10, 20, 30))
+
+    second = env["use_case"].scan_and_index_directory(d)
+
+    assert second.deleted_count == 1
+    assert second.new_count == 1
+    assert second.skipped_count == 3
+    assert second.modified_count == 0
+    assert env["vector_index"]._index.ntotal == 4
+
+    remaining_paths = {t.file_path for t in env["repo"].get_all()}
+    assert deleted_resolved not in remaining_paths
+    assert env["repo"].get_by_path(deleted_resolved) is None
+    assert env["repo"].get_by_path(str(new_nested.resolve())) is not None
+    assert env["repo"].get_by_path(str(paths["top"].resolve())) is not None
+    assert env["repo"].get_by_path(str(paths["marble_a"].resolve())) is not None
+    assert env["repo"].get_by_path(str(paths["granite_c"].resolve())) is not None
+
+
+def test_count_indexed_tiles_under_folder_includes_nested_files(tmp_path):
+    """
+    Index-page restore-on-startup uses get_last_indexed_folder_status(),
+    which counts via _count_indexed_tiles_under(folder_path). Nested files
+    under the picked parent must be included in that live count.
+    """
+    from src.data.sqlite_repository import SQLiteIndexedFolderRepository
+
+    db_context = DatabaseContext(str(tmp_path / "db" / "tiles.db"))
+    repo = SQLiteImageRepository(db_context)
+    folder_repo = SQLiteIndexedFolderRepository(db_context)
+    embedder = FakeEmbedder()
+    feature_extractor = FakeFeatureExtractor(embedder=embedder)
+    vector_index = FaissIndexManager(
+        str(tmp_path / "index" / "tiles.index"),
+        dimension=CURRENT_EMBEDDING_DIMENSION,
+    )
+
+    use_case = IndexImagesUseCase(
+        image_repository=repo,
+        feature_extractor=feature_extractor,
+        vector_index=vector_index,
+        thumbnail_dir=str(tmp_path / "thumbs"),
+        folder_repository=folder_repo,
+    )
+
+    images_dir = tmp_path / "images"
+    images_dir.mkdir()
+    _make_nested_catalog(images_dir)
+
+    use_case.scan_and_index_directory(images_dir)
+
+    status = use_case.get_last_indexed_folder_status()
+    assert status is not None
+    assert status.folder_path == str(images_dir.resolve())
+    assert status.indexed_image_count == 4
+    assert use_case._count_indexed_tiles_under(str(images_dir.resolve())) == 4
