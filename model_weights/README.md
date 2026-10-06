@@ -9,10 +9,10 @@
 #   → model_weights/sam2.1-hiera-tiny/
 #
 #   python scripts/download_sam2_onnx_model.py
-#   → model_weights/sam2.1-hiera-tiny-onnx/   (Mac Intel + Windows CPU)
+#   → model_weights/sam2.1-hiera-tiny-onnx/   (Windows + Mac Intel + Apple Silicon)
 #
 # Installer bundling (lab): TILEVISION_BUNDLE_SAM2=auto
-#   → ONNX on Windows + Mac Intel + Apple Silicon
-#   → Transformers safetensors on Windows + Apple Silicon (not Mac Intel)
+#   → ONNX on Windows + Mac Intel + Apple Silicon (identical package)
+#   → Transformers safetensors only if TILEVISION_BUNDLE_SAM2_TRANSFORMERS=1
 #
 # Weight file contents are gitignored — do not commit the binaries.

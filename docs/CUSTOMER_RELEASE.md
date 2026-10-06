@@ -94,22 +94,26 @@ First time: Right-click app → **Open** → **Open**
 
 ---
 
-## Same features on Mac and Windows
+## Same features on Windows, Mac Intel, and Mac Apple Silicon
 
-| Feature | Windows | Mac |
-|---------|---------|-----|
-| Folder indexing | Yes | Yes |
-| Visual similarity search | Yes | Yes |
-| PDF catalogue export | Yes | Yes |
-| Offline license | Yes | Yes |
-| Folder auto-watch | Yes | Yes |
-| iPhone HEIC photos | Yes* | Yes* |
-| NVIDIA GPU (CUDA) | Yes | — |
-| Apple Silicon GPU (MPS) | — | Yes |
+| Feature | Windows | Mac Intel | Mac Apple Silicon |
+|---------|---------|-----------|-------------------|
+| Folder indexing | Yes | Yes | Yes |
+| Visual similarity search | Yes | Yes | Yes |
+| Precise Crop (ONNX SAM2) | Yes | Yes | Yes |
+| PDF catalogue export | Yes | Yes | Yes |
+| Offline license | Yes | Yes | Yes |
+| Folder auto-watch | Yes | Yes | Yes |
+| iPhone HEIC photos | Yes* | Yes* | Yes* |
+| In-app update install | Yes | Yes | Yes |
+| NVIDIA GPU (CUDA) | Yes | — | — |
+| Apple Silicon GPU (MPS) | — | — | Yes |
+| CPU inference | Yes | Yes | Yes |
 
 \*Requires `pillow-heif` (included in installer builds).
 
-Search uses the **same AI pipeline** (DINOv2 + descriptors + FAISS) on both platforms.  
+Search uses the **same AI pipeline** (DINOv2 + descriptors + FAISS) on all three platforms.  
+Precise Crop uses the **same ONNX SAM2** weights and code path everywhere.  
 Results may differ by a fraction of a percent between GPU types — same tiles, same ranking logic.
 
 ---
@@ -122,11 +126,13 @@ Before each release:
 2. Unset `TILEVISION_DEV_MODE`
 3. Update revoked license IDs if any refunds (`src/licensing/revocation.py`)
 4. Build Windows + Mac artifacts
-5. Test on **one Windows PC** and **one Mac** without internet:
+5. Test on **one Windows PC**, **one Intel Mac**, and **one Apple Silicon Mac** without internet:
    - Launch → activate with trial key
    - Index a sample folder
    - Search with a photo
+   - Precise Crop & Search (if SAM2 bundled)
    - Export PDF
+   - Check for updates (correct installer for that OS/arch)
 6. Upload installers to Google Drive / USB / your website
 7. Email customers: new installer + note that old license keys still work on the same Machine ID
 

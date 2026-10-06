@@ -1,9 +1,13 @@
 """
-SAM 2.1 ONNX backend for Precise Crop on Mac Intel + Windows CPU.
+SAM 2.1 ONNX backend for Precise Crop — same path on every client OS:
+
+  - Windows
+  - Mac Intel
+  - Mac Apple Silicon
 
 Works without transformers Sam2Model / torch>=2.5 — the production Mac Intel
 stack (torch 2.2 + transformers<5) can still run accurate Precise Crop via
-onnxruntime.
+onnxruntime. Apple Silicon and Windows use the identical ONNX weights.
 
 Encoder/decoder exports: vietanhdev/segment-anything-2.1-onnx-models
 (Apache-2.0, derived from Meta SAM 2.1).

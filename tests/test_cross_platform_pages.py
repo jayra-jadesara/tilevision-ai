@@ -1,13 +1,12 @@
 """
-Cross-platform page-by-page UI tests (Windows and macOS simulated).
+Cross-platform page-by-page UI tests (Windows, Mac Intel, Mac Apple Silicon).
 
 Walks every customer-facing screen to ensure navigation and dialogs work
-identically on both platforms.
+identically on all three client platforms.
 """
 
 from __future__ import annotations
 
-import platform
 import sys
 import types
 from pathlib import Path
@@ -65,13 +64,18 @@ class _FakeIndexUseCase:
     pass
 
 
-PLATFORMS = ("win32", "darwin")
+# (sys.platform, machine) — cover Windows + both Mac arches.
+PLATFORMS = (
+    ("win32", None),
+    ("darwin", "x86_64"),
+    ("darwin", "arm64"),
+)
 
 
-def _simulate_platform(monkeypatch, platform: str) -> None:
+def _simulate_platform(monkeypatch, platform: str, machine: str | None = None) -> None:
     from tests.conftest import simulate_platform
 
-    simulate_platform(monkeypatch, platform)
+    simulate_platform(monkeypatch, platform, machine=machine)
 
 
 @pytest.fixture(scope="module")
@@ -80,14 +84,15 @@ def qapp():
     yield app
 
 
-@pytest.fixture(params=PLATFORMS)
-def platform_name(request):
+@pytest.fixture(params=PLATFORMS, ids=lambda p: f"{p[0]}-{p[1] or 'na'}")
+def platform_spec(request):
     return request.param
 
 
 @pytest.fixture()
-def full_main_window(qapp, tmp_path, catalogue_master_service, monkeypatch, platform_name):
-    _simulate_platform(monkeypatch, platform_name)
+def full_main_window(qapp, tmp_path, catalogue_master_service, monkeypatch, platform_spec):
+    platform, machine = platform_spec
+    _simulate_platform(monkeypatch, platform, machine=machine)
 
     settings = AppSettings(config_dir=tmp_path)
     settings.theme = "dark"
@@ -131,13 +136,14 @@ def full_main_window(qapp, tmp_path, catalogue_master_service, monkeypatch, plat
     window.deleteLater()
 
 
-def test_platform_font_and_icon(platform_name, monkeypatch):
-    _simulate_platform(monkeypatch, platform_name)
+def test_platform_font_and_icon(platform_spec, monkeypatch):
+    platform, machine = platform_spec
+    _simulate_platform(monkeypatch, platform, machine=machine)
     font = default_ui_font_family()
     icon = app_icon_path()
     assert icon is not None and icon.exists()
 
-    if platform_name == "win32":
+    if platform == "win32":
         assert font == "Segoe UI"
         assert is_windows()
     else:
@@ -145,13 +151,14 @@ def test_platform_font_and_icon(platform_name, monkeypatch):
         assert is_macos()
 
 
-def test_update_download_key_matches_platform(platform_name, monkeypatch):
-    _simulate_platform(monkeypatch, platform_name)
-    if platform_name == "darwin":
-        monkeypatch.setattr(platform, "machine", lambda: "arm64")
+def test_update_download_key_matches_platform(platform_spec, monkeypatch):
+    platform, machine = platform_spec
+    _simulate_platform(monkeypatch, platform, machine=machine)
     key = platform_download_key()
-    if platform_name == "win32":
+    if platform == "win32":
         assert key == "windows"
+    elif machine == "x86_64":
+        assert key == "macos_intel"
     else:
         assert key == "macos_arm64"
 
@@ -231,8 +238,9 @@ def test_duplicates_dialog_opens(full_main_window):
     dialog.close()
 
 
-def test_license_view_shows_machine_id(qapp, tmp_path, monkeypatch, platform_name):
-    _simulate_platform(monkeypatch, platform_name)
+def test_license_view_shows_machine_id(qapp, tmp_path, monkeypatch, platform_spec):
+    platform, machine = platform_spec
+    _simulate_platform(monkeypatch, platform, machine=machine)
 
     use_case = MagicMock()
     use_case.get_hardware_fingerprint.return_value = "a" * 64
@@ -243,19 +251,20 @@ def test_license_view_shows_machine_id(qapp, tmp_path, monkeypatch, platform_nam
     dialog.close()
 
 
-def test_setup_wizard_constructs(qapp, tmp_path, platform_name):
+def test_setup_wizard_constructs(qapp, tmp_path, platform_spec):
     settings = AppSettings(config_dir=tmp_path)
     wizard = SetupWizardDialog(settings, theme="dark")
     assert wizard.windowTitle()
     wizard.close()
 
 
-def test_update_dialog_constructs(qapp, platform_name):
+def test_update_dialog_constructs(qapp, platform_spec):
+    platform, _machine = platform_spec
     info = UpdateInfo(
         current_version=APP_VERSION,
         latest_version="9.9.9",
         release_notes="Test release",
-        download_url=f"https://example.com/{platform_name}",
+        download_url=f"https://example.com/{platform}",
     )
     dialog = UpdateAvailableDialog(info, theme="dark", auto_start_download=False)
     assert "9.9.9" in dialog.windowTitle() or dialog.isModal()

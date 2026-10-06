@@ -167,16 +167,21 @@ python main.py
 
 ## Platform comparison
 
-| Feature | Windows | macOS | Linux |
-|---------|---------|-------|-------|
-| Packaged installer | Yes (.exe) | Yes (.app / .dmg) | Optional |
-| Machine ID / licensing | Yes | Yes | Yes |
-| NVIDIA CUDA | Yes | No | Yes |
-| Apple MPS (Metal) | No | Yes (Apple Silicon) | No |
-| CPU fallback | Yes | Yes | Yes |
-| Folder watch (watchdog) | Yes | Yes | Yes* |
+| Feature | Windows | macOS Intel | macOS Apple Silicon | Linux |
+|---------|---------|-------------|---------------------|-------|
+| Packaged installer | Yes (.exe) | Yes (.dmg) | Yes (.dmg) | Optional |
+| Machine ID / licensing | Yes | Yes | Yes | Yes |
+| Folder indexing / search | Yes | Yes | Yes | Yes |
+| Precise Crop (ONNX SAM2) | Yes | Yes | Yes | Yes† |
+| iPhone HEIC photos | Yes* | Yes* | Yes* | Yes* |
+| NVIDIA CUDA | Yes | No | No | Yes |
+| Apple MPS (Metal) | No | No | Yes | No |
+| CPU fallback | Yes | Yes | Yes | Yes |
+| Folder watch (watchdog) | Yes | Yes | Yes | Yes‡ |
 
-\*Linux may need higher `inotify` limits for very large catalogues.
+\*Requires `pillow-heif` (bundled in installers).  
+†Same ONNX path when weights are present.  
+‡Linux may need higher `inotify` limits for very large catalogues.
 
 ---
 
