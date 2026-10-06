@@ -64,5 +64,6 @@ catalogue-sheet gate).
 
 Analyzer + crop heuristics are pure CPU OpenCV/NumPy — identical on Windows,
 macOS Intel, and Apple Silicon. DINOv2 view count is capped via
-`ImagePreprocessor._capped_query_max_views` (CPU ≤2; CUDA / MPS keep full).
+`ImagePreprocessor._capped_query_max_views` (Mac Intel + Mac Silicon ≤2;
+Windows CUDA keeps full; Windows CPU ≤2).
 Validate end-to-end via CI search gates; do not fabricate per-OS scores.

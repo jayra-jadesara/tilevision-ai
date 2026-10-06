@@ -64,6 +64,34 @@ def test_search_never_auto_aborts_on_any_client(client_platform):
     assert vm._search_timeout_ms == 0
 
 
+def test_mac_intel_and_silicon_share_sam2_search_contracts(monkeypatch):
+    """Search + Precise Crop contracts that Mac Intel proved — same on Silicon."""
+    from src.ai.preprocess import sam2_backend
+    from src.ai.preprocess.precise_tile_crop import expected_precise_backend
+    from src.ai.preprocess import sam2_onnx_backend
+    from src.presentation.viewmodels.search_viewmodel import _default_search_timeout_ms
+
+    for machine in ("x86_64", "arm64"):
+        simulate_platform(monkeypatch, "darwin", machine=machine)
+        monkeypatch.setenv("TILEVISION_ENABLE_SAM2", "1")
+        sam2_backend.configure_sam2_from_settings(True)
+        monkeypatch.setattr(
+            "src.ai.preprocess.sam2_onnx_backend.sam2_onnx_should_run",
+            lambda: True,
+        )
+        assert expected_precise_backend() == "sam2"
+        assert _default_search_timeout_ms() == 0
+
+        fake_ort = types.ModuleType("onnxruntime")
+        fake_ort.get_available_providers = lambda: [
+            "CoreMLExecutionProvider",
+            "CPUExecutionProvider",
+            "CUDAExecutionProvider",
+        ]
+        monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+        assert sam2_onnx_backend._cpu_providers() == ["CPUExecutionProvider"]
+
+
 def test_precise_crop_onnx_is_primary_on_every_client(client_platform, monkeypatch):
     from src.ai.preprocess import sam2_backend
     from src.ai.preprocess.precise_tile_crop import expected_precise_backend
@@ -90,33 +118,37 @@ def test_precise_crop_grabcut_fallback_identical(client_platform, monkeypatch):
     assert expected_precise_backend() == "grabcut"
 
 
-def test_cpu_query_views_capped_identically(client_platform, monkeypatch):
-    """CPU clients (any OS) share the same multi-crop budget."""
+def test_mac_query_views_capped_like_intel(client_platform, monkeypatch):
+    """Mac Intel + Mac Silicon (+ Windows CPU) share the ≤2 search multi-crop budget."""
     from src.ai.preprocess.image_preprocessor import ImagePreprocessor
     import src.ai.gpu_info as gpu_info
 
+    # Silicon may report MPS — Mac search budget still matches Intel.
+    device = "cpu"
+    if client_platform["machine"] == "arm64":
+        device = "mps"
     monkeypatch.setattr(
         gpu_info,
         "detect_gpu_runtime",
-        lambda preference="auto": types.SimpleNamespace(active_device="cpu"),
+        lambda preference="auto", d=device: types.SimpleNamespace(active_device=d),
     )
 
     assert ImagePreprocessor._capped_query_max_views(3) == 2
     assert ImagePreprocessor._capped_query_max_views(1) == 1
 
 
-def test_gpu_query_views_uncapped_on_cuda_and_mps(monkeypatch):
-    """Windows CUDA and Apple Silicon MPS keep the full multi-crop budget."""
+def test_windows_cuda_keeps_full_query_views_budget(monkeypatch):
     from src.ai.preprocess.image_preprocessor import ImagePreprocessor
     import src.ai.gpu_info as gpu_info
+    from tests.conftest import simulate_platform
 
-    for device in ("cuda", "mps"):
-        monkeypatch.setattr(
-            gpu_info,
-            "detect_gpu_runtime",
-            lambda preference="auto", d=device: types.SimpleNamespace(active_device=d),
-        )
-        assert ImagePreprocessor._capped_query_max_views(3) == 3
+    simulate_platform(monkeypatch, "win32")
+    monkeypatch.setattr(
+        gpu_info,
+        "detect_gpu_runtime",
+        lambda preference="auto": types.SimpleNamespace(active_device="cuda"),
+    )
+    assert ImagePreprocessor._capped_query_max_views(3) == 3
 
 
 def test_drop_search_never_invokes_sam2(client_platform, monkeypatch):
