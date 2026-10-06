@@ -201,13 +201,18 @@ def test_warmup_compute_scope_restores_threads_after_cap():
         thread.join(timeout=10.0)
         assert not thread.is_alive()
 
+        # Production query_warmup.py re-asserts on the owner thread after the
+        # background worker finishes — Mac Intel CI does not always observe a
+        # set_num_threads() performed inside that worker.
+        assert restore_interactive_torch_threads() == interactive
+
         # Mimic extract_index_vectors_batch's preprocess pool after warmup.
         with ThreadPoolExecutor(max_workers=2) as pool:
             list(pool.map(lambda i: i * i, range(4)))
 
+        # Index path re-asserts again before DINOv2 forwards.
+        assert restore_interactive_torch_threads() == interactive
         assert torch.get_num_threads() == interactive
-        restored = restore_interactive_torch_threads()
-        assert restored == interactive
     finally:
         torch.set_num_threads(previous)
 

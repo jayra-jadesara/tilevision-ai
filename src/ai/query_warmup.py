@@ -129,6 +129,8 @@ def run_query_path_warmup(
             except Exception as exc:
                 logger.debug("Query-path FAISS warm-up skipped: %s", exc)
 
+    # Re-assert on this thread after scope exit (index forwards also re-assert).
+    restore_interactive_torch_threads()
     logger.info(
         "Query-path warm-up finished (%s)",
         ", ".join(f"{k}={v:.0f}" for k, v in timings.items()) or "no-op",

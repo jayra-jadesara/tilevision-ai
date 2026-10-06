@@ -77,20 +77,25 @@ def restore_interactive_torch_threads() -> int | None:
     index forwards — ``torch.set_num_threads`` is process-global, and the
     first DINOv2/oneDNN forward under a 1-thread cap has been observed to
     leave later indexing far slower than the pre-batching baseline.
+
+    Always calls ``set_num_threads`` (no current==target short-circuit): on
+    Mac Intel CI, a background warmup thread's set/get can disagree with the
+    joining thread's view of the process pool size.
     """
     try:
         import torch
 
         target = interactive_cpu_thread_count()
+        previous = int(torch.get_num_threads())
+        torch.set_num_threads(target)
         current = int(torch.get_num_threads())
-        if current != target:
-            torch.set_num_threads(target)
+        if previous != current:
             logger.info(
                 "Restored torch intra-op threads %s → %s",
+                previous,
                 current,
-                target,
             )
-        return int(torch.get_num_threads())
+        return current
     except Exception as exc:
         logger.debug("Could not restore interactive torch threads: %s", exc)
         return None
@@ -194,17 +199,11 @@ def warmup_compute_scope(*, torch_threads: int | None = None) -> Iterator[None]:
             try:
                 import torch
 
-                torch.set_num_threads(interactive_cpu_thread_count())
+                target = interactive_cpu_thread_count()
+                torch.set_num_threads(target)
                 restored = int(torch.get_num_threads())
             except Exception:
-                if prev_torch is not None:
-                    try:
-                        import torch
-
-                        torch.set_num_threads(prev_torch)
-                        restored = int(torch.get_num_threads())
-                    except Exception:
-                        pass
+                pass
         logger.info(
             "Warmup compute scope OFF (torch_threads=%s interactive_target=%s capped=%s)",
             restored if restored is not None else _torch_thread_count(),
