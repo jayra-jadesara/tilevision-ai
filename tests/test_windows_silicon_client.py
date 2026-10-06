@@ -150,15 +150,59 @@ def test_windows_cuda_keeps_full_query_views(windows_platform, tmp_path, monkeyp
     assert len(views) == 3
 
 
-def test_mac_silicon_query_views_capped(mac_silicon_platform, tmp_path, monkeypatch):
+def test_mac_silicon_mps_keeps_full_query_views(mac_silicon_platform, tmp_path, monkeypatch):
+    """Apple Silicon MPS matches Windows CUDA — full multi-crop budget."""
     from PIL import Image
 
+    import src.ai.gpu_info as gpu_info
     import src.ai.preprocess.fast_tile_crop as fast_tile_crop
     from src.ai.preprocess.image_preprocessor import ImagePreprocessor
 
     path = tmp_path / "room.jpg"
     Image.new("RGB", (900, 500), color=(170, 160, 150)).save(path)
 
+    monkeypatch.setattr(
+        gpu_info,
+        "detect_gpu_runtime",
+        lambda preference="auto": types.SimpleNamespace(active_device="mps"),
+    )
+    monkeypatch.setattr(
+        ImagePreprocessor,
+        "_looks_like_scene_photo",
+        classmethod(lambda cls, img: True),
+    )
+    monkeypatch.setattr(
+        fast_tile_crop,
+        "list_tile_region_candidates",
+        lambda image, limit=3: [
+            types.SimpleNamespace(
+                image=Image.new("RGB", (128, 128), color=(i * 40, 80, 100)),
+                method=f"cand{i}",
+                confidence=0.9,
+            )
+            for i in range(max(1, int(limit)))
+        ],
+    )
+    views = ImagePreprocessor.prepare_query_views(path, max_views=3)
+    assert len(views) == 3
+
+
+def test_mac_silicon_cpu_caps_query_views(mac_silicon_platform, tmp_path, monkeypatch):
+    """If Silicon falls back to CPU, match Mac Intel / Windows-CPU caps."""
+    from PIL import Image
+
+    import src.ai.gpu_info as gpu_info
+    import src.ai.preprocess.fast_tile_crop as fast_tile_crop
+    from src.ai.preprocess.image_preprocessor import ImagePreprocessor
+
+    path = tmp_path / "room.jpg"
+    Image.new("RGB", (900, 500), color=(170, 160, 150)).save(path)
+
+    monkeypatch.setattr(
+        gpu_info,
+        "detect_gpu_runtime",
+        lambda preference="auto": types.SimpleNamespace(active_device="cpu"),
+    )
     monkeypatch.setattr(
         ImagePreprocessor,
         "_looks_like_scene_photo",

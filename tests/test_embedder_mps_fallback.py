@@ -55,6 +55,31 @@ def test_is_device_oom_error_ignores_unsupported_mps_autocast():
     assert embedder_module._is_device_oom_error("mps", msg) is False
 
 
+def test_extract_batch_query_keeps_mps_until_unsupported_op(monkeypatch):
+    """Index + query stay on MPS so Apple Silicon rankings match catalog space."""
+    embedder = _make_embedder(device="mps")
+    images = [Image.new("RGB", (64, 64), color=(10, 20, 30))]
+    cpu_result = np.ones((1, 1024), dtype=np.float32)
+    calls = {"n": 0}
+
+    def _forward(_batch):
+        calls["n"] += 1
+        assert embedder._device.type == "mps"
+        return cpu_result
+
+    monkeypatch.setattr(embedder, "_forward_batch", _forward)
+    monkeypatch.setattr(embedder_module, "synchronized_inference", lambda **_kwargs: _NullCtx())
+    monkeypatch.setattr(embedder_module, "is_warmup_compute", lambda: False)
+    monkeypatch.setattr(embedder_module, "search_priority_active", lambda: False)
+
+    result = embedder._extract_batch(images, for_query=True)
+
+    assert calls["n"] == 1
+    assert embedder._device.type == "mps"
+    assert embedder._mps_cpu_fallback_done is False
+    assert result is cpu_result
+
+
 def test_extract_batch_falls_back_to_cpu_on_unsupported_mps_autocast(monkeypatch):
     """Client Mac Intel log: autocast error was mislabeled MPS OOM then hard-failed."""
     embedder = _make_embedder(device="mps")

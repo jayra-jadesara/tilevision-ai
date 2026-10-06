@@ -40,18 +40,18 @@ python scripts/download_dinov2_model.py
 This creates `model_weights/dinov2-large/` (~1 GB). PyInstaller specs bundle
 this folder automatically when present.
 
-### Optional: SAM2 Precise Crop weights (lab only)
+### Optional: SAM2 Precise Crop weights
 
-Not used by default search. For experimental Precise Crop installers
+Not used by default search. For Precise Crop installers
 (**Windows + Mac Intel + Mac Apple Silicon** share the same ONNX path):
 
 ```bash
 python scripts/download_sam2_onnx_model.py   # ~126 MB — all client platforms
 python scripts/download_sam2_model.py        # ~150 MB — optional Transformers lab fallback
-export TILEVISION_BUNDLE_SAM2=auto          # ONNX on every OS; Transformers off by default
+export TILEVISION_BUNDLE_SAM2=auto          # default in build_mac.sh / build_windows.ps1
 ```
 
-Leave `TILEVISION_BUNDLE_SAM2` unset for production DINOv2-only builds.
+Set `TILEVISION_BUNDLE_SAM2=0` only for DINOv2-only builds without Precise Crop.
 See [docs/SAM2_EXPERIMENTAL.md](../docs/SAM2_EXPERIMENTAL.md).
 
 For strict offline runtime, set on customer builds:
@@ -154,14 +154,19 @@ git push origin v1.0.0
 Or trigger manually: **Actions → Build → Run workflow**.
 
 Artifacts (14-day retention):
-- `tilevision-windows` — app folder + `TileVisionAI-Setup-*.exe`
-- `tilevision-macos` — `TileVisionAI-macOS.zip` (`.app` bundle)
-- `tilevision-linux` — `TileVisionAI-Linux.tar.gz`
+- `tilevision-windows` — `TileVisionAI-Setup-*.exe`
+- `tilevision-macos-intel` — `TileVisionAI-macOS-Intel.dmg`
+- `tilevision-macos-arm64` — `TileVisionAI-macOS-AppleSilicon.dmg`
+- `tilevision-linux` — `TileVisionAI-Linux.tar.gz` (optional)
+
+Tag pushes also create a GitHub Release with versioned `.exe` / `.dmg` files
+plus `update_manifest.json` for in-app updates.
 
 ---
 
 ## Known gaps
 
-- No automated release pipeline (manual build per OS)
 - No code signing (SmartScreen / Gatekeeper warnings on first run)
 - macOS notarization and Linux `.desktop` integration are manual steps
+- Combined Mac zip is optional/local only (`scripts/package_mac_universal.sh`) —
+  GitHub Releases ship separate Intel + Silicon DMGs (2 GB asset limit)

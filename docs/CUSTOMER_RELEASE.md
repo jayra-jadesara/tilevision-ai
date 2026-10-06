@@ -74,18 +74,25 @@ Issue a **separate key** for each Mac and each Windows PC.
 
 ### Mac showroom (Intel AND Apple Silicon)
 
-Send **one zip** — works for every Mac:
+Ship the **correct .dmg** for each Mac (GitHub Releases publish them separately
+so each file stays under the 2 GB asset limit):
 
-**`TileVisionAI-macOS-1.0.0.zip`**
-
-Inside the zip:
 | File | For which Mac |
 |------|----------------|
-| `TileVisionAI-macOS-Intel.dmg` | Intel iMac, Intel MacBook (Core i5/i7/i9) |
-| `TileVisionAI-macOS-AppleSilicon.dmg` | M1, M2, M3, M4 Macs |
-| `READ ME FIRST.txt` | Simple guide — customer picks the right file |
+| `TileVisionAI-macOS-Intel-*.dmg` | Intel iMac, Intel MacBook (Core i5/i7/i9) |
+| `TileVisionAI-macOS-AppleSilicon-*.dmg` | M1, M2, M3, M4 Macs |
+| `TileVisionAI-macOS-READ-ME-FIRST.txt` | Simple guide — customer picks the right file |
 
 Also include: **license key** (trial or full)
+
+**Optional local zip** (USB / offline handoff — not a GitHub Release asset):
+
+```bash
+bash scripts/package_mac_universal.sh \
+  dist/TileVisionAI-macOS-Intel.dmg \
+  dist/TileVisionAI-macOS-AppleSilicon.dmg \
+  dist/TileVisionAI-macOS.zip
+```
 
 **Client with Intel iMac 2020:** use **Intel** `.dmg`  
 **Client with M1/M2/M3 Mac:** use **Apple Silicon** `.dmg`
@@ -181,7 +188,7 @@ After the **Build** workflow finishes, the release includes:
 | `TileVisionAI-Setup-1.0.1.exe` | Windows update link |
 | `TileVisionAI-macOS-Intel-1.0.1.dmg` | Intel Mac update link (required for Intel clients) |
 | `TileVisionAI-macOS-AppleSilicon-1.0.1.dmg` | Apple Silicon update link |
-| `TileVisionAI-macOS-1.0.1.zip` | **All Macs** — both DMGs + install guide |
+| `TileVisionAI-macOS-READ-ME-FIRST.txt` | Mac install guide (pick Intel vs Silicon) |
 | `update_manifest.json` | In-app update checker |
 
 Customers can also use **Settings → Check for Updates** anytime.

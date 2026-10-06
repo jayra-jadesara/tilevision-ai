@@ -91,19 +91,32 @@ def test_precise_crop_grabcut_fallback_identical(client_platform, monkeypatch):
 
 
 def test_cpu_query_views_capped_identically(client_platform, monkeypatch):
-    """Mac + Windows-without-CUDA cap multi-crop views the same way."""
+    """CPU clients (any OS) share the same multi-crop budget."""
     from src.ai.preprocess.image_preprocessor import ImagePreprocessor
     import src.ai.gpu_info as gpu_info
 
-    if client_platform["platform"] == "win32":
-        monkeypatch.setattr(
-            gpu_info,
-            "detect_gpu_runtime",
-            lambda preference="auto": types.SimpleNamespace(active_device="cpu"),
-        )
+    monkeypatch.setattr(
+        gpu_info,
+        "detect_gpu_runtime",
+        lambda preference="auto": types.SimpleNamespace(active_device="cpu"),
+    )
 
     assert ImagePreprocessor._capped_query_max_views(3) == 2
     assert ImagePreprocessor._capped_query_max_views(1) == 1
+
+
+def test_gpu_query_views_uncapped_on_cuda_and_mps(monkeypatch):
+    """Windows CUDA and Apple Silicon MPS keep the full multi-crop budget."""
+    from src.ai.preprocess.image_preprocessor import ImagePreprocessor
+    import src.ai.gpu_info as gpu_info
+
+    for device in ("cuda", "mps"):
+        monkeypatch.setattr(
+            gpu_info,
+            "detect_gpu_runtime",
+            lambda preference="auto", d=device: types.SimpleNamespace(active_device=d),
+        )
+        assert ImagePreprocessor._capped_query_max_views(3) == 3
 
 
 def test_drop_search_never_invokes_sam2(client_platform, monkeypatch):

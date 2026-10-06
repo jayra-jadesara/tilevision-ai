@@ -677,27 +677,20 @@ class ImagePreprocessor:
     @classmethod
     def _capped_query_max_views(cls, requested: int) -> int:
         """
-        Limit multi-crop DINOv2 work when query inference is effectively CPU.
+        Limit multi-crop DINOv2 work when query inference is on CPU.
 
-        - Mac Intel: always CPU
-        - Mac Silicon: query path forces CPU to avoid MPS hangs
-        - Windows without CUDA: CPU showroom PCs
-        CUDA Windows keeps the full requested view count.
+        GPU paths (Windows CUDA, Apple Silicon MPS) keep the full request so
+        search quality matches across accelerated clients. CPU showrooms
+        (Mac Intel, Windows without CUDA, Linux CPU) stay at ≤2 views.
         """
         requested = max(1, int(requested))
-        from src.utils.platform_info import is_macos, is_windows
+        try:
+            from src.ai.gpu_info import detect_gpu_runtime
 
-        if is_macos():
-            return min(requested, 2)
-        if is_windows():
-            try:
-                from src.ai.gpu_info import detect_gpu_runtime
-
-                if detect_gpu_runtime(preference="auto").active_device == "cuda":
-                    return requested
-            except Exception:
-                pass
-            return min(requested, 2)
+            if detect_gpu_runtime(preference="auto").active_device in {"cuda", "mps"}:
+                return requested
+        except Exception:
+            pass
         return min(requested, 2)
 
     @classmethod

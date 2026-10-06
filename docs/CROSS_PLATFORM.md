@@ -1,6 +1,8 @@
 # Cross-Platform Setup — TileVision AI
 
-TileVision AI runs on **Windows**, **macOS**, and **Linux**. Windows is the production target with a packaged installer; macOS and Linux are supported for run-from-source installs and evaluation.
+TileVision AI runs on **Windows**, **macOS** (Intel + Apple Silicon), and **Linux**.
+Windows and macOS ship production installers (`.exe` / `.dmg`); Linux is supported
+for run-from-source installs and evaluation.
 
 ---
 
@@ -45,10 +47,12 @@ python main.py
 
 ### GPU acceleration
 
-- **Apple Silicon (M1/M2/M3):** Standard PyTorch wheel uses **MPS (Metal)** automatically.
+- **Apple Silicon (M1/M2/M3/M4):** Standard PyTorch wheel uses **MPS (Metal)** for
+  both indexing and search so catalog + query embeddings share the same device.
 - **MPS operator fallback:** TileVision sets `PYTORCH_ENABLE_MPS_FALLBACK=1` at startup so
-  missing Metal ops (e.g. `upsample_bicubic2d` used during visual search) run on CPU
-  instead of crashing. If an unsupported op still surfaces, search falls back to full CPU inference.
+  missing Metal ops (e.g. `upsample_bicubic2d`) run on CPU instead of crashing.
+  If an unsupported op still surfaces, DINOv2 falls back to full CPU inference for
+  the rest of the session (index + query stay matched).
 - **Intel Mac:** CPU inference only — MPS is never selected on Intel hardware.
 - **Updates:** Packaged Intel builds check `update_manifest.json` on every launch, download the
   `macos_intel` DMG in-app (never Apple Silicon), then install & restart into `/Applications`.
