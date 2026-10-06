@@ -150,15 +150,25 @@ def test_windows_cuda_keeps_full_query_views(windows_platform, tmp_path, monkeyp
     assert len(views) == 3
 
 
-def test_mac_silicon_query_views_capped(mac_silicon_platform, tmp_path, monkeypatch):
+def test_mac_silicon_query_views_capped_like_intel(
+    mac_silicon_platform, tmp_path, monkeypatch
+):
+    """Apple Silicon uses the same ≤2 search multi-crop budget as Mac Intel."""
     from PIL import Image
 
+    import src.ai.gpu_info as gpu_info
     import src.ai.preprocess.fast_tile_crop as fast_tile_crop
     from src.ai.preprocess.image_preprocessor import ImagePreprocessor
 
     path = tmp_path / "room.jpg"
     Image.new("RGB", (900, 500), color=(170, 160, 150)).save(path)
 
+    # MPS available — Mac search budget still matches Intel (≤2).
+    monkeypatch.setattr(
+        gpu_info,
+        "detect_gpu_runtime",
+        lambda preference="auto": types.SimpleNamespace(active_device="mps"),
+    )
     monkeypatch.setattr(
         ImagePreprocessor,
         "_looks_like_scene_photo",
@@ -191,6 +201,62 @@ def test_mac_silicon_update_key_and_dialog(mac_silicon_platform, qapp):
     )
     dialog = UpdateAvailableDialog(info, theme="light", auto_start_download=False)
     dialog.close()
+
+
+def test_mac_silicon_check_for_updates_uses_silicon_dmg(mac_silicon_platform):
+    """Mirror Mac Intel update path — Silicon never receives the Intel DMG."""
+    import json
+    from unittest.mock import patch
+
+    import src.utils.update_check as update_check
+
+    manifest = {
+        "version": "1.0.11",
+        "release_notes": "Mac Silicon search + SAM2 parity",
+        "downloads": {
+            "windows": "https://example.com/setup.exe",
+            "macos_intel": "https://example.com/TileVisionAI-macOS-Intel-1.0.11.dmg",
+            "macos_arm64": "https://example.com/TileVisionAI-macOS-AppleSilicon-1.0.11.dmg",
+        },
+    }
+    payload = json.dumps(manifest).encode("utf-8")
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return payload
+
+    with patch.object(update_check.urllib.request, "urlopen", return_value=_Response()):
+        info = update_check.check_for_updates(current_version="1.0.10")
+
+    assert info is not None
+    assert info.latest_version == "1.0.11"
+    assert "AppleSilicon" in info.download_url
+    assert "macOS-Intel" not in info.download_url
+
+
+def test_mac_silicon_search_does_not_auto_abort(mac_silicon_platform):
+    """Same as Mac Intel — never wall-clock abort a working search."""
+    from unittest.mock import MagicMock
+
+    from src.presentation.viewmodels.search_viewmodel import (
+        SearchViewModel,
+        _default_search_timeout_ms,
+    )
+
+    assert _default_search_timeout_ms() == 0
+    use_case = MagicMock()
+    use_case.get_index_health.return_value = MagicMock(
+        is_compatible=True, stale_count=0, indexed_count=1
+    )
+    use_case.get_searchable_count.return_value = 1
+    vm = SearchViewModel(use_case=use_case)
+    assert vm._search_timeout_ms == 0
 
 
 def test_windows_update_key_and_dialog(windows_platform, qapp):

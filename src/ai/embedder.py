@@ -367,14 +367,15 @@ class DINOv2Embedder:
         if self._model is None:
             self.load_model()
 
-        # Search must not wait hours behind indexing / a stuck MPS forward.
+        # Search must not wait forever behind indexing.
         lock_timeout = (
             DEFAULT_SEARCH_LOCK_TIMEOUT_S if for_query else DEFAULT_INDEX_LOCK_TIMEOUT_S
         )
 
-        # Query embeds on Apple Silicon: use CPU to avoid silent MPS hangs.
-        if for_query and self._device.type == "mps" and not self._mps_cpu_fallback_done:
-            self._fallback_mps_to_cpu("query search prefers CPU (avoid MPS hang)")
+        # Keep index + query on the same device (CUDA / MPS / CPU). Proactive
+        # MPS→CPU for queries used to leave Apple Silicon catalogs on Metal
+        # while searches ran on CPU — cosine ranks diverged. Unsupported Metal
+        # ops still fall back to CPU via ``_fallback_mps_to_cpu`` below.
 
         if is_warmup_compute():
             logger.info(

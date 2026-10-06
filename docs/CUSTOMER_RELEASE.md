@@ -74,18 +74,25 @@ Issue a **separate key** for each Mac and each Windows PC.
 
 ### Mac showroom (Intel AND Apple Silicon)
 
-Send **one zip** — works for every Mac:
+Ship the **correct .dmg** for each Mac (GitHub Releases publish them separately
+so each file stays under the 2 GB asset limit):
 
-**`TileVisionAI-macOS-1.0.0.zip`**
-
-Inside the zip:
 | File | For which Mac |
 |------|----------------|
-| `TileVisionAI-macOS-Intel.dmg` | Intel iMac, Intel MacBook (Core i5/i7/i9) |
-| `TileVisionAI-macOS-AppleSilicon.dmg` | M1, M2, M3, M4 Macs |
-| `READ ME FIRST.txt` | Simple guide — customer picks the right file |
+| `TileVisionAI-macOS-Intel-*.dmg` | Intel iMac, Intel MacBook (Core i5/i7/i9) |
+| `TileVisionAI-macOS-AppleSilicon-*.dmg` | M1, M2, M3, M4 Macs |
+| `TileVisionAI-macOS-READ-ME-FIRST.txt` | Simple guide — customer picks the right file |
 
 Also include: **license key** (trial or full)
+
+**Optional local zip** (USB / offline handoff — not a GitHub Release asset):
+
+```bash
+bash scripts/package_mac_universal.sh \
+  dist/TileVisionAI-macOS-Intel.dmg \
+  dist/TileVisionAI-macOS-AppleSilicon.dmg \
+  dist/TileVisionAI-macOS.zip
+```
 
 **Client with Intel iMac 2020:** use **Intel** `.dmg`  
 **Client with M1/M2/M3 Mac:** use **Apple Silicon** `.dmg`
@@ -94,22 +101,26 @@ First time: Right-click app → **Open** → **Open**
 
 ---
 
-## Same features on Mac and Windows
+## Same features on Windows, Mac Intel, and Mac Apple Silicon
 
-| Feature | Windows | Mac |
-|---------|---------|-----|
-| Folder indexing | Yes | Yes |
-| Visual similarity search | Yes | Yes |
-| PDF catalogue export | Yes | Yes |
-| Offline license | Yes | Yes |
-| Folder auto-watch | Yes | Yes |
-| iPhone HEIC photos | Yes* | Yes* |
-| NVIDIA GPU (CUDA) | Yes | — |
-| Apple Silicon GPU (MPS) | — | Yes |
+| Feature | Windows | Mac Intel | Mac Apple Silicon |
+|---------|---------|-----------|-------------------|
+| Folder indexing | Yes | Yes | Yes |
+| Visual similarity search | Yes | Yes | Yes |
+| Precise Crop (ONNX SAM2) | Yes | Yes | Yes |
+| PDF catalogue export | Yes | Yes | Yes |
+| Offline license | Yes | Yes | Yes |
+| Folder auto-watch | Yes | Yes | Yes |
+| iPhone HEIC photos | Yes* | Yes* | Yes* |
+| In-app update install | Yes | Yes | Yes |
+| NVIDIA GPU (CUDA) | Yes | — | — |
+| Apple Silicon GPU (MPS) | — | — | Yes |
+| CPU inference | Yes | Yes | Yes |
 
 \*Requires `pillow-heif` (included in installer builds).
 
-Search uses the **same AI pipeline** (DINOv2 + descriptors + FAISS) on both platforms.  
+Search uses the **same AI pipeline** (DINOv2 + descriptors + FAISS) on all three platforms.  
+Precise Crop uses the **same ONNX SAM2** weights and code path everywhere.  
 Results may differ by a fraction of a percent between GPU types — same tiles, same ranking logic.
 
 ---
@@ -122,11 +133,13 @@ Before each release:
 2. Unset `TILEVISION_DEV_MODE`
 3. Update revoked license IDs if any refunds (`src/licensing/revocation.py`)
 4. Build Windows + Mac artifacts
-5. Test on **one Windows PC** and **one Mac** without internet:
+5. Test on **one Windows PC**, **one Intel Mac**, and **one Apple Silicon Mac** without internet:
    - Launch → activate with trial key
    - Index a sample folder
    - Search with a photo
+   - Precise Crop & Search (if SAM2 bundled)
    - Export PDF
+   - Check for updates (correct installer for that OS/arch)
 6. Upload installers to Google Drive / USB / your website
 7. Email customers: new installer + note that old license keys still work on the same Machine ID
 
@@ -175,7 +188,7 @@ After the **Build** workflow finishes, the release includes:
 | `TileVisionAI-Setup-1.0.1.exe` | Windows update link |
 | `TileVisionAI-macOS-Intel-1.0.1.dmg` | Intel Mac update link (required for Intel clients) |
 | `TileVisionAI-macOS-AppleSilicon-1.0.1.dmg` | Apple Silicon update link |
-| `TileVisionAI-macOS-1.0.1.zip` | **All Macs** — both DMGs + install guide |
+| `TileVisionAI-macOS-READ-ME-FIRST.txt` | Mac install guide (pick Intel vs Silicon) |
 | `update_manifest.json` | In-app update checker |
 
 Customers can also use **Settings → Check for Updates** anytime.

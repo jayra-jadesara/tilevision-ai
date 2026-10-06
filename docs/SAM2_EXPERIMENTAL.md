@@ -1,6 +1,9 @@
-# SAM 2 — Experimental Precise Crop (cross-platform)
+# SAM 2 — Precise Crop (cross-platform)
 
-Status: **feature branch / lab only**. Do **not** ship in customer DMG/EXE yet.
+Status: **shipped in customer installers** when `TILEVISION_BUNDLE_SAM2=auto`
+(the default in `scripts/build_mac.sh`, `scripts/build_windows.ps1`, and the
+GitHub Actions Build workflow). ONNX weights are bundled on Windows, Mac Intel,
+and Mac Apple Silicon.
 
 ## Goal
 
@@ -14,6 +17,10 @@ Status: **feature branch / lab only**. Do **not** ship in customer DMG/EXE yet.
 
 Identical weights + onnxruntime → identical crop quality. Transformers SAM2 is
 an optional lab fallback only (not used when ONNX is available).
+
+**Mac Intel note:** production Intel builds pin torch 2.2.2 (last x64 wheel),
+so Transformers SAM2 (needs torch≥2.5) is unavailable there. Customer builds
+always ship ONNX, so GrabCut is only the last-resort safety net.
 
 Default search / Auto Crop stay on fast OpenCV (no SAM, no slowdown).
 
@@ -29,16 +36,15 @@ python scripts/download_sam2_onnx_model.py
 # → model_weights/sam2.1-hiera-tiny-onnx/   (~126 MB)
 ```
 
-### Lab installer build (same package contents on Mac + Windows)
+### Installer build (same package contents on Mac + Windows)
 ```bash
-export TILEVISION_BUNDLE_SAM2=auto
+# Default in build scripts is already TILEVISION_BUNDLE_SAM2=auto
 bash scripts/build_mac.sh          # Intel + Silicon get the same ONNX bundle
 # Windows:
-$env:TILEVISION_BUNDLE_SAM2 = "auto"
 powershell -ExecutionPolicy Bypass -File scripts/build_windows.ps1
 ```
 
-Leave `TILEVISION_BUNDLE_SAM2` unset for production DINOv2-only builds.
+Set `TILEVISION_BUNDLE_SAM2=0` only for DINOv2-only lab builds without Precise Crop.
 
 ## Buttons
 

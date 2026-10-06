@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
-Download SAM 2.1 tiny ONNX weights for Mac Intel + Windows Precise Crop.
+Download SAM 2.1 tiny ONNX weights for Precise Crop on every client OS:
+
+  - Windows
+  - Mac Intel
+  - Mac Apple Silicon
 
 Works with production torch (including Mac Intel 2.2.x) via onnxruntime.
 
@@ -13,7 +17,7 @@ Output:
 
 Installer bundling:
 
-    export TILEVISION_BUNDLE_SAM2=auto   # includes Mac Intel ONNX
+    export TILEVISION_BUNDLE_SAM2=auto   # identical ONNX on Win + Mac Intel + Silicon
 """
 
 from __future__ import annotations
@@ -95,7 +99,10 @@ def main() -> int:
 
     _verify(out)
     print(f"Done. Set TILEVISION_SAM2_ONNX_DIR={out} if needed.")
-    print("Mac Intel + Windows Precise Crop will use ONNX SAM2 when enabled.")
+    print(
+        "Windows / Mac Intel / Mac Apple Silicon Precise Crop "
+        "will use ONNX SAM2 when enabled."
+    )
     return 0
 
 
