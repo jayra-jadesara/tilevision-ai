@@ -274,6 +274,15 @@ def test_run_query_path_warmup_uses_warmup_compute_scope():
     assert seen["in_progress"] is True
 
 
+def test_production_query_warmup_does_not_cap_torch_threads():
+    """Guard against reintroducing torch_threads=1 in production warmup."""
+    from pathlib import Path
+
+    source = Path("src/ai/query_warmup.py").read_text(encoding="utf-8")
+    assert "warmup_compute_scope(torch_threads=None)" in source
+    assert "warmup_compute_scope(torch_threads=1)" not in source
+
+
 def test_index_extract_batches_multiscale_views(monkeypatch):
     """Index path must run one real batched forward for all multi-scale views."""
     embedder = DINOv2Embedder(device_preference="cpu")

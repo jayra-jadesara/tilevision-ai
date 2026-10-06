@@ -68,22 +68,37 @@ def _torch_thread_count() -> int | None:
         return None
 
 
-def restore_interactive_torch_threads() -> None:
-    """Give a real search the full CPU budget even if warmup reduced it."""
+def restore_interactive_torch_threads() -> int | None:
+    """
+    Restore process-global torch intra-op threads to the interactive budget.
+
+    Returns the thread count after restore (or None if torch is unavailable).
+    Must run after ``warmup_compute_scope`` exits and again before catalogue
+    index forwards — ``torch.set_num_threads`` is process-global, and the
+    first DINOv2/oneDNN forward under a 1-thread cap has been observed to
+    leave later indexing far slower than the pre-batching baseline.
+
+    Always calls ``set_num_threads`` (no current==target short-circuit): on
+    Mac Intel CI, a background warmup thread's set/get can disagree with the
+    joining thread's view of the process pool size.
+    """
     try:
         import torch
 
         target = interactive_cpu_thread_count()
+        previous = int(torch.get_num_threads())
+        torch.set_num_threads(target)
         current = int(torch.get_num_threads())
-        if current != target:
-            torch.set_num_threads(target)
+        if previous != current:
             logger.info(
-                "Search restored torch intra-op threads %s → %s",
+                "Restored torch intra-op threads %s → %s",
+                previous,
                 current,
-                target,
             )
+        return current
     except Exception as exc:
         logger.debug("Could not restore interactive torch threads: %s", exc)
+        return None
 
 
 def is_warmup_compute() -> bool:
@@ -129,50 +144,72 @@ def _restore_os_thread_priority(previous: int | None) -> None:
 
 
 @contextmanager
-def warmup_compute_scope(*, torch_threads: int = 1) -> Iterator[None]:
+def warmup_compute_scope(*, torch_threads: int | None = None) -> Iterator[None]:
     """
-    Limit CPU used by background query warmup and skip the inference lock.
+    Mark background query warmup and skip the inference lock.
 
-    ``torch.set_num_threads`` is process-global: warmup uses 1 intra-op
-    thread so a concurrent catalog search is not starved on a 4-core CPU.
-    Search priority does not restore the full budget until this scope
-    exits — otherwise the in-flight dummy forward would take every core
-    again.
+    ``torch_threads``:
+      * ``None`` (default) — do **not** change ``torch.set_num_threads``.
+        Preferred for production warmup: the first DINOv2/oneDNN forward
+        sizes OpenMP worker pools; capping that first forward to 1 thread
+        left later catalogue indexing ~2× slower on CPU-only Windows even
+        after ``get_num_threads()`` reported 4 again. OS thread priority
+        + inference-lock skip still keep warmup from blocking the UI.
+      * ``int`` — temporarily cap intra-op threads (tests / debug only).
+        Always restored to ``interactive_cpu_thread_count()`` on exit.
     """
     _warmup_tls.active = True
     _warmup_in_progress.set()
     prev_os = _lower_os_thread_priority()
     prev_torch: int | None = None
+    capped = False
     try:
         import torch
 
         prev_torch = int(torch.get_num_threads())
-        target = max(1, int(torch_threads))
-        if prev_torch != target:
-            torch.set_num_threads(target)
-        logger.info(
-            "Warmup compute scope ON (torch_threads %s → %s, skip inference lock)",
-            prev_torch,
-            torch.get_num_threads(),
-        )
+        if torch_threads is not None:
+            target = max(1, int(torch_threads))
+            if prev_torch != target:
+                torch.set_num_threads(target)
+                capped = True
+            logger.info(
+                "Warmup compute scope ON (torch_threads %s → %s, skip inference lock)",
+                prev_torch,
+                torch.get_num_threads(),
+            )
+        else:
+            logger.info(
+                "Warmup compute scope ON (torch_threads unchanged=%s, "
+                "skip inference lock, no intra-op cap)",
+                prev_torch,
+            )
     except Exception as exc:
-        logger.debug("Warmup torch thread cap skipped: %s", exc)
+        logger.debug("Warmup torch thread setup skipped: %s", exc)
     try:
         yield
     finally:
         _restore_os_thread_priority(prev_os)
         _warmup_tls.active = False
         _warmup_in_progress.clear()
-        if search_priority_active():
-            restore_interactive_torch_threads()
-        elif prev_torch is not None:
+        # Always re-assert the interactive budget (not merely prev_torch).
+        # Falling back to prev_torch is wrong on Mac Intel when a test/host
+        # temporarily raised threads above interactive_cpu_thread_count().
+        restored = restore_interactive_torch_threads()
+        if restored is None:
             try:
                 import torch
 
-                torch.set_num_threads(prev_torch)
+                target = interactive_cpu_thread_count()
+                torch.set_num_threads(target)
+                restored = int(torch.get_num_threads())
             except Exception:
                 pass
-        logger.info("Warmup compute scope OFF")
+        logger.info(
+            "Warmup compute scope OFF (torch_threads=%s interactive_target=%s capped=%s)",
+            restored if restored is not None else _torch_thread_count(),
+            interactive_cpu_thread_count(),
+            capped,
+        )
 
 
 def begin_search_priority() -> None:

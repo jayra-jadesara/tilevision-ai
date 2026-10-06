@@ -159,6 +159,7 @@ def test_warmup_compute_scope_does_not_hold_inference_lock():
 
 def test_warmup_caps_torch_threads_while_search_is_active():
     torch = pytest.importorskip("torch")
+    from src.ai.inference_guard import restore_interactive_torch_threads
 
     previous = int(torch.get_num_threads())
     torch.set_num_threads(max(2, previous))
@@ -170,8 +171,65 @@ def test_warmup_caps_torch_threads_while_search_is_active():
         assert torch.get_num_threads() == interactive_cpu_thread_count()
     finally:
         end_search_priority()
+        restore_interactive_torch_threads()
         torch.set_num_threads(previous)
 
+
+def test_warmup_compute_scope_restores_threads_after_cap():
+    """Regression: capped warmup must restore the interactive thread budget."""
+    torch = pytest.importorskip("torch")
+    from concurrent.futures import ThreadPoolExecutor
+
+    from src.ai.inference_guard import restore_interactive_torch_threads
+
+    previous = int(torch.get_num_threads())
+    interactive = interactive_cpu_thread_count()
+    # Start above the cap so the 1-thread warmup is a real transition.
+    # On Mac Intel interactive is already 1 — bump temporarily then restore.
+    start_threads = max(2, interactive)
+    torch.set_num_threads(start_threads)
+    try:
+        def _warmup_worker():
+            with warmup_compute_scope(torch_threads=1):
+                assert torch.get_num_threads() == 1
+                # First parallel op under the cap (mirrors DINOv2 warmup).
+                x = torch.randn(256, 256)
+                _ = x @ x
+
+        thread = threading.Thread(target=_warmup_worker, name="tv-query-warmup")
+        thread.start()
+        thread.join(timeout=10.0)
+        assert not thread.is_alive()
+
+        # Production query_warmup.py re-asserts on the owner thread after the
+        # background worker finishes — Mac Intel CI does not always observe a
+        # set_num_threads() performed inside that worker.
+        assert restore_interactive_torch_threads() == interactive
+
+        # Mimic extract_index_vectors_batch's preprocess pool after warmup.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            list(pool.map(lambda i: i * i, range(4)))
+
+        # Index path re-asserts again before DINOv2 forwards.
+        assert restore_interactive_torch_threads() == interactive
+        assert torch.get_num_threads() == interactive
+    finally:
+        torch.set_num_threads(previous)
+
+
+def test_production_warmup_scope_does_not_cap_torch_threads():
+    """Production query warmup must not lower threads below the interactive budget."""
+    torch = pytest.importorskip("torch")
+
+    previous = int(torch.get_num_threads())
+    interactive = interactive_cpu_thread_count()
+    torch.set_num_threads(interactive)
+    try:
+        with warmup_compute_scope(torch_threads=None):
+            assert torch.get_num_threads() == interactive
+        assert torch.get_num_threads() == interactive
+    finally:
+        torch.set_num_threads(previous)
 
 def test_search_priority_restores_torch_threads_when_warmup_idle():
     torch = pytest.importorskip("torch")

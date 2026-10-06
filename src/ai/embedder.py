@@ -32,10 +32,12 @@ from src.ai.models import PreprocessedImage
 from src.ai.inference_guard import (
     DEFAULT_INDEX_LOCK_TIMEOUT_S,
     DEFAULT_SEARCH_LOCK_TIMEOUT_S,
+    interactive_cpu_thread_count,
+    is_warmup_compute,
+    restore_interactive_torch_threads,
     search_priority_active,
     synchronized_inference,
     wait_while_search_priority,
-    is_warmup_compute,
 )
 from src.ai.gpu_info import (
     DevicePreference,
@@ -268,6 +270,44 @@ class DINOv2Embedder:
             return self._model(**inputs)
         return self._model(**inputs)
 
+    def _ensure_index_torch_threads(self, *, views: int, purpose: str) -> int:
+        """
+        Re-assert interactive torch thread budget before an index forward.
+
+        Logs the live ``torch.get_num_threads()`` so customer logs can confirm
+        whether a rebuild ran at 1 thread (warmup-cap leak) or the full budget.
+        """
+        if self._device.type != "cpu":
+            return -1
+        restored = restore_interactive_torch_threads()
+        try:
+            current = int(torch.get_num_threads())
+        except Exception:
+            current = -1
+        target = interactive_cpu_thread_count()
+        logger.info(
+            "DINOv2 index forward prep: purpose=%s views=%d torch_threads=%s "
+            "interactive_target=%s restored=%s",
+            purpose,
+            views,
+            current,
+            target,
+            restored,
+        )
+        if current > 0 and current < target:
+            logger.warning(
+                "DINOv2 index forward still below interactive thread budget "
+                "(%s < %s) — retrying restore",
+                current,
+                target,
+            )
+            restore_interactive_torch_threads()
+            try:
+                current = int(torch.get_num_threads())
+            except Exception:
+                pass
+        return current
+
     def _forward_batch(self, images: List[Image.Image]) -> np.ndarray:
         """Single DINOv2 forward pass."""
         inputs = self._processor(images=images, return_tensors="pt")
@@ -467,8 +507,12 @@ class DINOv2Embedder:
         """
         views = self._generate_views(processed.pil, for_query=for_query)
 
-        if not for_query and len(views) > 1:
+        if not for_query:
             wait_while_search_priority()
+            self._ensure_index_torch_threads(
+                views=len(views),
+                purpose="extract_from_preprocessed",
+            )
 
         view_embeddings = self._extract_batch(views, for_query=for_query)
         final_embedding = self._fuse_embeddings(view_embeddings)
@@ -543,10 +587,22 @@ class DINOv2Embedder:
         )))
         pieces: List[np.ndarray] = []
         forward_calls = 0
+        thread_samples: List[int] = []
+        forward_ms: List[float] = []
+        import time as _time
+
         for start in range(0, len(all_views), chunk):
             wait_while_search_priority()
             batch_views = all_views[start : start + chunk]
+            threads_now = self._ensure_index_torch_threads(
+                views=len(batch_views),
+                purpose="extract_batch_from_preprocessed",
+            )
+            if threads_now > 0:
+                thread_samples.append(threads_now)
+            t_fwd = _time.perf_counter()
             pieces.append(self._extract_batch(batch_views, for_query=False))
+            forward_ms.append((_time.perf_counter() - t_fwd) * 1000.0)
             forward_calls += 1
 
         stacked = np.vstack(pieces) if len(pieces) > 1 else pieces[0]
@@ -560,11 +616,14 @@ class DINOv2Embedder:
 
         logger.info(
             "DINOv2 index batch: images=%d views=%d forward_calls=%d "
-            "views_per_forward~%d (was %d serial single-view calls)",
+            "views_per_forward~%d torch_threads=%s forward_ms=%s "
+            "(was %d serial single-view calls)",
             len(processed_images),
             len(all_views),
             forward_calls,
             min(chunk, len(all_views)),
+            thread_samples if thread_samples else "?",
+            [round(ms, 1) for ms in forward_ms],
             len(all_views),
         )
         return results

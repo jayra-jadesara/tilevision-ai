@@ -572,7 +572,9 @@ class IndexImagesUseCase:
 
         self._index.load_index()
 
-        start_time = time.time()
+        # perf_counter: Windows time.time() can round sub-15ms scans to 0 and
+        # zero-out ETA during fast FakeEmbedder / tiny-folder tests.
+        start_time = time.perf_counter()
         processed_count = 0
 
         # Track every path we actually see on disk this scan, so we can
@@ -592,7 +594,7 @@ class IndexImagesUseCase:
                 return
 
             batch_size = len(pending_batch)
-            flush_t0 = time.time()
+            flush_t0 = time.perf_counter()
             try:
                 # Persist after every flush so a mid-rebuild kill/restart can
                 # resume via skip-unchanged without orphaning FAISS vectors.
@@ -602,9 +604,9 @@ class IndexImagesUseCase:
                         modified_count += 1
                     else:
                         new_count += 1
-                per_image = (time.time() - flush_t0) / max(1, batch_size)
+                per_image = (time.perf_counter() - flush_t0) / max(1, batch_size)
                 for _ in range(batch_size):
-                    work_samples.append(per_image)
+                    work_samples.append(max(per_image, 1e-6))
                 if len(work_samples) > work_sample_window:
                     del work_samples[: len(work_samples) - work_sample_window]
             except Exception as e:
@@ -629,10 +631,11 @@ class IndexImagesUseCase:
                 if decided > 0:
                     work_rate = 1.0 - (skipped_count / decided)
                 else:
-                    work_rate = 1.0 if force else 1.0
+                    work_rate = 1.0
                 return avg_work * remaining_files * max(0.0, min(1.0, work_rate))
             if processed > 0:
-                return (time.time() - start_time) / processed * remaining_files
+                elapsed = time.perf_counter() - start_time
+                return max(elapsed, 1e-6) / processed * remaining_files
             return 0.0
 
         for file_path in all_files:
@@ -725,7 +728,7 @@ class IndexImagesUseCase:
         if is_completed and self._folder_repo is not None:
             self._folder_repo.record_folder_indexed(str(root))
 
-        elapsed_total = time.time() - start_time
+        elapsed_total = time.perf_counter() - start_time
 
         # "Time saved" (Task 2): estimate how much longer this scan would
         # have taken if every skipped (unchanged) file had been re-embedded

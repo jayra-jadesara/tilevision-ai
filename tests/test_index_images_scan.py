@@ -496,14 +496,12 @@ def test_mid_rebuild_cancel_then_resume_skips_completed_files(env):
 def test_progress_eta_uses_embed_work_not_skip_dilution(env):
     """ETA should stay meaningful once real embeds have been timed."""
     d = env["images_dir"]
-    for i in range(6):
+    # More than one batch flush so mid-run callbacks see work_samples.
+    for i in range(14):
         _make_image(d / f"tile_{i}.jpg", (i * 30, i * 15, i * 8))
 
     env["use_case"].scan_and_index_directory(d)
 
-    # Second scan: all skips. ETA may be 0/-- early; when work_samples exist
-    # from a prior flush in the same process they still inform remaining work
-    # rate. Force a rebuild so ETA is driven by real embed samples.
     etas = []
 
     def progress_cb(processed, total, filename, eta):
@@ -512,8 +510,7 @@ def test_progress_eta_uses_embed_work_not_skip_dilution(env):
     result = env["use_case"].scan_and_index_directory(
         d, progress_callback=progress_cb, force=True
     )
-    assert result.modified_count == 6
-    # After the first batch flush, later progress callbacks should report a
-    # positive remaining ETA (until the final file).
+    assert result.modified_count == 14
+    # Callbacks after the first flush (batch_size=12) must show remaining ETA.
     positive = [e for e in etas if e > 0]
     assert positive, f"expected positive ETA samples during rebuild, got {etas}"
