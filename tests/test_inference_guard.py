@@ -159,6 +159,7 @@ def test_warmup_compute_scope_does_not_hold_inference_lock():
 
 def test_warmup_caps_torch_threads_while_search_is_active():
     torch = pytest.importorskip("torch")
+    from src.ai.inference_guard import restore_interactive_torch_threads
 
     previous = int(torch.get_num_threads())
     torch.set_num_threads(max(2, previous))
@@ -170,6 +171,56 @@ def test_warmup_caps_torch_threads_while_search_is_active():
         assert torch.get_num_threads() == interactive_cpu_thread_count()
     finally:
         end_search_priority()
+        restore_interactive_torch_threads()
+        torch.set_num_threads(previous)
+
+
+def test_warmup_compute_scope_restores_threads_after_cap():
+    """Regression: capped warmup must not leave indexing stuck at 1 thread."""
+    torch = pytest.importorskip("torch")
+    from concurrent.futures import ThreadPoolExecutor
+
+    from src.ai.inference_guard import restore_interactive_torch_threads
+
+    previous = int(torch.get_num_threads())
+    target = max(2, interactive_cpu_thread_count())
+    torch.set_num_threads(target)
+    try:
+        def _warmup_worker():
+            with warmup_compute_scope(torch_threads=1):
+                assert torch.get_num_threads() == 1
+                # First parallel op under the cap (mirrors DINOv2 warmup).
+                x = torch.randn(256, 256)
+                _ = x @ x
+
+        thread = threading.Thread(target=_warmup_worker, name="tv-query-warmup")
+        thread.start()
+        thread.join(timeout=10.0)
+        assert not thread.is_alive()
+
+        # Mimic extract_index_vectors_batch's preprocess pool after warmup.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            list(pool.map(lambda i: i * i, range(4)))
+
+        assert torch.get_num_threads() == interactive_cpu_thread_count()
+        restored = restore_interactive_torch_threads()
+        assert restored == interactive_cpu_thread_count()
+    finally:
+        torch.set_num_threads(previous)
+
+
+def test_production_warmup_scope_does_not_cap_torch_threads():
+    """Production query warmup must leave intra-op threads untouched."""
+    torch = pytest.importorskip("torch")
+
+    previous = int(torch.get_num_threads())
+    target = max(2, interactive_cpu_thread_count())
+    torch.set_num_threads(target)
+    try:
+        with warmup_compute_scope(torch_threads=None):
+            assert torch.get_num_threads() == target
+        assert torch.get_num_threads() == interactive_cpu_thread_count()
+    finally:
         torch.set_num_threads(previous)
 
 

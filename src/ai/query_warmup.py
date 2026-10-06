@@ -74,7 +74,11 @@ def run_query_path_warmup(
 
     Aborts remaining steps if a user search has claimed priority.
     """
-    from src.ai.inference_guard import search_priority_active, warmup_compute_scope
+    from src.ai.inference_guard import (
+        restore_interactive_torch_threads,
+        search_priority_active,
+        warmup_compute_scope,
+    )
 
     if search_priority_active():
         logger.info("Query-path warm-up skipped — search already running")
@@ -82,7 +86,12 @@ def run_query_path_warmup(
 
     shapes = shapes or warmup_shapes_from_env()
     timings: dict[str, float] = {}
-    with warmup_compute_scope(torch_threads=1):
+    # Do not pass torch_threads=1: the first DINOv2/oneDNN forward under a
+    # 1-thread cap permanently undersized CPU parallelism on Windows and made
+    # post-PR-64 batched index forwards ~2× slower than the serial baseline
+    # even minutes after warmup logged OFF. OS priority + lock skip remain.
+    restore_interactive_torch_threads()
+    with warmup_compute_scope(torch_threads=None):
         if search_priority_active():
             logger.info("Query-path warm-up skipped — search already running")
             return {}
