@@ -186,18 +186,25 @@ def warmup_compute_scope(*, torch_threads: int | None = None) -> Iterator[None]:
         _restore_os_thread_priority(prev_os)
         _warmup_tls.active = False
         _warmup_in_progress.clear()
-        # Always re-assert the interactive budget after a cap. Also call
-        # restore when uncapped so a concurrent search that lowered threads
-        # mid-warmup cannot leave indexing stuck at 1.
+        # Always re-assert the interactive budget (not merely prev_torch).
+        # Falling back to prev_torch is wrong on Mac Intel when a test/host
+        # temporarily raised threads above interactive_cpu_thread_count().
         restored = restore_interactive_torch_threads()
-        if restored is None and prev_torch is not None and capped:
+        if restored is None:
             try:
                 import torch
 
-                torch.set_num_threads(prev_torch)
+                torch.set_num_threads(interactive_cpu_thread_count())
                 restored = int(torch.get_num_threads())
             except Exception:
-                pass
+                if prev_torch is not None:
+                    try:
+                        import torch
+
+                        torch.set_num_threads(prev_torch)
+                        restored = int(torch.get_num_threads())
+                    except Exception:
+                        pass
         logger.info(
             "Warmup compute scope OFF (torch_threads=%s interactive_target=%s capped=%s)",
             restored if restored is not None else _torch_thread_count(),

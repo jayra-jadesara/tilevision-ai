@@ -176,15 +176,18 @@ def test_warmup_caps_torch_threads_while_search_is_active():
 
 
 def test_warmup_compute_scope_restores_threads_after_cap():
-    """Regression: capped warmup must not leave indexing stuck at 1 thread."""
+    """Regression: capped warmup must restore the interactive thread budget."""
     torch = pytest.importorskip("torch")
     from concurrent.futures import ThreadPoolExecutor
 
     from src.ai.inference_guard import restore_interactive_torch_threads
 
     previous = int(torch.get_num_threads())
-    target = max(2, interactive_cpu_thread_count())
-    torch.set_num_threads(target)
+    interactive = interactive_cpu_thread_count()
+    # Start above the cap so the 1-thread warmup is a real transition.
+    # On Mac Intel interactive is already 1 — bump temporarily then restore.
+    start_threads = max(2, interactive)
+    torch.set_num_threads(start_threads)
     try:
         def _warmup_worker():
             with warmup_compute_scope(torch_threads=1):
@@ -202,27 +205,26 @@ def test_warmup_compute_scope_restores_threads_after_cap():
         with ThreadPoolExecutor(max_workers=2) as pool:
             list(pool.map(lambda i: i * i, range(4)))
 
-        assert torch.get_num_threads() == interactive_cpu_thread_count()
+        assert torch.get_num_threads() == interactive
         restored = restore_interactive_torch_threads()
-        assert restored == interactive_cpu_thread_count()
+        assert restored == interactive
     finally:
         torch.set_num_threads(previous)
 
 
 def test_production_warmup_scope_does_not_cap_torch_threads():
-    """Production query warmup must leave intra-op threads untouched."""
+    """Production query warmup must not lower threads below the interactive budget."""
     torch = pytest.importorskip("torch")
 
     previous = int(torch.get_num_threads())
-    target = max(2, interactive_cpu_thread_count())
-    torch.set_num_threads(target)
+    interactive = interactive_cpu_thread_count()
+    torch.set_num_threads(interactive)
     try:
         with warmup_compute_scope(torch_threads=None):
-            assert torch.get_num_threads() == target
-        assert torch.get_num_threads() == interactive_cpu_thread_count()
+            assert torch.get_num_threads() == interactive
+        assert torch.get_num_threads() == interactive
     finally:
         torch.set_num_threads(previous)
-
 
 def test_search_priority_restores_torch_threads_when_warmup_idle():
     torch = pytest.importorskip("torch")
