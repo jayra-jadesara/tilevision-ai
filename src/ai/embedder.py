@@ -18,6 +18,7 @@ DINOv2 Large: 1024 dimensions
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import os
 from typing import List, Tuple
@@ -53,6 +54,33 @@ logger = logging.getLogger("tilevision.ai.embedder")
 # Weighted fusion of multi-scale views.  Global dominates; detail
 # boosts fine-grained pattern discrimination without overpowering semantics.
 _VIEW_WEIGHTS: Tuple[float, ...] = (0.50, 0.30, 0.20)
+
+# Query-time MPS hang watchdog.
+#
+# Working DINOv2-large forwards on Apple Silicon MPS are typically well under
+# ~2s for a single (or ≤2) query view; Mac Intel CPU warm-up logs in this
+# codebase are usually hundreds of ms to a few seconds. 20s is ~10× margin
+# over a slow-but-working MPS forward so legitimate searches are not
+# false-positive timed out. Override with TILEVISION_MPS_QUERY_TIMEOUT_S after
+# measuring on real Silicon hardware (see scripts/validate_mac_silicon_mps.py).
+_DEFAULT_MPS_QUERY_TIMEOUT_S = 20.0
+_MPS_QUERY_TIMEOUT_ENV = "TILEVISION_MPS_QUERY_TIMEOUT_S"
+
+
+def mps_query_forward_timeout_s() -> float:
+    """Bounded wait for a query-time MPS forward before CPU hang-fallback."""
+    raw = os.environ.get(_MPS_QUERY_TIMEOUT_ENV, "").strip()
+    if raw:
+        try:
+            return max(1.0, float(raw))
+        except ValueError:
+            logger.warning(
+                "Ignoring invalid %s=%r — using default %.1fs",
+                _MPS_QUERY_TIMEOUT_ENV,
+                raw,
+                _DEFAULT_MPS_QUERY_TIMEOUT_S,
+            )
+    return _DEFAULT_MPS_QUERY_TIMEOUT_S
 
 
 def _is_device_oom_error(device_type: str, message: str) -> bool:
@@ -231,21 +259,37 @@ class DINOv2Embedder:
         self._query_path_warmed = True
         return timings
 
-    def _fallback_mps_to_cpu(self, reason: str) -> None:
-        """Move the model to CPU after an unimplemented MPS operator."""
+    def _fallback_mps_to_cpu(
+        self,
+        reason: str,
+        *,
+        cause: str = "unsupported_op",
+    ) -> None:
+        """
+        Switch DINOv2 to CPU after an MPS failure.
+
+        ``cause`` distinguishes log wording:
+          - ``unsupported_op`` — Metal raised (reactive path)
+          - ``timeout`` — query watchdog fired (silent hang; no exception)
+        """
         if self._mps_cpu_fallback_done and self._device.type == "cpu":
             return
         short = reason.splitlines()[0][:160]
-        logger.warning(
-            "MPS operator unavailable — switching DINOv2 to CPU so search continues. (%s)",
-            short,
-        )
+        if cause == "timeout":
+            logger.warning(
+                "MPS query forward timed out — switching DINOv2 to CPU so search "
+                "continues (hang watchdog). (%s)",
+                short,
+            )
+        else:
+            logger.warning(
+                "MPS operator unavailable — switching DINOv2 to CPU so search "
+                "continues. (%s)",
+                short,
+            )
         self._device = torch.device("cpu")
         self._device_preference = "cpu"
         self._runtime = detect_gpu_runtime(preference="cpu")
-        if self._model is not None:
-            self._model.to(self._device)
-            self._model.eval()
         from src.utils.platform_info import is_mac_intel
 
         thread_count = 1 if is_mac_intel() else min(8, os.cpu_count() or 4)
@@ -256,6 +300,15 @@ class DINOv2Embedder:
             except Exception:
                 pass
         self._mps_cpu_fallback_done = True
+
+        if cause == "timeout":
+            # A hung MPS worker may still own the old module — abandon it and
+            # load a fresh CPU copy so the retry cannot race the stuck thread.
+            self._model = None
+            self.load_model()
+        elif self._model is not None:
+            self._model.to(self._device)
+            self._model.eval()
 
     def _run_model_forward(self, inputs: dict) -> object:
         """Run DINOv2 forward pass with autocast only when the device supports it."""
@@ -338,6 +391,27 @@ class DINOv2Embedder:
         norms = np.linalg.norm(embeddings, axis=1, keepdims=True) + 1e-8
         return embeddings / norms
 
+    def _forward_batch_with_mps_query_watchdog(
+        self,
+        images: List[Image.Image],
+        *,
+        timeout_s: float,
+    ) -> np.ndarray:
+        """
+        Run a query forward on MPS inside a bounded-time worker.
+
+        Silent Metal hangs never raise — only a join timeout can detect them.
+        On timeout the caller falls back to CPU (see ``_extract_batch``).
+        Uses ``shutdown(wait=False)`` so a stuck worker cannot block the UI
+        thread forever (the orphaned worker is abandoned with the old module).
+        """
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            future = pool.submit(self._forward_batch, images)
+            return future.result(timeout=timeout_s)
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
+
     @staticmethod
     def _generate_views(
         image: Image.Image,
@@ -412,9 +486,51 @@ class DINOv2Embedder:
             DEFAULT_SEARCH_LOCK_TIMEOUT_S if for_query else DEFAULT_INDEX_LOCK_TIMEOUT_S
         )
 
-        # Query embeds on Apple Silicon: use CPU to avoid silent MPS hangs.
-        if for_query and self._device.type == "mps" and not self._mps_cpu_fallback_done:
-            self._fallback_mps_to_cpu("query search prefers CPU (avoid MPS hang)")
+        # Keep index + query on the same device (MPS/CUDA/CPU) so cosine ranks
+        # match. Query-time MPS uses a hang watchdog (silent Metal hangs never
+        # raise). Reactive unsupported-op fallback below is unchanged.
+        use_mps_query_watchdog = (
+            for_query
+            and self._device.type == "mps"
+            and not self._mps_cpu_fallback_done
+        )
+        mps_timeout_s = (
+            mps_query_forward_timeout_s() if use_mps_query_watchdog else 0.0
+        )
+
+        def _run_forward() -> np.ndarray:
+            if use_mps_query_watchdog:
+                logger.info(
+                    "DINOv2 query forward on MPS with hang watchdog "
+                    "(timeout=%.1fs views=%d)",
+                    mps_timeout_s,
+                    len(images),
+                )
+                return self._forward_batch_with_mps_query_watchdog(
+                    images,
+                    timeout_s=mps_timeout_s,
+                )
+            return self._forward_batch(images)
+
+        def _fallback_after_mps_timeout() -> np.ndarray:
+            self._fallback_mps_to_cpu(
+                f"MPS query forward exceeded {mps_timeout_s:.1f}s "
+                f"(TILEVISION_MPS_QUERY_TIMEOUT_S / default "
+                f"{_DEFAULT_MPS_QUERY_TIMEOUT_S:.1f}s)",
+                cause="timeout",
+            )
+            return self._extract_batch(images, for_query=for_query)
+
+        def _fallback_after_mps_op_error(message: str) -> np.ndarray | None:
+            message_l = message.lower()
+            if (
+                self._device.type == "mps"
+                and is_mps_unsupported_op_error(message_l)
+                and not self._mps_cpu_fallback_done
+            ):
+                self._fallback_mps_to_cpu(message, cause="unsupported_op")
+                return self._extract_batch(images, for_query=for_query)
+            return None
 
         if is_warmup_compute():
             logger.info(
@@ -422,17 +538,13 @@ class DINOv2Embedder:
                 torch.get_num_threads() if hasattr(torch, "get_num_threads") else "?",
             )
             try:
-                return self._forward_batch(images)
+                return _run_forward()
+            except concurrent.futures.TimeoutError:
+                return _fallback_after_mps_timeout()
             except (RuntimeError, ValueError) as exc:
-                message = str(exc)
-                message_l = message.lower()
-                if (
-                    self._device.type == "mps"
-                    and is_mps_unsupported_op_error(message_l)
-                    and not self._mps_cpu_fallback_done
-                ):
-                    self._fallback_mps_to_cpu(message)
-                    return self._extract_batch(images, for_query=for_query)
+                retried = _fallback_after_mps_op_error(str(exc))
+                if retried is not None:
+                    return retried
                 raise
 
         # If Search is waiting, indexing must not start another long forward.
@@ -441,20 +553,16 @@ class DINOv2Embedder:
 
         with synchronized_inference(timeout=lock_timeout, purpose="DINOv2 embed"):
             try:
-                return self._forward_batch(images)
+                return _run_forward()
+            except concurrent.futures.TimeoutError:
+                return _fallback_after_mps_timeout()
             except (RuntimeError, ValueError) as exc:
                 message = str(exc)
+                retried = _fallback_after_mps_op_error(message)
+                if retried is not None:
+                    return retried
+
                 message_l = message.lower()
-
-                # Missing Metal ops / unsupported MPS autocast → CPU, not OOM retry.
-                if (
-                    self._device.type == "mps"
-                    and is_mps_unsupported_op_error(message_l)
-                    and not self._mps_cpu_fallback_done
-                ):
-                    self._fallback_mps_to_cpu(message)
-                    return self._extract_batch(images, for_query=for_query)
-
                 is_oom = _is_device_oom_error(self._device.type, message_l)
                 if (
                     not is_oom

@@ -22,17 +22,27 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-15-intel matches other workflows and avoids macos-latest
-        # (arm64) capacity queues that cancel with "job was not acquired".
-        os: [ubuntu-latest, macos-15-intel, windows-latest]
+        # Customer stacks: Linux CI + Windows + Mac Intel + Mac Apple Silicon.
+        os: [ubuntu-latest, macos-15-intel, macos-15, windows-latest]
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Python 3.12
+        id: setup-python
+        if: matrix.os != 'macos-15-intel'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+
+      - name: Set up Python 3.12 (Intel x64)
+        id: setup-python-intel
+        if: matrix.os == 'macos-15-intel'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: x64
           cache: pip
 
       - name: Install Linux Qt dependencies
@@ -42,10 +52,36 @@ jobs:
           sudo apt-get install -y \
             libxcb-cursor0 libxcb-xinerama0 libxkbcommon-x11-0 libegl1 libglib2.0-0
 
-      - name: Install dependencies
+      - name: Install dependencies (macOS Intel)
+        if: matrix.os == 'macos-15-intel'
+        shell: bash
+        env:
+          PYTHON_SETUP_PATH: ${{ steps.setup-python-intel.outputs.python-path }}
+        run: |
+          set -euo pipefail
+          source scripts/install_mac_deps.sh x64
+          "$MACOS_PYTHON_PATH" -m pip install --no-cache-dir pytest
+          echo "MACOS_PYTHON_PATH=$MACOS_PYTHON_PATH" >> "$GITHUB_ENV"
+          echo "RUN_PYTHON=$MACOS_PYTHON_PATH" >> "$GITHUB_ENV"
+
+      - name: Install dependencies (macOS Apple Silicon)
+        if: matrix.os == 'macos-15'
+        shell: bash
+        env:
+          PYTHON_SETUP_PATH: ${{ steps.setup-python.outputs.python-path }}
+        run: |
+          set -euo pipefail
+          source scripts/install_mac_deps.sh arm64
+          "$MACOS_PYTHON_PATH" -m pip install --no-cache-dir pytest
+          echo "MACOS_PYTHON_PATH=$MACOS_PYTHON_PATH" >> "$GITHUB_ENV"
+          echo "RUN_PYTHON=$MACOS_PYTHON_PATH" >> "$GITHUB_ENV"
+
+      - name: Install dependencies (Linux / Windows)
+        if: runner.os != 'macOS'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt pytest
+          echo "RUN_PYTHON=python" >> "$GITHUB_ENV"
 
       - name: Run tests
         env:
@@ -58,4 +94,7 @@ jobs:
           PYTHONFAULTHANDLER: "1"
           TILEVISION_PYTEST_MARKERS: ${{ runner.os == 'macOS' && 'not slow and not faiss_search' || 'not slow' }}
         shell: bash
-        run: python scripts/run_ci_pytest.py
+        run: |
+          set -euo pipefail
+          PY="${RUN_PYTHON:-python}"
+          "$PY" scripts/run_ci_pytest.py

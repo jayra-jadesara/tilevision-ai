@@ -56,7 +56,7 @@ logger = logging.getLogger("tilevision.presentation.views.search_view")
 
 from src.utils.image_formats import query_image_extensions
 
-# Query formats include HEIC on Mac when pillow-heif is installed.
+# Query formats include HEIC on Windows/Mac when pillow-heif is installed.
 _QUERY_IMAGE_EXTENSIONS = query_image_extensions()
 
 _TABLE_COLUMNS = [
