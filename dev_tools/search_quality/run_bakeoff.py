@@ -34,7 +34,13 @@ from src.ai.embedder import DINOv2Embedder
 from src.ai.feature_extractor import FeatureExtractor
 from src.ai.preprocess.image_preprocessor import ImagePreprocessor, PreprocessedImage
 from src.ai.preprocess.index_primary import prepare_index_primary
-from src.ai.search_quality.fusion import FusionMethod, ScoredHit, fuse_hits, tune_weighted_max
+from src.ai.search_quality.fusion import (
+    FusionMethod,
+    ScoredHit,
+    fuse_hits,
+    merge_multi_view_faiss,
+    tune_weighted_max,
+)
 from src.ai.search_quality.image_analysis import analyze_image
 from src.ai.search_quality.views import IndexStrategy, IndexViewType, build_index_views
 from src.ai.vector_index import FaissIndexManager
@@ -234,6 +240,7 @@ class BakeoffEngine:
         search_k: int = 100,
         orb_verification: bool = False,
         catalog_by_id: dict[int, CatalogItem] | None = None,
+        rrf_k: int = 60,
     ) -> Metrics:
         metrics = Metrics(vectors=mgr.get_total_count())
         total_embed = total_faiss = total_fuse = total_rerank = 0.0
@@ -256,31 +263,25 @@ class BakeoffEngine:
             qembs, embed_s = self.embed_query(q.path)
             total_embed += embed_s
             t1 = time.perf_counter()
-            best_scores: dict[int, float] = {}
+            # True multi-view fusion: per-view FAISS lists with ranks, not
+            # MAX-first then re-rank (that made RRF order-identical to MAX and
+            # only changed ORB banding via score scale).
+            per_view: list[tuple[list[int], list[float]]] = []
             for qemb in qembs:
                 raw_ids, raw_scores = mgr.search_vectors(qemb, top_k=k)
-                for tid, sc in zip(raw_ids, raw_scores):
-                    tile_id = int(tid)
-                    score = float(sc)
-                    prev = best_scores.get(tile_id)
-                    if prev is None or score > prev:
-                        best_scores[tile_id] = score
+                per_view.append((list(raw_ids), list(raw_scores)))
             faiss_s = time.perf_counter() - t1
             total_faiss += faiss_s
 
-            hits: list[ScoredHit] = []
-            fused_sorted = sorted(best_scores.items(), key=lambda item: item[1], reverse=True)
-            for rank, (tid, sc) in enumerate(fused_sorted, start=1):
-                hits.append(
-                    ScoredHit(
-                        tile_id=tid,
-                        score=sc,
-                        view_weight=aux_weight,
-                        rank_in_list=rank,
-                    )
-                )
             t2 = time.perf_counter()
-            fused = fuse_hits(hits, fusion)
+            merged = merge_multi_view_faiss(
+                per_view, fusion, rrf_k=rrf_k, view_weight=aux_weight
+            )
+            # Order from fusion; scores for ORB banding stay on MAX cosine.
+            fused = [
+                (tid, float(merged.best_cosine.get(tid, 0.0)))
+                for tid in merged.matching_ids
+            ]
             fuse_s = time.perf_counter() - t2
             total_fuse += fuse_s
 

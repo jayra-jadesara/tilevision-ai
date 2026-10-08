@@ -149,7 +149,30 @@ class DINOv2Embedder:
             self._load_model_unlocked()
 
     def _load_model_unlocked(self) -> None:
-        """Load DINOv2; caller must hold ``_model_load_lock``."""
+        """Load DINOv2 if missing; caller must hold ``_model_load_lock``."""
+        if self._model is not None:
+            return
+        self._force_reload_model_unlocked()
+
+    def _force_reload_model_unlocked(
+        self,
+        *,
+        target_device: torch.device | None = None,
+    ) -> None:
+        """
+        Build a fresh DINOv2 and swap it in.
+
+        Caller must hold ``_model_load_lock``. Does **not** null ``_model``
+        before the new module is ready — hang-watchdog reload can race
+        catalogue indexing, and ``self._model = None`` caused
+        ``'NoneType' object is not callable`` (Release Validation macos-15).
+
+        When ``target_device`` is set (MPS→CPU watchdog), the new module is
+        built on that device and ``self._device`` is published in the same
+        critical section as the model swap — never flip ``_device`` to CPU
+        while weights are still on MPS (empty FAISS: ``input(cpu)`` /
+        ``weight(mps:0)``).
+        """
         logger.info("Loading DINOv2 model...")
 
         from src.ai.model_paths import resolve_dinov2_model_source
@@ -161,30 +184,37 @@ class DINOv2Embedder:
             "offline/local" if local_only else "Hugging Face hub",
         )
 
-        self._processor = AutoImageProcessor.from_pretrained(
+        device = target_device if target_device is not None else self._device
+
+        processor = AutoImageProcessor.from_pretrained(
             model_source,
             local_files_only=local_only,
         )
         # low_cpu_mem_usage=False avoids meta-tensor init where .to(device)
         # can raise "Cannot copy out of meta tensor" when two loads race or
-        # transformers defaults delay weight materialization (CI: MPS
-        # hang-watchdog reload concurrent with indexing).
-        self._model = AutoModel.from_pretrained(
+        # transformers defaults delay weight materialization.
+        model = AutoModel.from_pretrained(
             model_source,
             local_files_only=local_only,
             low_cpu_mem_usage=False,
         )
-        self._model.to(self._device)
-        self._model.eval()
+        model.to(device)
+        model.eval()
 
-        if self._device.type == "cuda":
+        # Atomic publish: model + processor (+ device when relocating).
+        self._processor = processor
+        self._model = model
+        if target_device is not None:
+            self._device = device
+
+        if device.type == "cuda":
             torch.backends.cudnn.benchmark = True
             logger.info(
                 "CUDA GPU: %s (%.1f GB VRAM)",
                 self._runtime.device_name,
                 self._runtime.vram_gb or 0.0,
             )
-        elif self._device.type == "mps":
+        elif device.type == "mps":
             configure_mps_fallback()
             logger.info("Apple GPU (MPS): %s", self._runtime.device_name)
         else:
@@ -286,9 +316,10 @@ class DINOv2Embedder:
           - ``timeout`` — query watchdog fired (silent hang; no exception)
 
         Holds ``_model_load_lock`` for the whole device swap + reload so a
-        concurrent catalogue-index ``load_model()`` cannot interleave with a
-        hang-watchdog reload (Release Validation macos-15: empty FAISS after
-        ``Cannot copy out of meta tensor``).
+        concurrent catalogue-index ``load_model()`` / ``_forward_batch``
+        cannot observe ``_device=cpu`` with weights still on MPS (Release
+        Validation macos-15: empty FAISS after
+        ``input(device='cpu') and weight(device='mps:0')``).
         """
         with self._model_load_lock:
             if self._mps_cpu_fallback_done and self._device.type == "cpu":
@@ -308,7 +339,7 @@ class DINOv2Embedder:
                     "search continues. (%s)",
                     short,
                 )
-            self._device = torch.device("cpu")
+            cpu = torch.device("cpu")
             self._device_preference = "cpu"
             self._runtime = detect_gpu_runtime(preference="cpu")
             from src.utils.platform_info import is_mac_intel
@@ -320,30 +351,41 @@ class DINOv2Embedder:
                     torch.set_num_interop_threads(1)
                 except Exception:
                     pass
-            self._mps_cpu_fallback_done = True
 
             if cause == "timeout":
-                # A hung MPS worker may still own the old module — abandon it
-                # and load a fresh CPU copy so the retry cannot race the stuck
-                # thread. Lock held so indexing cannot start a second load.
-                self._model = None
-                self._load_model_unlocked()
+                # Hung MPS worker may still own the old module. Build a fresh
+                # CPU copy and publish device+model together — never set
+                # ``_device=cpu`` while ``_model`` is still on MPS.
+                self._force_reload_model_unlocked(target_device=cpu)
             elif self._model is not None:
-                self._model.to(self._device)
+                self._model.to(cpu)
                 self._model.eval()
+                self._device = cpu
+            else:
+                self._device = cpu
+                self._load_model_unlocked()
+            self._mps_cpu_fallback_done = True
 
-    def _run_model_forward(self, inputs: dict) -> object:
+    def _run_model_forward(
+        self,
+        inputs: dict,
+        *,
+        model: object | None = None,
+        device: torch.device | None = None,
+    ) -> object:
         """Run DINOv2 forward pass with autocast only when the device supports it."""
-        if self._device.type == "cuda":
+        model = self._model if model is None else model
+        device = self._device if device is None else device
+        if device.type == "cuda":
             with torch.autocast(device_type="cuda"):
-                return self._model(**inputs)
-        if self._device.type == "mps":
+                return model(**inputs)
+        if device.type == "mps":
             if mps_autocast_supported():
                 with torch.autocast(device_type="mps"):
-                    return self._model(**inputs)
+                    return model(**inputs)
             logger.debug("MPS autocast unavailable — running float32 inference on MPS")
-            return self._model(**inputs)
-        return self._model(**inputs)
+            return model(**inputs)
+        return model(**inputs)
 
     def _ensure_index_torch_threads(self, *, views: int, purpose: str) -> int:
         """
@@ -385,14 +427,27 @@ class DINOv2Embedder:
 
     def _forward_batch(self, images: List[Image.Image]) -> np.ndarray:
         """Single DINOv2 forward pass."""
-        inputs = self._processor(images=images, return_tensors="pt")
+        # Snapshot under the load lock so a concurrent MPS→CPU fallback cannot
+        # pair CPU inputs with MPS weights (or vice versa) mid-forward.
+        with self._model_load_lock:
+            processor = self._processor
+            model = self._model
+            device = self._device
+        if processor is None or model is None:
+            self.load_model()
+            with self._model_load_lock:
+                processor = self._processor
+                model = self._model
+                device = self._device
+
+        inputs = processor(images=images, return_tensors="pt")
         inputs = {
-            key: value.to(self._device, non_blocking=True)
+            key: value.to(device, non_blocking=True)
             for key, value in inputs.items()
         }
 
         with torch.inference_mode():
-            outputs = self._run_model_forward(inputs)
+            outputs = self._run_model_forward(inputs, model=model, device=device)
 
         hidden = outputs.last_hidden_state
         if self._pooling == "mean_patch":

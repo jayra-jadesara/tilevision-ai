@@ -62,6 +62,10 @@ class AppSettings:
             "check_for_updates": True,
             "enable_sam2_precise_crop": True,
             "enable_orb_verification": True,
+            # Multi-view FAISS merge: "max" (default) or "rrf" (opt-in).
+            # Env TILEVISION_MULTI_CROP_FUSION overrides at runtime.
+            "multi_crop_fusion": "max",
+            "multi_crop_rrf_k": 60,
             "update_manifest_url": "",
             "skipped_update_version": "",
             "last_update_check_at": "",
@@ -362,6 +366,31 @@ class AppSettings:
     @enable_orb_verification.setter
     def enable_orb_verification(self, value: bool) -> None:
         self._settings["enable_orb_verification"] = bool(value)
+        self.save()
+
+    @property
+    def multi_crop_fusion(self) -> str:
+        """FAISS multi-view merge: ``max`` (default) or ``rrf`` (opt-in)."""
+        raw = str(self._settings.get("multi_crop_fusion", "max")).strip().lower()
+        return "rrf" if raw == "rrf" else "max"
+
+    @multi_crop_fusion.setter
+    def multi_crop_fusion(self, value: str) -> None:
+        raw = str(value or "max").strip().lower()
+        self._settings["multi_crop_fusion"] = "rrf" if raw == "rrf" else "max"
+        self.save()
+
+    @property
+    def multi_crop_rrf_k(self) -> int:
+        """RRF rank constant (Cormack default 60)."""
+        try:
+            return max(1, int(self._settings.get("multi_crop_rrf_k", 60)))
+        except (TypeError, ValueError):
+            return 60
+
+    @multi_crop_rrf_k.setter
+    def multi_crop_rrf_k(self, value: int) -> None:
+        self._settings["multi_crop_rrf_k"] = max(1, int(value))
         self.save()
 
     @property
