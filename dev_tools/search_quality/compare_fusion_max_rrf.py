@@ -25,19 +25,23 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.ai.embedder import DINOv2Embedder
+from src.ai.feature_extractor import FeatureExtractor
 from src.ai.search_quality.fusion import FusionMethod
 from src.ai.search_quality.views import IndexStrategy
 from dev_tools.search_quality.run_bakeoff import (
     BakeoffEngine,
+    customer_slice,
     metrics_to_dict,
 )
 from dev_tools.search_quality.real_customer import (
     CATALOG_SOURCE_REAL,
-    customer_slice,
+    catalog_items_from_records,
     format_query_kind_table,
     load_real_customer_manifest,
     query_kind_breakdown,
-    records_to_catalog_and_queries,
+    records_to_golden_queries,
+    validate_ground_truth_ids,
 )
 
 
@@ -93,8 +97,15 @@ def main() -> int:
 
     args.out.mkdir(parents=True, exist_ok=True)
     records = load_real_customer_manifest(args.real_queries)
-    items, queries, catalog_source = records_to_catalog_and_queries(records)
+    items = catalog_items_from_records(records)
+    if items is None:
+        raise SystemExit(
+            "Manifest has no complete catalog_path coverage — cannot run fusion compare."
+        )
     catalog_by_id = {item.tile_id: item for item in items}
+    validate_ground_truth_ids(records, set(catalog_by_id))
+    queries = records_to_golden_queries(records)
+    catalog_source = CATALOG_SOURCE_REAL
     orb = args.orb_verification == "on"
     k_values = [max(1, int(x)) for x in args.rrf_k.split(",") if x.strip()]
     strategies = [s.strip() for s in args.strategies.split(",") if s.strip()]
@@ -103,7 +114,9 @@ def main() -> int:
         f"Real-customer fusion compare: catalog={len(items)} queries={len(queries)} "
         f"orb={orb} strategies={strategies} rrf_k={k_values}"
     )
-    engine = BakeoffEngine(pooling=args.pooling)
+    emb = DINOv2Embedder(pooling=args.pooling)
+    emb.load_model()
+    engine = BakeoffEngine(FeatureExtractor(embedder=emb))
 
     report: dict = {
         "n_queries": len(queries),
