@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -21,6 +22,8 @@ def _make_embedder(pooling: str) -> embedder_module.DINOv2Embedder:
     embedder._pooling = pooling
     embedder._processor = MagicMock()
     embedder._model = MagicMock()
+    # _forward_batch snapshots device/model under this lock (MPS→CPU race fix).
+    embedder._model_load_lock = threading.RLock()
     return embedder
 
 
