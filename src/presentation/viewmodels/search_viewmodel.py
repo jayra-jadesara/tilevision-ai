@@ -113,6 +113,7 @@ class SearchViewModel(QObject):
         self._on_search_busy_changed = on_search_busy_changed
         self._search_priority_held = False
         self._pending_query_path: Optional[str] = None
+        self._pending_query_origin: Optional[str] = None
         self._filter_refresh_timer = QTimer(self)
         self._filter_refresh_timer.setSingleShot(True)
         self._filter_refresh_timer.timeout.connect(self._emit_filter_options)
@@ -214,6 +215,7 @@ class SearchViewModel(QObject):
                 self.search_error.emit(message)
                 return
             self._pending_query_path = None
+            self._pending_query_origin = None
             self._set_state(SearchState.ERROR)
             self.search_error.emit(message)
             self.status_message.emit(f"Search failed: {message}")
@@ -223,6 +225,7 @@ class SearchViewModel(QObject):
         if self._state == SearchState.SEARCHING:
             # Do not drop the user's second image — run it when the current one finishes.
             self._pending_query_path = str(path)
+            self._pending_query_origin = query_origin
             logger.warning(
                 "[SEARCH] Search already in progress; queued next query: %s",
                 path.name,
@@ -345,10 +348,12 @@ class SearchViewModel(QObject):
 
     def _start_pending_search_if_any(self) -> None:
         pending = self._pending_query_path
+        pending_origin = self._pending_query_origin
         self._pending_query_path = None
+        self._pending_query_origin = None
         if pending and self._state != SearchState.SEARCHING:
             logger.info("[SEARCH] Starting queued query: %s", pending)
-            self.search_by_image(pending)
+            self.search_by_image(pending, query_origin=pending_origin)
 
     @Slot()
     def clear_results(self) -> None:
@@ -356,6 +361,7 @@ class SearchViewModel(QObject):
         self._status_hint_timer.stop()
         self._stall_timer.stop()
         self._pending_query_path = None
+        self._pending_query_origin = None
         self._search_generation += 1
         worker = self._worker
         self._worker = None

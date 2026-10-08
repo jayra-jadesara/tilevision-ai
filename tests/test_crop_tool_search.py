@@ -225,3 +225,51 @@ def test_crop_600_eval_files_are_not_crop_tool_origin(tmp_path):
     fx = FeatureExtractor(embedder=FakeEmbedder())
     _f, emb = fx.extract_for_search(str(eval_like))
     assert len(emb) == 1
+
+
+def test_lighting_gradient_closeup_rejects_floor_band_overcrop(tmp_path):
+    """
+    Full-bleed marble with a top→bottom lighting gradient is often mis-tagged
+    as partial/room; floor_band then keeps ~32%. Guard must restore full frame.
+    """
+    import numpy as np
+
+    from src.ai.preprocess.fast_tile_crop import resolve_auto_tile_crop
+
+    _sheet, crop_path = _make_catalog_sheet(tmp_path)
+    base = Image.open(crop_path).convert("RGB")
+    arr = np.asarray(base).astype(np.float32)
+    height = arr.shape[0]
+    for y in range(height):
+        arr[y] *= 0.50 + 0.50 * (y / max(1, height - 1))
+    gradient = Image.fromarray(arr.astype(np.uint8))
+
+    # Raw isolate still over-crops (documents the failure mode).
+    isolated = isolate_tile_region(gradient)
+    keep = (isolated.image.size[0] * isolated.image.size[1]) / (
+        gradient.size[0] * gradient.size[1]
+    )
+    assert isolated.method == "floor_band"
+    assert keep < 0.50
+
+    resolved = resolve_auto_tile_crop(gradient)
+    assert resolved.method == "already_clean_overcrop_guard"
+    assert resolved.image.size == gradient.size
+
+    path = tmp_path / "xx_gradient.jpg"
+    gradient.save(path, quality=95)
+    out, result = save_auto_tile_crop(path)
+    assert result.method == "already_clean_overcrop_guard"
+    with Image.open(out) as saved:
+        assert saved.size == gradient.size
+
+
+def test_room_photo_still_isolates_after_overcrop_guard(tmp_path):
+    """Wide room installs must keep floor/contour isolation (not full-frame)."""
+    path = tmp_path / "room.jpg"
+    _make_room_like_photo(path)
+    _out, result = save_auto_tile_crop(path)
+    assert result.method != "already_clean"
+    assert result.method != "already_clean_overcrop_guard"
+    src = Image.open(path)
+    assert result.image.size[0] * result.image.size[1] < src.size[0] * src.size[1]

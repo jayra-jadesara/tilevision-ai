@@ -353,6 +353,94 @@ def _already_full_frame_tile(image: Image.Image) -> bool:
     return is_full_frame_tile(analyze_query(image))
 
 
+def _keep_ratio(
+    source: Image.Image,
+    crop: Image.Image | tuple[int, int, int, int],
+) -> float:
+    sw, sh = source.size
+    src_area = max(1, sw * sh)
+    if isinstance(crop, Image.Image):
+        cw, ch = crop.size
+    else:
+        left, top, right, bottom = crop
+        cw, ch = max(0, right - left), max(0, bottom - top)
+    return float(cw * ch) / float(src_area)
+
+
+def _aggressive_isolation_on_tile_surface(
+    source: Image.Image,
+    result: TileCropResult,
+    *,
+    min_keep: float = 0.50,
+) -> bool:
+    """
+    True when isolation threw away most of a near-square tile surface.
+
+    Lighting gradients / ceiling–floor color delta can mark a full-bleed
+    marble close-up as ``room_scene`` / ``partial_crop``. ``floor_band`` then
+    keeps ~30% of the frame and tanks edge/pattern similarity vs the index
+    panel (client: Auto Crop on xx.jpg → PGYS2319 final 0.467 vs drop 0.923).
+
+    Real room photos typically have wide aspect (wall/floor install) or keep
+    ≥50% after a successful contour/texture hit — those still isolate.
+    """
+    keep = _keep_ratio(source, result.box)
+    if keep >= min_keep:
+        return False
+    if result.method in {"already_clean", "none"}:
+        return False
+
+    from src.ai.search_quality.query_analyzer import QueryKind, analyze_query
+
+    analysis = analyze_query(source)
+    if analysis.kind in {
+        QueryKind.PHONE_SCREENSHOT,
+        QueryKind.CATALOG_SHEET,
+    }:
+        return False
+    if not (0.70 <= analysis.aspect_ratio <= 1.40):
+        return False
+    if analysis.texture_density < 0.12:
+        return False
+    return True
+
+
+def resolve_auto_tile_crop(source: Image.Image) -> TileCropResult:
+    """
+    Choose Auto Crop output for an in-memory RGB source (no I/O).
+
+    Order: full-frame skip → isolate → reject aggressive over-crop on
+    tile-like surfaces (fall back to full frame).
+    """
+    width, height = source.size
+    if _already_full_frame_tile(source):
+        return TileCropResult(
+            image=source,
+            box=(0, 0, width, height),
+            confidence=1.0,
+            method="already_clean",
+        )
+
+    result = isolate_tile_region(source)
+    if _aggressive_isolation_on_tile_surface(source, result):
+        keep = _keep_ratio(source, result.box)
+        logger.info(
+            "Auto crop rejected %s keep=%.1f%% on tile-like surface "
+            "(%dx%d) — using full frame (avoids floor_band over-crop)",
+            result.method,
+            100.0 * keep,
+            width,
+            height,
+        )
+        return TileCropResult(
+            image=source,
+            box=(0, 0, width, height),
+            confidence=max(0.55, float(result.confidence)),
+            method="already_clean_overcrop_guard",
+        )
+    return result
+
+
 def save_auto_tile_crop(image_path: str | Path) -> tuple[Path, TileCropResult]:
     """
     Isolate the tile region and write a JPEG under ``tilevision_crops``.
@@ -367,22 +455,14 @@ def save_auto_tile_crop(image_path: str | Path) -> tuple[Path, TileCropResult]:
     with Image.open(path) as img:
         source = ImageOps.exif_transpose(img.convert("RGB"))
 
-    width, height = source.size
-    if _already_full_frame_tile(source):
-        result = TileCropResult(
-            image=source,
-            box=(0, 0, width, height),
-            confidence=1.0,
-            method="already_clean",
-        )
+    result = resolve_auto_tile_crop(source)
+    if result.method == "already_clean":
         logger.info(
             "Auto crop skipped isolation for full-frame tile %s (%dx%d)",
             path.name,
-            width,
-            height,
+            source.size[0],
+            source.size[1],
         )
-    else:
-        result = isolate_tile_region(source)
     temp_dir = Path(tempfile.gettempdir()) / "tilevision_crops"
     temp_dir.mkdir(parents=True, exist_ok=True)
     out_path = temp_dir / f"autocrop_{path.stem}_{id(result)}.jpg"
