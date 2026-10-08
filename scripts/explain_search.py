@@ -165,13 +165,16 @@ def bootstrap_search(
     catalog: Path,
     *,
     enable_orb: bool = True,
+    multi_crop_fusion: str = "max",
+    multi_crop_rrf_k: int = 60,
 ) -> SearchTilesUseCase:
     database_path, index_path, thumbnail_dir = resolve_catalog_paths(catalog)
     print(
         f"[explain_search] catalog paths:\n"
         f"  database={database_path}\n"
         f"  index={index_path}\n"
-        f"  thumbnails={thumbnail_dir}",
+        f"  thumbnails={thumbnail_dir}\n"
+        f"  multi_crop_fusion={multi_crop_fusion} rrf_k={multi_crop_rrf_k}",
         flush=True,
     )
     db_context = DatabaseContext(db_path=database_path)
@@ -186,6 +189,8 @@ def bootstrap_search(
         vector_index=vector_index,
         thumbnail_dir=thumbnail_dir,
         enable_orb_verification=enable_orb,
+        multi_crop_fusion=multi_crop_fusion,
+        multi_crop_rrf_k=multi_crop_rrf_k,
     )
 
 
@@ -681,6 +686,21 @@ def main(argv: list[str] | None = None) -> int:
         help="Disable ORB near-tie verification",
     )
     parser.add_argument(
+        "--multi-crop-fusion",
+        choices=("max", "rrf"),
+        default="max",
+        help=(
+            "FAISS multi-view merge (default max). Use rrf to A/B vs production. "
+            "Env TILEVISION_MULTI_CROP_FUSION also overrides."
+        ),
+    )
+    parser.add_argument(
+        "--rrf-k",
+        type=int,
+        default=60,
+        help="RRF constant when --multi-crop-fusion=rrf (default 60)",
+    )
+    parser.add_argument(
         "--parity-out",
         type=Path,
         default=None,
@@ -703,7 +723,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         use_case: SearchTilesUseCase | None = None
         if args.query is not None or args.find_tile is not None:
-            use_case = bootstrap_search(catalog, enable_orb=not args.no_orb)
+            use_case = bootstrap_search(
+                catalog,
+                enable_orb=not args.no_orb,
+                multi_crop_fusion=args.multi_crop_fusion,
+                multi_crop_rrf_k=args.rrf_k,
+            )
 
         if args.show_index_crop is not None:
             crop_path = Path(args.show_index_crop)
