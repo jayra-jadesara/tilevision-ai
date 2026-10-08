@@ -152,15 +152,25 @@ jobs:
               --orb-verification on
           fi
           test -f "$OUT/platform_bakeoff_report.json"
-          echo "=== platform_bakeoff_report.json (${{ matrix.os }}) ==="
-          "${RUN_PYTHON:-python}" -m json.tool "$OUT/platform_bakeoff_report.json" | head -80
+          echo "=== platform_bakeoff_report.json (${{ matrix.os }}) summary ==="
+          # Avoid `json.tool | head` under pipefail (exit 32 after a good bakeoff).
+          OUT="$OUT" "${RUN_PYTHON:-python}" - <<'PY'
+          import json, pathlib, os
+          p = pathlib.Path(os.environ["OUT"]) / "platform_bakeoff_report.json"
+          d = json.loads(p.read_text(encoding="utf-8"))
+          print("platform", d.get("platform"))
+          print("recall@1", d.get("recall@1"), "recall@5", d.get("recall@5"))
+          print("kinds", sorted((d.get("by_query_kind") or {})))
+          print("runtime", d.get("runtime"))
+          PY
 
       - name: Upload platform bakeoff artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: platform-bakeoff-${{ matrix.os }}
           path: parity_out/${{ matrix.os }}/platform_bakeoff_report.json
-          if-no-files-found: error
+          if-no-files-found: warn
 
   compare:
     name: Compare platform parity

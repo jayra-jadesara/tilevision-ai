@@ -55,6 +55,29 @@ from dev_tools.search_quality.real_customer import (
 )
 
 
+def _configure_faiss_omp_for_ci() -> None:
+    """
+    Cap FAISS OpenMP to 1 thread for CI bakeoffs.
+
+    ``FaissIndexManager.load_index`` raises FAISS omp to min(8, cpu_count) on
+    non-Intel Macs; that races torch MPS / OpenMP on hosted macos-15 and
+    segfaults inside ``faiss.search`` (OMP Error #179). Pytest conftest already
+    forces 1; this harness must too. Measurement-only — does not change
+    production search code.
+    """
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+    os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1")
+    os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+    os.environ.setdefault("OMP_WAIT_POLICY", "PASSIVE")
+    try:
+        import faiss
+
+        faiss.omp_set_num_threads(1)
+    except Exception as exc:
+        print(f"FAISS omp cap skipped: {exc}", file=sys.stderr)
+
+
 def _runtime_meta() -> dict:
     import torch
 
@@ -113,6 +136,8 @@ def build_report(
         f"orb={'on' if orb_verification else 'off'}"
     )
 
+    _configure_faiss_omp_for_ci()
+
     emb = DINOv2Embedder(pooling=pooling)
     emb.load_model()
     engine = BakeoffEngine(FeatureExtractor(embedder=emb))
@@ -120,6 +145,8 @@ def build_report(
     mgr, index_s, meta = engine.index_strategy(
         items, strategy, out_dir / f"idx_{strategy.value}.index"
     )
+    # Re-assert after load_index (which may raise omp threads on Apple Silicon).
+    _configure_faiss_omp_for_ci()
     print(
         f"  index_s={index_s:.1f} vectors={meta.vectors} "
         f"mean_views={meta.mean_views:.2f}"
