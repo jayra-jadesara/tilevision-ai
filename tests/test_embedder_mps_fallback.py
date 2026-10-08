@@ -195,10 +195,12 @@ def test_extract_batch_query_hang_watchdog_falls_back_to_cpu(monkeypatch):
         calls["cpu"] += 1
         return cpu_result
 
-    def _force_reload_model_unlocked():
+    def _force_reload_model_unlocked(*, target_device=None):
         load_calls["n"] += 1
         embedder._model = MagicMock()
         embedder._processor = MagicMock()
+        if target_device is not None:
+            embedder._device = target_device
 
     monkeypatch.setenv(embedder_module._MPS_QUERY_TIMEOUT_ENV, "0.2")
     monkeypatch.setattr(embedder, "_forward_batch", _forward)
@@ -254,7 +256,7 @@ def test_timeout_fallback_serializes_concurrent_load_model(monkeypatch):
     loads = {"n": 0, "concurrent": 0}
     in_flight = {"n": 0}
 
-    def _slow_force_reload():
+    def _slow_force_reload(*, target_device=None):
         loads["n"] += 1
         in_flight["n"] += 1
         if in_flight["n"] > 1:
@@ -264,6 +266,8 @@ def test_timeout_fallback_serializes_concurrent_load_model(monkeypatch):
         in_flight["n"] -= 1
         embedder._model = MagicMock()
         embedder._processor = MagicMock()
+        if target_device is not None:
+            embedder._device = target_device
 
     monkeypatch.setattr(embedder, "_force_reload_model_unlocked", _slow_force_reload)
     monkeypatch.setattr(
@@ -309,7 +313,7 @@ def test_timeout_fallback_never_nulls_model_during_reload(monkeypatch):
     release = threading.Event()
     saw_none = {"v": False}
 
-    def _slow_force_reload():
+    def _slow_force_reload(*, target_device=None):
         started.set()
         for _ in range(20):
             if embedder._model is None:
@@ -318,6 +322,8 @@ def test_timeout_fallback_never_nulls_model_during_reload(monkeypatch):
                 break
         embedder._model = MagicMock(name="new_cpu_model")
         embedder._processor = MagicMock()
+        if target_device is not None:
+            embedder._device = target_device
 
     monkeypatch.setattr(embedder, "_force_reload_model_unlocked", _slow_force_reload)
     monkeypatch.setattr(
@@ -356,6 +362,78 @@ def test_timeout_fallback_never_nulls_model_during_reload(monkeypatch):
     assert saw_none["v"] is False
     assert embedder._device.type == "cpu"
     assert embedder._model is not None
+    assert embedder._model is not old
+
+
+def test_timeout_fallback_keeps_mps_device_until_cpu_model_ready(monkeypatch):
+    """
+    Catalogue indexing must never see ``_device=cpu`` with MPS weights still
+    installed (Release Validation macos-15: empty FAISS after
+    ``input(cpu) / weight(mps:0)``).
+    """
+    embedder = _make_embedder(device="mps")
+    old = MagicMock(name="old_mps_model")
+    embedder._model = old
+    started = threading.Event()
+    release = threading.Event()
+    mismatched = {"v": False}
+
+    def _slow_force_reload(*, target_device=None):
+        started.set()
+        # Hold the load lock (caller holds it) while device must stay MPS.
+        for _ in range(30):
+            if (
+                embedder._device.type == "cpu"
+                and getattr(embedder._model, "_mock_name", "") == "old_mps_model"
+            ):
+                mismatched["v"] = True
+            if release.wait(timeout=0.01):
+                break
+        embedder._model = MagicMock(name="new_cpu_model")
+        embedder._processor = MagicMock()
+        if target_device is not None:
+            embedder._device = target_device
+
+    monkeypatch.setattr(embedder, "_force_reload_model_unlocked", _slow_force_reload)
+    monkeypatch.setattr(
+        embedder_module,
+        "detect_gpu_runtime",
+        lambda preference="auto": SimpleNamespace(
+            active_device="cpu",
+            device_name="",
+            summary_for_log=lambda: "cpu",
+        ),
+    )
+
+    def _index_snapshot():
+        started.wait(timeout=5.0)
+        for _ in range(40):
+            with embedder._model_load_lock:
+                device = embedder._device
+                model = embedder._model
+            # Consistent pairs only: mps+old or cpu+new — never cpu+old.
+            if device.type == "cpu" and model is old:
+                mismatched["v"] = True
+                break
+            threading.Event().wait(0.005)
+
+    touch = threading.Thread(target=_index_snapshot, name="index-snapshot")
+    touch.start()
+    fallbacker = threading.Thread(
+        target=lambda: embedder._fallback_mps_to_cpu("test timeout", cause="timeout"),
+        name="fallback",
+    )
+    fallbacker.start()
+    assert started.wait(timeout=5.0)
+    threading.Event().wait(0.05)
+    # Device must still be MPS while reload is in progress (lock held by fallback).
+    assert embedder._device.type == "mps"
+    release.set()
+    fallbacker.join(timeout=5.0)
+    touch.join(timeout=5.0)
+
+    assert mismatched["v"] is False
+    assert embedder._device.type == "cpu"
     assert embedder._model is not old
 
 
