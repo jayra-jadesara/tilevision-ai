@@ -138,7 +138,12 @@ def save_precise_tile_crop(image_path: str | Path) -> tuple[Path, PreciseCropRes
     with Image.open(path) as img:
         source = ImageOps.exif_transpose(img.convert("RGB"))
 
-    from src.ai.preprocess.fast_tile_crop import _already_full_frame_tile, _persist_last_crop
+    from src.ai.preprocess.fast_tile_crop import (
+        TileCropResult,
+        _already_full_frame_tile,
+        _aggressive_isolation_on_tile_surface,
+        _persist_last_crop,
+    )
 
     width, height = source.size
     if _already_full_frame_tile(source):
@@ -157,6 +162,28 @@ def save_precise_tile_crop(image_path: str | Path) -> tuple[Path, PreciseCropRes
         )
     else:
         result = precise_isolate_tile(source)
+        # Same over-crop guard as Auto Crop: SAM2/GrabCut can also carve a
+        # lighting-gradient close-up down to a tight patch that mismatches
+        # the index panel framing.
+        probe = TileCropResult(
+            image=result.image,
+            box=result.box,
+            confidence=result.confidence,
+            method=result.method,
+        )
+        if _aggressive_isolation_on_tile_surface(source, probe):
+            logger.info(
+                "Precise crop rejected %s on tile-like surface %s — using full frame",
+                result.method,
+                path.name,
+            )
+            result = PreciseCropResult(
+                image=source,
+                box=(0, 0, width, height),
+                confidence=max(0.55, float(result.confidence)),
+                method="already_clean_overcrop_guard",
+                detail=f"rejected {probe.method} over-crop on tile-like surface",
+            )
     temp_dir = Path(tempfile.gettempdir()) / "tilevision_crops"
     temp_dir.mkdir(parents=True, exist_ok=True)
     out_path = temp_dir / f"precise_{path.stem}_{id(result)}.jpg"
