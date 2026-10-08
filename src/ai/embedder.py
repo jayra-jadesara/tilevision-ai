@@ -21,6 +21,7 @@ from __future__ import annotations
 import concurrent.futures
 import logging
 import os
+import threading
 from typing import List, Tuple
 
 import numpy as np
@@ -123,6 +124,9 @@ class DINOv2Embedder:
         self._model = None
         self._mps_cpu_fallback_done = False
         self._query_path_warmed = False
+        # Serializes load / MPS→CPU reload so background query-warmup cannot
+        # race catalogue indexing (meta-tensor crash after hang-watchdog).
+        self._model_load_lock = threading.RLock()
 
         logger.info(self._runtime.summary_for_log())
         logger.info(
@@ -139,9 +143,13 @@ class DINOv2Embedder:
         return self._runtime
 
     def load_model(self) -> None:
-        if self._model is not None:
-            return
+        with self._model_load_lock:
+            if self._model is not None:
+                return
+            self._load_model_unlocked()
 
+    def _load_model_unlocked(self) -> None:
+        """Load DINOv2; caller must hold ``_model_load_lock``."""
         logger.info("Loading DINOv2 model...")
 
         from src.ai.model_paths import resolve_dinov2_model_source
@@ -157,9 +165,14 @@ class DINOv2Embedder:
             model_source,
             local_files_only=local_only,
         )
+        # low_cpu_mem_usage=False avoids meta-tensor init where .to(device)
+        # can raise "Cannot copy out of meta tensor" when two loads race or
+        # transformers defaults delay weight materialization (CI: MPS
+        # hang-watchdog reload concurrent with indexing).
         self._model = AutoModel.from_pretrained(
             model_source,
             local_files_only=local_only,
+            low_cpu_mem_usage=False,
         )
         self._model.to(self._device)
         self._model.eval()
@@ -271,44 +284,53 @@ class DINOv2Embedder:
         ``cause`` distinguishes log wording:
           - ``unsupported_op`` — Metal raised (reactive path)
           - ``timeout`` — query watchdog fired (silent hang; no exception)
+
+        Holds ``_model_load_lock`` for the whole device swap + reload so a
+        concurrent catalogue-index ``load_model()`` cannot interleave with a
+        hang-watchdog reload (Release Validation macos-15: empty FAISS after
+        ``Cannot copy out of meta tensor``).
         """
-        if self._mps_cpu_fallback_done and self._device.type == "cpu":
-            return
-        short = reason.splitlines()[0][:160]
-        if cause == "timeout":
-            logger.warning(
-                "MPS query forward timed out — switching DINOv2 to CPU so search "
-                "continues (hang watchdog). (%s)",
-                short,
-            )
-        else:
-            logger.warning(
-                "MPS operator unavailable — switching DINOv2 to CPU so search "
-                "continues. (%s)",
-                short,
-            )
-        self._device = torch.device("cpu")
-        self._device_preference = "cpu"
-        self._runtime = detect_gpu_runtime(preference="cpu")
-        from src.utils.platform_info import is_mac_intel
+        with self._model_load_lock:
+            if self._mps_cpu_fallback_done and self._device.type == "cpu":
+                if self._model is None:
+                    self._load_model_unlocked()
+                return
+            short = reason.splitlines()[0][:160]
+            if cause == "timeout":
+                logger.warning(
+                    "MPS query forward timed out — switching DINOv2 to CPU so "
+                    "search continues (hang watchdog). (%s)",
+                    short,
+                )
+            else:
+                logger.warning(
+                    "MPS operator unavailable — switching DINOv2 to CPU so "
+                    "search continues. (%s)",
+                    short,
+                )
+            self._device = torch.device("cpu")
+            self._device_preference = "cpu"
+            self._runtime = detect_gpu_runtime(preference="cpu")
+            from src.utils.platform_info import is_mac_intel
 
-        thread_count = 1 if is_mac_intel() else min(8, os.cpu_count() or 4)
-        torch.set_num_threads(thread_count)
-        if is_mac_intel():
-            try:
-                torch.set_num_interop_threads(1)
-            except Exception:
-                pass
-        self._mps_cpu_fallback_done = True
+            thread_count = 1 if is_mac_intel() else min(8, os.cpu_count() or 4)
+            torch.set_num_threads(thread_count)
+            if is_mac_intel():
+                try:
+                    torch.set_num_interop_threads(1)
+                except Exception:
+                    pass
+            self._mps_cpu_fallback_done = True
 
-        if cause == "timeout":
-            # A hung MPS worker may still own the old module — abandon it and
-            # load a fresh CPU copy so the retry cannot race the stuck thread.
-            self._model = None
-            self.load_model()
-        elif self._model is not None:
-            self._model.to(self._device)
-            self._model.eval()
+            if cause == "timeout":
+                # A hung MPS worker may still own the old module — abandon it
+                # and load a fresh CPU copy so the retry cannot race the stuck
+                # thread. Lock held so indexing cannot start a second load.
+                self._model = None
+                self._load_model_unlocked()
+            elif self._model is not None:
+                self._model.to(self._device)
+                self._model.eval()
 
     def _run_model_forward(self, inputs: dict) -> object:
         """Run DINOv2 forward pass with autocast only when the device supports it."""
