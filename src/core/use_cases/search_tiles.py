@@ -8,6 +8,7 @@ matching items with SQLite database metadata and cached thumbnail paths.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
@@ -116,6 +117,8 @@ class SearchTilesUseCase:
         thumbnail_dir: str,
         *,
         enable_orb_verification: bool = True,
+        multi_crop_fusion: str = "max",
+        multi_crop_rrf_k: int | None = None,
     ) -> None:
         """
         Initialize the search use case.
@@ -127,12 +130,20 @@ class SearchTilesUseCase:
             thumbnail_dir: Folder path where thumbnails are cached.
             enable_orb_verification: When True, apply ORB geometric
                 verification to near-tie hybrid scores (query-time only).
+            multi_crop_fusion: FAISS multi-view merge — ``max`` (default) or
+                ``rrf``. Env ``TILEVISION_MULTI_CROP_FUSION`` overrides.
+            multi_crop_rrf_k: RRF constant (default 60). Env
+                ``TILEVISION_MULTI_CROP_RRF_K`` overrides when set.
         """
         self._repo = image_repository
         self._feature_extractor = feature_extractor
         self._index = vector_index
         self._thumbnail_dir = Path(thumbnail_dir)
         self._enable_orb_verification = bool(enable_orb_verification)
+        self._multi_crop_fusion_configured = str(multi_crop_fusion or "max")
+        self._multi_crop_rrf_k_configured = (
+            None if multi_crop_rrf_k is None else int(multi_crop_rrf_k)
+        )
 
         self._reranker = HybridReRanker()
         self._orb_verifier = None
@@ -175,32 +186,45 @@ class SearchTilesUseCase:
         search_k: int,
     ) -> tuple[List[int], dict[int, float], dict[int, int]]:
         """
-        Run FAISS for each query crop and merge by best similarity per tile id.
+        Run FAISS for each query crop and merge across views.
 
-        Returns ordered unique ids, the best FAISS Inner-Product (cosine)
-        per id, and the query-view index that produced each best score.
+        Default merge is MAX cosine (historical production). When
+        ``multi_crop_fusion=rrf`` (or env override), order candidates with
+        Reciprocal Rank Fusion across views while still returning MAX cosine
+        per tile for aux-boost / logging. Search-time only — does not change
+        indexed vectors or ``CURRENT_FEATURE_VERSION``.
         """
         if not embeddings:
             return [], {}, {}
 
-        best_score: dict[int, float] = {}
-        best_view: dict[int, int] = {}
-        for view_idx, emb in enumerate(embeddings):
-            ids, scores = self._index.search_vectors(emb, search_k)
-            for tile_id, score in zip(ids, scores):
-                prev = best_score.get(tile_id)
-                if prev is None or float(score) > prev:
-                    best_score[tile_id] = float(score)
-                    best_view[tile_id] = view_idx
-
-        ordered = sorted(best_score.items(), key=lambda item: item[1], reverse=True)
-        matching_ids = [tile_id for tile_id, _score in ordered]
-        logger.info(
-            "Multi-crop FAISS merge: crops=%d unique_ids=%d",
-            len(embeddings),
-            len(matching_ids),
+        from src.ai.search_quality.fusion import (
+            DEFAULT_RRF_K,
+            merge_multi_view_faiss,
+            resolve_multi_crop_fusion,
         )
-        return matching_ids, best_score, best_view
+
+        method, rrf_k = resolve_multi_crop_fusion(self._multi_crop_fusion_configured)
+        if self._multi_crop_rrf_k_configured is not None and not os.environ.get(
+            "TILEVISION_MULTI_CROP_RRF_K", ""
+        ).strip():
+            rrf_k = max(1, int(self._multi_crop_rrf_k_configured))
+        elif method.value != "rrf":
+            rrf_k = DEFAULT_RRF_K
+
+        per_view: list[tuple[list[int], list[float]]] = []
+        for emb in embeddings:
+            ids, scores = self._index.search_vectors(emb, search_k)
+            per_view.append((list(ids), list(scores)))
+
+        merged = merge_multi_view_faiss(per_view, method, rrf_k=rrf_k)
+        logger.info(
+            "Multi-crop FAISS merge: method=%s rrf_k=%d crops=%d unique_ids=%d",
+            merged.method.value,
+            merged.rrf_k,
+            len(embeddings),
+            len(merged.matching_ids),
+        )
+        return merged.matching_ids, merged.best_cosine, merged.best_view
 
     def get_index_health(self):
         """Return feature-version compatibility status for the indexed catalog."""

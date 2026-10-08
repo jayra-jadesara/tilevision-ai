@@ -282,6 +282,8 @@ def build_application() -> int:
         vector_index=vector_index,
         thumbnail_dir=settings.thumbnail_dir,
         enable_orb_verification=settings.enable_orb_verification,
+        multi_crop_fusion=settings.multi_crop_fusion,
+        multi_crop_rrf_k=settings.multi_crop_rrf_k,
     )
     find_duplicates_use_case = FindDuplicatesUseCase(image_repository=image_repository, vector_index=vector_index)
 
