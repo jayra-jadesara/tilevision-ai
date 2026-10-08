@@ -195,14 +195,16 @@ def test_extract_batch_query_hang_watchdog_falls_back_to_cpu(monkeypatch):
         calls["cpu"] += 1
         return cpu_result
 
-    def _load_model_unlocked():
+    def _force_reload_model_unlocked():
         load_calls["n"] += 1
         embedder._model = MagicMock()
         embedder._processor = MagicMock()
 
     monkeypatch.setenv(embedder_module._MPS_QUERY_TIMEOUT_ENV, "0.2")
     monkeypatch.setattr(embedder, "_forward_batch", _forward)
-    monkeypatch.setattr(embedder, "_load_model_unlocked", _load_model_unlocked)
+    monkeypatch.setattr(
+        embedder, "_force_reload_model_unlocked", _force_reload_model_unlocked
+    )
     monkeypatch.setattr(
         embedder_module,
         "detect_gpu_runtime",
@@ -241,7 +243,7 @@ def test_mps_query_timeout_env_override(monkeypatch):
 
 def test_timeout_fallback_serializes_concurrent_load_model(monkeypatch):
     """
-    Hang-watchdog reload must not interleave with a concurrent load_model
+    Hang-watchdog reload must not interleave with a concurrent force-reload
     (indexing vs warmup) — that race produced meta-tensor empty FAISS on
     Release Validation macos-15.
     """
@@ -252,7 +254,7 @@ def test_timeout_fallback_serializes_concurrent_load_model(monkeypatch):
     loads = {"n": 0, "concurrent": 0}
     in_flight = {"n": 0}
 
-    def _slow_load_unlocked():
+    def _slow_force_reload():
         loads["n"] += 1
         in_flight["n"] += 1
         if in_flight["n"] > 1:
@@ -263,7 +265,7 @@ def test_timeout_fallback_serializes_concurrent_load_model(monkeypatch):
         embedder._model = MagicMock()
         embedder._processor = MagicMock()
 
-    monkeypatch.setattr(embedder, "_load_model_unlocked", _slow_load_unlocked)
+    monkeypatch.setattr(embedder, "_force_reload_model_unlocked", _slow_force_reload)
     monkeypatch.setattr(
         embedder_module,
         "detect_gpu_runtime",
@@ -274,20 +276,19 @@ def test_timeout_fallback_serializes_concurrent_load_model(monkeypatch):
         ),
     )
 
-    def _index_load():
+    def _second_force_reload():
         started.wait(timeout=5.0)
-        embedder.load_model()
+        with embedder._model_load_lock:
+            embedder._force_reload_model_unlocked()
 
-    indexer = threading.Thread(target=_index_load, name="index-load")
+    indexer = threading.Thread(target=_second_force_reload, name="index-reload")
     indexer.start()
-    # Warmup hang-watchdog path: abandon MPS module and reload on CPU.
     fallbacker = threading.Thread(
         target=lambda: embedder._fallback_mps_to_cpu("test timeout", cause="timeout"),
         name="fallback",
     )
     fallbacker.start()
     assert started.wait(timeout=5.0)
-    # Give the indexer a chance to pile in while reload is in progress.
     threading.Event().wait(0.05)
     release_load.set()
     fallbacker.join(timeout=5.0)
@@ -297,6 +298,65 @@ def test_timeout_fallback_serializes_concurrent_load_model(monkeypatch):
     assert loads["n"] >= 1
     assert embedder._device.type == "cpu"
     assert embedder._model is not None
+
+
+def test_timeout_fallback_never_nulls_model_during_reload(monkeypatch):
+    """In-flight indexing must not observe ``_model is None`` during watchdog reload."""
+    embedder = _make_embedder(device="mps")
+    old = MagicMock(name="old_mps_model")
+    embedder._model = old
+    started = threading.Event()
+    release = threading.Event()
+    saw_none = {"v": False}
+
+    def _slow_force_reload():
+        started.set()
+        for _ in range(20):
+            if embedder._model is None:
+                saw_none["v"] = True
+            if release.wait(timeout=0.01):
+                break
+        embedder._model = MagicMock(name="new_cpu_model")
+        embedder._processor = MagicMock()
+
+    monkeypatch.setattr(embedder, "_force_reload_model_unlocked", _slow_force_reload)
+    monkeypatch.setattr(
+        embedder_module,
+        "detect_gpu_runtime",
+        lambda preference="auto": SimpleNamespace(
+            active_device="cpu",
+            device_name="",
+            summary_for_log=lambda: "cpu",
+        ),
+    )
+
+    def _index_touch():
+        started.wait(timeout=5.0)
+        for _ in range(50):
+            model = embedder._model
+            if model is None:
+                saw_none["v"] = True
+                break
+            model()  # must remain callable
+            threading.Event().wait(0.005)
+
+    touch = threading.Thread(target=_index_touch, name="index-touch")
+    touch.start()
+    fallbacker = threading.Thread(
+        target=lambda: embedder._fallback_mps_to_cpu("test timeout", cause="timeout"),
+        name="fallback",
+    )
+    fallbacker.start()
+    assert started.wait(timeout=5.0)
+    threading.Event().wait(0.05)
+    release.set()
+    fallbacker.join(timeout=5.0)
+    touch.join(timeout=5.0)
+
+    assert saw_none["v"] is False
+    assert embedder._device.type == "cpu"
+    assert embedder._model is not None
+    assert embedder._model is not old
 
 
 class _NullCtx:

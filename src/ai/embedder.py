@@ -149,7 +149,20 @@ class DINOv2Embedder:
             self._load_model_unlocked()
 
     def _load_model_unlocked(self) -> None:
-        """Load DINOv2; caller must hold ``_model_load_lock``."""
+        """Load DINOv2 if missing; caller must hold ``_model_load_lock``."""
+        if self._model is not None:
+            return
+        self._force_reload_model_unlocked()
+
+    def _force_reload_model_unlocked(self) -> None:
+        """
+        Build a fresh DINOv2 on ``self._device`` and swap it in.
+
+        Caller must hold ``_model_load_lock``. Does **not** null ``_model``
+        before the new module is ready — hang-watchdog reload can race
+        catalogue indexing, and ``self._model = None`` caused
+        ``'NoneType' object is not callable`` (Release Validation macos-15).
+        """
         logger.info("Loading DINOv2 model...")
 
         from src.ai.model_paths import resolve_dinov2_model_source
@@ -161,21 +174,24 @@ class DINOv2Embedder:
             "offline/local" if local_only else "Hugging Face hub",
         )
 
-        self._processor = AutoImageProcessor.from_pretrained(
+        processor = AutoImageProcessor.from_pretrained(
             model_source,
             local_files_only=local_only,
         )
         # low_cpu_mem_usage=False avoids meta-tensor init where .to(device)
         # can raise "Cannot copy out of meta tensor" when two loads race or
-        # transformers defaults delay weight materialization (CI: MPS
-        # hang-watchdog reload concurrent with indexing).
-        self._model = AutoModel.from_pretrained(
+        # transformers defaults delay weight materialization.
+        model = AutoModel.from_pretrained(
             model_source,
             local_files_only=local_only,
             low_cpu_mem_usage=False,
         )
-        self._model.to(self._device)
-        self._model.eval()
+        model.to(self._device)
+        model.eval()
+
+        # Swap pointers last so in-flight forwards never see None.
+        self._processor = processor
+        self._model = model
 
         if self._device.type == "cuda":
             torch.backends.cudnn.benchmark = True
@@ -323,11 +339,10 @@ class DINOv2Embedder:
             self._mps_cpu_fallback_done = True
 
             if cause == "timeout":
-                # A hung MPS worker may still own the old module — abandon it
-                # and load a fresh CPU copy so the retry cannot race the stuck
-                # thread. Lock held so indexing cannot start a second load.
-                self._model = None
-                self._load_model_unlocked()
+                # Hung MPS worker may still own the old module. Build a fresh
+                # CPU copy and swap pointers — never assign None first (that
+                # raced catalogue indexing: 'NoneType' object is not callable).
+                self._force_reload_model_unlocked()
             elif self._model is not None:
                 self._model.to(self._device)
                 self._model.eval()
