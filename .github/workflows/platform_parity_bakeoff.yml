@@ -214,9 +214,12 @@ jobs:
             exit 1
           fi
           set +e
+          # Gate the three shipping customer stacks; ubuntu remains an extra
+          # data point (torch build differs) and is reported but not gated.
           python dev_tools/search_quality/compare_platform_parity.py \
             --reports "${REPORTS[@]}" \
             --baseline macos-15-intel \
+            --gate-platforms macos-15-intel,macos-15,windows-latest \
             --tolerance 0.02 \
             --out parity_compare | tee parity_compare/console.txt
           code=$?

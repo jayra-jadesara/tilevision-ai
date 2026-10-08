@@ -102,6 +102,52 @@ def test_compare_fail_when_kind_diverges():
     assert "Verdict: FAIL" in table
 
 
+def test_ungated_platform_divergence_is_informational_only():
+    """ubuntu may diverge; shipping stacks (Mac/Windows) still PASS the gate."""
+    reports = [
+        _report(
+            "macos-15-intel",
+            0.90,
+            {"phone_photo": 0.80, "original": 0.90},
+        ),
+        _report(
+            "macos-15",
+            0.90,
+            {"phone_photo": 0.80, "original": 0.90},
+        ),
+        _report(
+            "windows-latest",
+            0.90,
+            {"phone_photo": 0.80, "original": 0.90},
+        ),
+        _report(
+            "ubuntu-latest",
+            0.91,
+            {"phone_photo": 0.90, "original": 0.90},  # +0.10 vs baseline
+        ),
+    ]
+    result = compare_reports(
+        reports,
+        baseline_label="macos-15-intel",
+        tolerance=0.02,
+        gate_platforms={
+            "macos-15-intel",
+            "macos-15",
+            "windows-latest",
+        },
+    )
+    assert result["verdict"] == "PASS"
+    assert result["violations"] == []
+    assert len(result["informational_flags"]) >= 1
+    assert any(
+        f["platform"] == "ubuntu-latest" and f["query_kind"] == "phone_photo"
+        for f in result["informational_flags"]
+    )
+    table = format_table(result)
+    assert "Informational" in table
+    assert "Verdict: PASS" in table
+
+
 def test_compare_requires_baseline(tmp_path: Path):
     reports = [_report("ubuntu-latest", 0.9, {"original": 0.9})]
     with pytest.raises(SystemExit, match="Baseline platform"):

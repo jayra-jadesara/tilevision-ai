@@ -63,6 +63,7 @@ def compare_reports(
     *,
     baseline_label: str,
     tolerance: float = DEFAULT_TOLERANCE,
+    gate_platforms: set[str] | None = None,
 ) -> dict:
     by_platform = {r["platform"]: r for r in reports}
     if baseline_label not in by_platform:
@@ -74,6 +75,17 @@ def compare_reports(
     platforms = [baseline_label] + sorted(
         p for p in by_platform if p != baseline_label
     )
+    # Platforms whose divergence fails the CI gate. Others are still printed
+    # (e.g. ubuntu-latest as an extra data point) but do not fail the job.
+    if gate_platforms is None:
+        gate_platforms = set(platforms)
+    else:
+        gate_platforms = set(gate_platforms) | {baseline_label}
+        missing = gate_platforms - set(by_platform)
+        if missing:
+            raise SystemExit(
+                f"gate platforms missing from reports: {sorted(missing)}"
+            )
 
     kinds = sorted(
         {
@@ -84,6 +96,7 @@ def compare_reports(
     )
     rows: list[dict] = []
     violations: list[dict] = []
+    informational: list[dict] = []
 
     def _row(kind: str | None, label: str) -> dict:
         cells = {}
@@ -102,19 +115,22 @@ def compare_reports(
                 "d_r1_vs_baseline": d_r1,
                 "d_r5_vs_baseline": d_r5,
                 "flagged": flagged,
+                "gates_ci": plat in gate_platforms,
             }
             if flagged and plat != baseline_label:
-                violations.append(
-                    {
-                        "query_kind": label,
-                        "platform": plat,
-                        "baseline": baseline_label,
-                        "r1": r1,
-                        "baseline_r1": base_r1,
-                        "d_r1": d_r1,
-                        "tolerance": tolerance,
-                    }
-                )
+                entry = {
+                    "query_kind": label,
+                    "platform": plat,
+                    "baseline": baseline_label,
+                    "r1": r1,
+                    "baseline_r1": base_r1,
+                    "d_r1": d_r1,
+                    "tolerance": tolerance,
+                }
+                if plat in gate_platforms:
+                    violations.append(entry)
+                else:
+                    informational.append(entry)
         return {
             "query_kind": label,
             "n": _n(baseline, kind),
@@ -130,8 +146,10 @@ def compare_reports(
         "baseline": baseline_label,
         "tolerance_r1": tolerance,
         "platforms": platforms,
+        "gate_platforms": sorted(gate_platforms),
         "rows": rows,
         "violations": violations,
+        "informational_flags": informational,
         "verdict": verdict,
         "runtime_by_platform": {
             p: by_platform[p].get("runtime") or {} for p in platforms
@@ -178,13 +196,17 @@ def format_table(result: dict) -> str:
                 )
         lines.append(" ".join(parts))
 
+    gate = result.get("gate_platforms") or result["platforms"]
     lines.append("")
     lines.append(
+        f"CI gate platforms: {', '.join(gate)}"
+    )
+    lines.append(
         f"Verdict: {result['verdict']} "
-        f"({len(result['violations'])} R@1 cell(s) beyond ±{tol:.0%})"
+        f"({len(result['violations'])} gated R@1 cell(s) beyond ±{tol:.0%})"
     )
     if result["violations"]:
-        lines.append("Violations:")
+        lines.append("Violations (fail CI):")
         for v in result["violations"]:
             lines.append(
                 f"  - {v['query_kind']} @ {v['platform']}: "
@@ -193,9 +215,18 @@ def format_table(result: dict) -> str:
             )
     else:
         lines.append(
-            "All platforms match the baseline within tolerance on every "
+            "All gated platforms match the baseline within tolerance on every "
             "query_kind and overall."
         )
+    info = result.get("informational_flags") or []
+    if info:
+        lines.append("Informational (not gated — still reported):")
+        for v in info:
+            lines.append(
+                f"  - {v['query_kind']} @ {v['platform']}: "
+                f"R@1={v['r1']:.4f} vs baseline {v['baseline_r1']:.4f} "
+                f"(Δ={v['d_r1']:+.4f})"
+            )
     return "\n".join(lines)
 
 
@@ -224,12 +255,26 @@ def main() -> int:
             "hide real gaps; 0.00 is too tight for float/ORB nondeterminism)."
         ),
     )
+    parser.add_argument(
+        "--gate-platforms",
+        default="",
+        help=(
+            "Comma-separated platforms that fail CI on divergence "
+            "(default: all). Example: macos-15-intel,macos-15,windows-latest"
+        ),
+    )
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
 
     reports = [_load_report(p) for p in args.reports]
+    gate = {
+        p.strip() for p in args.gate_platforms.split(",") if p.strip()
+    } or None
     result = compare_reports(
-        reports, baseline_label=args.baseline, tolerance=args.tolerance
+        reports,
+        baseline_label=args.baseline,
+        tolerance=args.tolerance,
+        gate_platforms=gate,
     )
     table = format_table(result)
     print(table)
