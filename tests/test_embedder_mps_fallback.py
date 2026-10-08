@@ -36,6 +36,7 @@ def _make_embedder(*, device: str = "mps") -> embedder_module.DINOv2Embedder:
     embedder._processor = MagicMock()
     embedder._model = MagicMock()
     embedder._mps_cpu_fallback_done = False
+    embedder._model_load_lock = threading.RLock()
     return embedder
 
 
@@ -194,14 +195,14 @@ def test_extract_batch_query_hang_watchdog_falls_back_to_cpu(monkeypatch):
         calls["cpu"] += 1
         return cpu_result
 
-    def _load_model():
+    def _load_model_unlocked():
         load_calls["n"] += 1
         embedder._model = MagicMock()
         embedder._processor = MagicMock()
 
     monkeypatch.setenv(embedder_module._MPS_QUERY_TIMEOUT_ENV, "0.2")
     monkeypatch.setattr(embedder, "_forward_batch", _forward)
-    monkeypatch.setattr(embedder, "load_model", _load_model)
+    monkeypatch.setattr(embedder, "_load_model_unlocked", _load_model_unlocked)
     monkeypatch.setattr(
         embedder_module,
         "detect_gpu_runtime",
@@ -236,6 +237,66 @@ def test_mps_query_timeout_env_override(monkeypatch):
         embedder_module.mps_query_forward_timeout_s()
         == embedder_module._DEFAULT_MPS_QUERY_TIMEOUT_S
     )
+
+
+def test_timeout_fallback_serializes_concurrent_load_model(monkeypatch):
+    """
+    Hang-watchdog reload must not interleave with a concurrent load_model
+    (indexing vs warmup) — that race produced meta-tensor empty FAISS on
+    Release Validation macos-15.
+    """
+    embedder = _make_embedder(device="mps")
+    embedder._model = MagicMock()
+    started = threading.Event()
+    release_load = threading.Event()
+    loads = {"n": 0, "concurrent": 0}
+    in_flight = {"n": 0}
+
+    def _slow_load_unlocked():
+        loads["n"] += 1
+        in_flight["n"] += 1
+        if in_flight["n"] > 1:
+            loads["concurrent"] += 1
+        started.set()
+        assert release_load.wait(timeout=5.0)
+        in_flight["n"] -= 1
+        embedder._model = MagicMock()
+        embedder._processor = MagicMock()
+
+    monkeypatch.setattr(embedder, "_load_model_unlocked", _slow_load_unlocked)
+    monkeypatch.setattr(
+        embedder_module,
+        "detect_gpu_runtime",
+        lambda preference="auto": SimpleNamespace(
+            active_device="cpu",
+            device_name="",
+            summary_for_log=lambda: "cpu",
+        ),
+    )
+
+    def _index_load():
+        started.wait(timeout=5.0)
+        embedder.load_model()
+
+    indexer = threading.Thread(target=_index_load, name="index-load")
+    indexer.start()
+    # Warmup hang-watchdog path: abandon MPS module and reload on CPU.
+    fallbacker = threading.Thread(
+        target=lambda: embedder._fallback_mps_to_cpu("test timeout", cause="timeout"),
+        name="fallback",
+    )
+    fallbacker.start()
+    assert started.wait(timeout=5.0)
+    # Give the indexer a chance to pile in while reload is in progress.
+    threading.Event().wait(0.05)
+    release_load.set()
+    fallbacker.join(timeout=5.0)
+    indexer.join(timeout=5.0)
+
+    assert loads["concurrent"] == 0
+    assert loads["n"] >= 1
+    assert embedder._device.type == "cpu"
+    assert embedder._model is not None
 
 
 class _NullCtx:
