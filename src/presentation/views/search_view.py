@@ -730,6 +730,16 @@ class SearchView(QWidget):
         if not self._current_query_image_path:
             return
 
+        # Drop any prior worker only after its QThread has stopped. Clearing the
+        # Python ref while the C++ thread is still winding down aborts Mac Intel
+        # CI with: QThread: Destroyed while thread '' is still running.
+        prev = self._crop_worker
+        if prev is not None:
+            if prev.isRunning():
+                prev.requestInterruption()
+                prev.wait(5_000)
+            self._crop_worker = None
+
         label = "Precise Crop" if mode == "precise" else "Auto Crop"
         self._crop_busy = True
         self._set_crop_controls_enabled(False)
@@ -738,18 +748,29 @@ class SearchView(QWidget):
 
         worker = TileCropWorker(self._current_query_image_path, mode)  # type: ignore[arg-type]
         self._crop_worker = worker
+        # QueuedConnection: never run UI/search work nested inside QThread.run().
         worker.crop_finished.connect(
-            lambda path, crop, m=mode: self._on_background_crop_finished(m, path, crop)
+            lambda path, crop, m=mode: self._on_background_crop_finished(m, path, crop),
+            Qt.ConnectionType.QueuedConnection,
         )
         worker.crop_failed.connect(
-            lambda message, m=mode: self._on_background_crop_failed(m, message)
+            lambda message, m=mode: self._on_background_crop_failed(m, message),
+            Qt.ConnectionType.QueuedConnection,
         )
-        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(
+            lambda w=worker: self._on_crop_worker_finished(w),
+            Qt.ConnectionType.QueuedConnection,
+        )
         worker.start()
+
+    def _on_crop_worker_finished(self, worker: TileCropWorker) -> None:
+        """Release the worker only after QThread.finished (thread fully stopped)."""
+        if self._crop_worker is worker:
+            self._crop_worker = None
+        worker.deleteLater()
 
     def _on_background_crop_finished(self, mode: str, crop_path: str, crop) -> None:
         self._crop_busy = False
-        self._crop_worker = None
         self._progress_bar.setVisible(self._viewmodel.is_searching)
         method = getattr(crop, "method", "crop")
         confidence = float(getattr(crop, "confidence", 0.0) or 0.0)
@@ -775,7 +796,6 @@ class SearchView(QWidget):
 
     def _on_background_crop_failed(self, mode: str, message: str) -> None:
         self._crop_busy = False
-        self._crop_worker = None
         self._progress_bar.setVisible(self._viewmodel.is_searching)
         self._refresh_crop_controls()
         logger.error("%s crop failed: %s", mode, message)
