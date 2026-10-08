@@ -677,12 +677,11 @@ class ImagePreprocessor:
     @classmethod
     def _capped_query_max_views(cls, requested: int) -> int:
         """
-        Limit multi-crop DINOv2 work when query inference is effectively CPU.
+        Limit multi-crop DINOv2 work for showroom search latency.
 
-        - Mac Intel: always CPU
-        - Mac Silicon: query path forces CPU to avoid MPS hangs
-        - Windows without CUDA: CPU showroom PCs
-        CUDA Windows keeps the full requested view count.
+        Mac Intel and Mac Apple Silicon share the same ≤2-view search budget
+        so Precise Crop / room-photo search behaves the same on every Mac.
+        Windows CUDA keeps the full request; Windows CPU matches the Mac cap.
         """
         requested = max(1, int(requested))
         from src.utils.platform_info import is_macos, is_windows

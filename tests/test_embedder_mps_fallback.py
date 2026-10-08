@@ -1,8 +1,9 @@
-"""Tests for Mac MPS search resilience (unsupported ops → CPU)."""
+"""Tests for Mac MPS search resilience (unsupported ops + hang watchdog → CPU)."""
 
 from __future__ import annotations
 
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -145,6 +146,96 @@ def test_extract_batch_does_not_treat_mps_op_error_as_oom(monkeypatch):
 
     with pytest.raises(RuntimeError, match="upsample_bicubic2d"):
         embedder._extract_batch(images)
+
+
+def test_extract_batch_query_keeps_mps_when_forward_returns(monkeypatch):
+    """Working MPS query stays on Metal (same device as catalogue index)."""
+    embedder = _make_embedder(device="mps")
+    images = [Image.new("RGB", (64, 64), color=(10, 20, 30))]
+    cpu_result = np.ones((1, 1024), dtype=np.float32)
+    calls = {"n": 0}
+
+    def _forward(_batch):
+        calls["n"] += 1
+        assert embedder._device.type == "mps"
+        return cpu_result
+
+    monkeypatch.setattr(embedder, "_forward_batch", _forward)
+    monkeypatch.setattr(embedder_module, "synchronized_inference", lambda **_kwargs: _NullCtx())
+    monkeypatch.setattr(embedder_module, "is_warmup_compute", lambda: False)
+    monkeypatch.setattr(embedder_module, "search_priority_active", lambda: False)
+
+    result = embedder._extract_batch(images, for_query=True)
+
+    assert calls["n"] == 1
+    assert embedder._device.type == "mps"
+    assert embedder._mps_cpu_fallback_done is False
+    assert result is cpu_result
+
+
+def test_extract_batch_query_hang_watchdog_falls_back_to_cpu(monkeypatch):
+    """
+    Silent MPS hang (no exception) must trip the watchdog, switch to CPU,
+    and still return a query result.
+    """
+    embedder = _make_embedder(device="mps")
+    images = [Image.new("RGB", (64, 64), color=(10, 20, 30))]
+    cpu_result = np.ones((1, 1024), dtype=np.float32)
+    release_hang = threading.Event()
+    calls = {"mps": 0, "cpu": 0}
+    load_calls = {"n": 0}
+
+    def _forward(_batch):
+        if embedder._device.type == "mps":
+            calls["mps"] += 1
+            # Block past the watchdog timeout — never raises.
+            release_hang.wait(timeout=30.0)
+            return cpu_result
+        calls["cpu"] += 1
+        return cpu_result
+
+    def _load_model():
+        load_calls["n"] += 1
+        embedder._model = MagicMock()
+        embedder._processor = MagicMock()
+
+    monkeypatch.setenv(embedder_module._MPS_QUERY_TIMEOUT_ENV, "0.2")
+    monkeypatch.setattr(embedder, "_forward_batch", _forward)
+    monkeypatch.setattr(embedder, "load_model", _load_model)
+    monkeypatch.setattr(
+        embedder_module,
+        "detect_gpu_runtime",
+        lambda preference="auto": SimpleNamespace(
+            active_device="cpu",
+            device_name="",
+            summary_for_log=lambda: "cpu",
+        ),
+    )
+    monkeypatch.setattr(embedder_module, "synchronized_inference", lambda **_kwargs: _NullCtx())
+    monkeypatch.setattr(embedder_module, "is_warmup_compute", lambda: False)
+    monkeypatch.setattr(embedder_module, "search_priority_active", lambda: False)
+
+    try:
+        result = embedder._extract_batch(images, for_query=True)
+    finally:
+        release_hang.set()
+
+    assert calls["mps"] == 1
+    assert calls["cpu"] == 1
+    assert load_calls["n"] == 1
+    assert embedder._device.type == "cpu"
+    assert embedder._mps_cpu_fallback_done is True
+    assert result is cpu_result
+
+
+def test_mps_query_timeout_env_override(monkeypatch):
+    monkeypatch.setenv(embedder_module._MPS_QUERY_TIMEOUT_ENV, "12.5")
+    assert embedder_module.mps_query_forward_timeout_s() == 12.5
+    monkeypatch.delenv(embedder_module._MPS_QUERY_TIMEOUT_ENV, raising=False)
+    assert (
+        embedder_module.mps_query_forward_timeout_s()
+        == embedder_module._DEFAULT_MPS_QUERY_TIMEOUT_S
+    )
 
 
 class _NullCtx:
