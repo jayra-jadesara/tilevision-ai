@@ -53,3 +53,33 @@ def test_search_faiss_multi_crop_single_embedding():
     ordered, scores, _view_map = use_case._search_faiss_multi_crop([[0.3] * 3], search_k=5)
     assert ordered == [7, 8]
     assert scores[7] == pytest.approx(0.9)
+
+
+def test_search_faiss_multi_crop_rrf_orders_by_rank_keeps_max_cosine(monkeypatch):
+    """RRF can reorder vs MAX while faiss_scores stay MAX cosine."""
+    monkeypatch.delenv("TILEVISION_MULTI_CROP_FUSION", raising=False)
+    monkeypatch.delenv("TILEVISION_MULTI_CROP_RRF_K", raising=False)
+    # Tile 1: rank-1 then rank-5. Tile 2: rank-2 both views → RRF prefers 2.
+    responses = [
+        ([1, 2, 3, 4, 5], [0.95, 0.90, 0.80, 0.70, 0.60]),
+        ([2, 3, 4, 5, 1], [0.91, 0.85, 0.75, 0.65, 0.40]),
+    ]
+    embeddings = [[0.1] * 2, [0.2] * 2]
+
+    use_case = SearchTilesUseCase.__new__(SearchTilesUseCase)
+    use_case._index = _FakeIndex(responses)
+    use_case._multi_crop_fusion_configured = "max"
+    use_case._multi_crop_rrf_k_configured = 60
+    ordered_max, _, _ = use_case._search_faiss_multi_crop(embeddings, search_k=10)
+    assert ordered_max[0] == 1  # MAX cosine leader
+
+    use_case._index = _FakeIndex(responses)
+    use_case._multi_crop_fusion_configured = "rrf"
+    ordered, scores, view_map = use_case._search_faiss_multi_crop(
+        embeddings, search_k=10
+    )
+    assert ordered[0] == 2  # stronger dual ranks under RRF
+    assert scores[1] == pytest.approx(0.95)  # MAX cosine preserved
+    assert scores[2] == pytest.approx(0.91)
+    assert view_map[1] == 0
+    assert view_map[2] == 1

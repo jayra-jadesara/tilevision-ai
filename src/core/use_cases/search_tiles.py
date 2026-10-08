@@ -203,11 +203,14 @@ class SearchTilesUseCase:
             resolve_multi_crop_fusion,
         )
 
-        method, rrf_k = resolve_multi_crop_fusion(self._multi_crop_fusion_configured)
-        if self._multi_crop_rrf_k_configured is not None and not os.environ.get(
+        # getattr: unit tests often construct via __new__ without __init__.
+        configured = getattr(self, "_multi_crop_fusion_configured", "max")
+        configured_k = getattr(self, "_multi_crop_rrf_k_configured", None)
+        method, rrf_k = resolve_multi_crop_fusion(configured)
+        if configured_k is not None and not os.environ.get(
             "TILEVISION_MULTI_CROP_RRF_K", ""
         ).strip():
-            rrf_k = max(1, int(self._multi_crop_rrf_k_configured))
+            rrf_k = max(1, int(configured_k))
         elif method.value != "rrf":
             rrf_k = DEFAULT_RRF_K
 
