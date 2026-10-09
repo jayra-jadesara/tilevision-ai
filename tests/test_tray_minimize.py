@@ -194,34 +194,27 @@ def test_tray_controller_show_hide_on_real_tray(qapp) -> None:
     assert tray._menu is None
 
 
-def test_forced_tray_construct_destroy_cycle_under_offscreen(qapp, monkeypatch) -> None:
-    """
-    Exercise the real destroy() path on native tray objects under offscreen.
-
-    Bypasses is_available() to construct the same QSystemTrayIcon/QMenu/QAction
-    graph CI could build when isSystemTrayAvailable() lies, then runs the
-    synchronous destroy() teardown the production fix uses.
-    """
-    # Allow construction even on headless platforms for this one test.
-    monkeypatch.setattr(TrayController, "is_available", staticmethod(lambda: True))
-
+def test_destroy_is_safe_when_tray_never_constructed(qapp) -> None:
+    """destroy() must be a no-op when no native tray objects were built."""
     tray = TrayController()
-    assert tray.ensure_shown() is True
-    assert tray._tray is not None
-    assert tray._menu is not None
-
+    if TrayController.is_headless_platform():
+        assert tray.ensure_shown() is False
+        assert tray._tray is None
+    # Never construct in this test — only exercise empty destroy().
     tray.destroy()
     assert tray._tray is None
     assert tray._menu is None
-    assert tray._open_action is None
-    assert tray._quit_action is None
     qapp.processEvents()
 
 
 def test_forced_tray_destroy_survives_child_process_exit() -> None:
     """
-    Subprocess regression: construct → destroy → interpreter exit must not
-    SIGSEGV (the ubuntu-latest CI failure mode).
+    Subprocess-only regression for construct → destroy → interpreter exit.
+
+    Never build QSystemTrayIcon in the main pytest process under offscreen —
+    that poisons Qt global tray state and SIGSEGVs at suite teardown on
+    ubuntu-latest / macos-15 (even after destroy()). Isolation in a child
+    process is the only safe way to exercise the native object graph in CI.
     """
     repo = Path(__file__).resolve().parents[1]
     script = textwrap.dedent(
@@ -237,13 +230,22 @@ def test_forced_tray_destroy_survives_child_process_exit() -> None:
         print("child_headless", TrayController.is_headless_platform(), flush=True)
         print("child_controller_available", TrayController.is_available(), flush=True)
 
-        # Force the native object graph that crashed CI, then destroy it.
-        # (Do not probe isSystemTrayAvailable under offscreen.)
+        # Production path must refuse construction under offscreen.
+        assert TrayController.is_available() is False
+        refused = TrayController()
+        assert refused.ensure_shown() is False
+        assert refused._tray is None
+        refused.destroy()
+        print("child_refused_ok", flush=True)
+
+        # Forced native graph + synchronous destroy (production destroy()).
         TrayController.is_available = staticmethod(lambda: True)
         tray = TrayController()
         ok = tray.ensure_shown()
         print("child_ensure_shown", ok, flush=True)
+        assert ok and tray._tray is not None
         tray.destroy()
+        assert tray._tray is None
         app.processEvents()
         print("child_destroy_ok", flush=True)
         raise SystemExit(0)
@@ -266,4 +268,5 @@ def test_forced_tray_destroy_survives_child_process_exit() -> None:
         f"Child exited {completed.returncode} (0x{completed.returncode & 0xFFFFFFFF:08X}); "
         f"stdout={completed.stdout!r} stderr={completed.stderr!r}"
     )
+    assert "child_refused_ok" in completed.stdout
     assert "child_destroy_ok" in completed.stdout
