@@ -23,6 +23,19 @@ def test_native_teardown_crash_codes_are_detected():
     assert _is_windows_crash(139)
 
 
+def test_linux_wrapper_does_not_mask_sigsegv(tmp_path: Path, monkeypatch) -> None:
+    """Linux green-junit + SIGSEGV must stay a failure (fix the real crash)."""
+    import scripts.run_ci_pytest as runner
+
+    junit = tmp_path / "pytest-results.xml"
+    junit.write_text('<testsuite tests="10" failures="0" errors="0"></testsuite>')
+    monkeypatch.setattr(runner, "JUNIT", junit)
+    monkeypatch.setattr(runner.sys, "platform", "linux")
+    monkeypatch.setattr(runner, "_run_pytest", lambda markers: -11)
+
+    assert runner.main() == 1
+
+
 def test_junit_green_requires_finished_suite(tmp_path: Path):
     good = tmp_path / "ok.xml"
     good.write_text('<testsuite tests="4" failures="0" errors="0"></testsuite>')

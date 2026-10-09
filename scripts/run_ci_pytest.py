@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
-CI pytest runner with Qt/native teardown crash mitigation.
+CI pytest runner with Windows Qt/Git-Bash crash mitigation.
 
 PySide teardown under Git Bash on windows-latest frequently kills the
 pytest process with NTSTATUS access-violation (0xC0000005 → 3221225477)
-or Bash-mapped 127/139 — often after a fully green suite. Linux CI can
-likewise SIGSEGV (139) during interpreter shutdown after a green suite
-once more Qt UI tests are loaded. This wrapper:
+or Bash-mapped 127/139 — often after a fully green suite. This wrapper:
   1. Runs pytest with junitxml in a subprocess
-  2. Treats known crash exit codes as success when junit is green
+  2. On Windows only, treats known crash exit codes as success when junit
+     is green (Linux tray/offscreen crashes must fail so they get fixed)
   3. Retries once on Windows when junit is missing/incomplete
   4. Hard-exits the wrapper with a clamped 0/1 code (no Qt loaded here)
 """
@@ -93,11 +92,12 @@ def main() -> int:
         status = _run_pytest(markers)
         if status == 0:
             break
-        if _is_native_teardown_crash(status) and _junit_green(JUNIT):
+        # Windows-only: green junit + native crash → success.
+        # Linux offscreen tray segfaults must remain red so root causes get fixed.
+        if is_windows and _is_native_teardown_crash(status) and _junit_green(JUNIT):
             print(
-                f"pytest exited {status} (0x{status & 0xFFFFFFFF:08X}) "
-                f"on {sys.platform} after green junit — treating as success "
-                "(known Qt/native teardown crash)",
+                f"Windows pytest exited {status} (0x{status & 0xFFFFFFFF:08X}) "
+                "after green junit — treating as success",
                 flush=True,
             )
             status = 0
