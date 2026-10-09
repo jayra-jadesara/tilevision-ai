@@ -2,6 +2,11 @@
 # on ubuntu / Windows / Mac Silicon / Mac Intel with production defaults
 # (production_v8 index, MAX fusion, ORB on). Uploads per-platform JSON, then
 # diffs them against macos-15-intel.
+#
+# Note: "Compare platform parity" is a required branch-protection check.
+# Path filters below skip the bakeoff when search/AI code is untouched; if a
+# PR still needs the required check to run, re-trigger via workflow_dispatch
+# or include a no-op touch under these paths.
 
 name: Platform Parity Bakeoff
 
