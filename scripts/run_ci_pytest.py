@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-CI pytest runner with Windows Qt/Git-Bash crash mitigation.
+CI pytest runner with Qt/native teardown crash mitigation.
 
 PySide teardown under Git Bash on windows-latest frequently kills the
 pytest process with NTSTATUS access-violation (0xC0000005 → 3221225477)
-or Bash-mapped 127/139 — often after a fully green suite. This wrapper:
+or Bash-mapped 127/139 — often after a fully green suite. Linux CI can
+likewise SIGSEGV (139) during interpreter shutdown after a green suite
+once more Qt UI tests are loaded. This wrapper:
   1. Runs pytest with junitxml in a subprocess
   2. Treats known crash exit codes as success when junit is green
   3. Retries once on Windows when junit is missing/incomplete
@@ -26,8 +28,10 @@ JUNIT = ROOT / "pytest-results.xml"
 _STATUS_ACCESS_VIOLATION = 0xC0000005
 
 
-def _is_windows_crash(code: int) -> bool:
-    if code in (127, 139):
+def _is_native_teardown_crash(code: int) -> bool:
+    """True for process-killing native crashes that can follow a green suite."""
+    if code in (127, 139, -11):
+        # 139 / -11 = SIGSEGV; 127 sometimes from Bash after a killed child.
         return True
     # subprocess may surface NTSTATUS as a large unsigned or negative signed int.
     unsigned = code & 0xFFFFFFFF
@@ -37,6 +41,10 @@ def _is_windows_crash(code: int) -> bool:
     if unsigned >= 0xC0000000:
         return True
     return False
+
+
+# Back-compat alias for tests / importers.
+_is_windows_crash = _is_native_teardown_crash
 
 
 def _junit_green(path: Path) -> bool:
@@ -85,10 +93,11 @@ def main() -> int:
         status = _run_pytest(markers)
         if status == 0:
             break
-        if is_windows and _is_windows_crash(status) and _junit_green(JUNIT):
+        if _is_native_teardown_crash(status) and _junit_green(JUNIT):
             print(
-                f"Windows pytest exited {status} (0x{status & 0xFFFFFFFF:08X}) "
-                "after green junit — treating as success",
+                f"pytest exited {status} (0x{status & 0xFFFFFFFF:08X}) "
+                f"on {sys.platform} after green junit — treating as success "
+                "(known Qt/native teardown crash)",
                 flush=True,
             )
             status = 0
