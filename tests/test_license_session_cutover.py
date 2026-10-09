@@ -44,19 +44,24 @@ def test_license_guard_emits_when_verify_returns_none(qapp) -> None:
     ]
 
     guard = LicenseSessionGuard(validate, interval_ms=60_000)
-    invalidated = []
-    guard.license_invalidated.connect(lambda: invalidated.append(True))
+    try:
+        invalidated = []
+        guard.license_invalidated.connect(lambda: invalidated.append(True))
 
-    guard.recheck_now()
-    assert invalidated == []
-    assert guard.is_active is False  # not started yet
+        guard.recheck_now()
+        assert invalidated == []
+        assert guard.is_active is False  # not started yet
 
-    guard.start()
-    assert guard.is_active
+        guard.start()
+        assert guard.is_active
 
-    guard.recheck_now()
-    assert invalidated == [True]
-    assert guard.is_active is False  # stopped on invalidation
+        guard.recheck_now()
+        assert invalidated == [True]
+        assert guard.is_active is False  # stopped on invalidation
+    finally:
+        guard.stop()
+        guard.deleteLater()
+        qapp.processEvents()
 
 
 def test_license_guard_cutover_stops_monitoring_and_shows_license(qapp) -> None:
@@ -93,16 +98,21 @@ def test_license_guard_cutover_stops_monitoring_and_shows_license(qapp) -> None:
         routed["license_shown"] = True
 
     guard = LicenseSessionGuard(validate, interval_ms=60_000)
-    guard.license_invalidated.connect(_cutover)
-    guard.start()
-    guard.recheck_now()
+    try:
+        guard.license_invalidated.connect(_cutover)
+        guard.start()
+        guard.recheck_now()
 
-    folder_monitor.stop_monitoring.assert_called_once()
-    tray.hide.assert_called_once()
-    main_window.hide.assert_called_once()
-    assert notifications["enabled"] is False
-    assert routed["license_shown"] is True
-    assert routed["main_still_shown"] is False
+        folder_monitor.stop_monitoring.assert_called_once()
+        tray.hide.assert_called_once()
+        main_window.hide.assert_called_once()
+        assert notifications["enabled"] is False
+        assert routed["license_shown"] is True
+        assert routed["main_still_shown"] is False
+    finally:
+        guard.stop()
+        guard.deleteLater()
+        qapp.processEvents()
 
 
 def test_show_license_activation_returns_details_when_activated(qapp, monkeypatch) -> None:

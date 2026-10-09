@@ -6,21 +6,18 @@ window hides the UI and keeps the process (and folder monitor) alive via a
 ``QSystemTrayIcon``. Full exit is only via the tray "Quit" action.
 
 Under headless Qt platforms (``offscreen`` / ``minimal`` / ``null``),
-``QSystemTrayIcon.isSystemTrayAvailable()`` is not trustworthy — it can
-report True even though no real tray backend exists. Constructing a tray
-there can SIGSEGV during interpreter shutdown on Linux CI. We refuse to
-construct native tray objects on those platforms.
+``QSystemTrayIcon`` must not be imported or probed — on some Linux/macOS CI
+images that initializes a broken tray backend and SIGSEGVs at interpreter
+shutdown after an otherwise green pytest suite.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Any, Optional
 
-import shiboken6
 from PySide6.QtCore import QObject, Signal
-from PySide6.QtGui import QAction, QIcon
-from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
+from PySide6.QtWidgets import QApplication, QWidget
 
 from src.utils.platform_info import app_icon_path
 
@@ -28,7 +25,7 @@ logger = logging.getLogger("tilevision.presentation.tray_controller")
 
 TRAY_TOOLTIP = "TileVision AI is running in the background"
 
-# QPA platforms where a real system tray must not be constructed.
+# QPA platforms where a real system tray must not be constructed or probed.
 _HEADLESS_QT_PLATFORMS = frozenset({"offscreen", "minimal", "null", "vnc"})
 
 
@@ -40,10 +37,10 @@ class TrayController(QObject):
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self._tray: Optional[QSystemTrayIcon] = None
-        self._menu: Optional[QMenu] = None
-        self._open_action: Optional[QAction] = None
-        self._quit_action: Optional[QAction] = None
+        self._tray: Any = None
+        self._menu: Any = None
+        self._open_action: Any = None
+        self._quit_action: Any = None
 
     @property
     def is_visible(self) -> bool:
@@ -63,12 +60,13 @@ class TrayController(QObject):
         """
         True only when a real desktop tray can be used safely.
 
-        Checks ``QApplication.platformName()`` before
-        ``QSystemTrayIcon.isSystemTrayAvailable()`` — the latter alone is
-        unreliable under ``QT_QPA_PLATFORM=offscreen`` on some Linux CI images.
+        On headless QPA platforms this returns False without importing or
+        calling into ``QSystemTrayIcon`` (that probe alone can crash CI).
         """
         if TrayController.is_headless_platform():
             return False
+        from PySide6.QtWidgets import QSystemTrayIcon
+
         return bool(QSystemTrayIcon.isSystemTrayAvailable())
 
     def ensure_shown(self) -> bool:
@@ -83,12 +81,15 @@ class TrayController(QObject):
             )
             return False
 
+        # Lazy imports: keep headless pytest processes free of QSystemTrayIcon.
+        from PySide6.QtGui import QAction, QIcon
+        from PySide6.QtWidgets import QMenu, QSystemTrayIcon
+
         if self._tray is None:
             icon = QIcon()
             path = app_icon_path()
             if path is not None:
                 icon = QIcon(str(path))
-            # Parent tray/menu to this controller so lifetime is explicit.
             self._tray = QSystemTrayIcon(icon, self)
             self._tray.setToolTip(TRAY_TOOLTIP)
 
@@ -119,9 +120,10 @@ class TrayController(QObject):
 
         Order: disconnect → clear menu actions → drop context menu → delete
         menu → delete tray. Uses ``shiboken6.delete`` instead of
-        ``deleteLater()`` so cleanup does not race interpreter shutdown
-        (where the Qt event loop can no longer drain deleteLater queues).
+        ``deleteLater()`` so cleanup does not race interpreter shutdown.
         """
+        import shiboken6
+
         tray = self._tray
         menu = self._menu
         open_action = self._open_action
@@ -166,7 +168,9 @@ class TrayController(QObject):
 
         logger.info("System tray icon destroyed.")
 
-    def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+    def _on_activated(self, reason: Any) -> None:
+        from PySide6.QtWidgets import QSystemTrayIcon
+
         if reason in (
             QSystemTrayIcon.ActivationReason.Trigger,
             QSystemTrayIcon.ActivationReason.DoubleClick,

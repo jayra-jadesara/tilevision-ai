@@ -1,4 +1,11 @@
-"""Tests for minimize-to-tray state transitions (headless/offscreen safe)."""
+"""Tests for minimize-to-tray state transitions (headless/offscreen safe).
+
+IMPORTANT: Never import or probe ``QSystemTrayIcon`` in this module's process
+under ``QT_QPA_PLATFORM=offscreen``. On ubuntu-latest / macos-15 that can
+initialize a broken tray backend and SIGSEGV at interpreter shutdown after
+an otherwise green suite. Forced native construct/destroy runs only in an
+isolated child process.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +20,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import QApplication, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication
 
 from src.config.settings import AppSettings
 from src.presentation.tray_controller import TrayController, TRAY_TOOLTIP
@@ -118,23 +125,15 @@ def test_restore_from_tray(qapp, tmp_path: Path, catalogue_master_service) -> No
 def test_tray_reports_ci_platform_diagnostics(qapp) -> None:
     """Task 1 evidence: log platform classification under CI's QPA."""
     platform = qapp.platformName()
-    controller_available = TrayController.is_available()
     headless = TrayController.is_headless_platform()
-    # Do NOT call QSystemTrayIcon.isSystemTrayAvailable() under headless QPA —
-    # probing the tray backend on offscreen Linux can leave native state that
-    # SIGSEGVs at interpreter shutdown (ubuntu-latest CI failure mode).
-    qt_available = "skipped_probe_under_headless" if headless else (
-        QSystemTrayIcon.isSystemTrayAvailable()
-    )
+    controller_available = TrayController.is_available()
     print(
         f"TRAY_DIAG platformName={platform!r} "
-        f"isSystemTrayAvailable={qt_available} "
+        f"isSystemTrayAvailable=not_probed_in_main_process "
         f"TrayController.is_available={controller_available} "
         f"is_headless_platform={headless}",
         flush=True,
     )
-    # Under QT_QPA_PLATFORM=offscreen (CI default), we must refuse construction
-    # even if Qt's isSystemTrayAvailable() would lie and return True.
     if str(platform).lower() in {"offscreen", "minimal", "null", "vnc"}:
         assert headless is True
         assert controller_available is False
@@ -144,20 +143,16 @@ def test_offscreen_never_constructs_tray_even_if_qt_claims_available(
     qapp, monkeypatch
 ) -> None:
     """
-    Guard against ubuntu-latest offscreen lying via isSystemTrayAvailable().
+    Guard against offscreen lying via isSystemTrayAvailable().
 
-    Even when Qt reports a tray is available, headless QPA platforms must not
-    construct QSystemTrayIcon / QMenu / QAction.
+    Does not import or monkeypatch QSystemTrayIcon in this process.
     """
-    monkeypatch.setattr(
-        QSystemTrayIcon, "isSystemTrayAvailable", staticmethod(lambda: True)
-    )
-    # Force headless classification regardless of host platform name.
     monkeypatch.setattr(
         TrayController, "is_headless_platform", staticmethod(lambda: True)
     )
 
     tray = TrayController()
+    assert tray.is_available() is False
     assert tray.ensure_shown() is False
     assert tray._tray is None
     assert tray._menu is None
@@ -175,9 +170,7 @@ def test_tray_controller_unavailable_returns_false(qapp, monkeypatch) -> None:
 
 
 def test_tray_controller_show_hide_on_real_tray(qapp) -> None:
-    # Use TrayController.is_available() (platformName + Qt), never the raw
-    # isSystemTrayAvailable() call alone — that can be wrong under offscreen.
-    if not TrayController.is_available():
+    if TrayController.is_headless_platform() or not TrayController.is_available():
         pytest.skip(
             "No real system tray in this environment (typical for offscreen CI)"
         )
@@ -199,7 +192,6 @@ def test_destroy_is_safe_when_tray_never_constructed(qapp) -> None:
     if TrayController.is_headless_platform():
         assert tray.ensure_shown() is False
         assert tray._tray is None
-    # Never construct in this test — only exercise empty destroy().
     tray.destroy()
     assert tray._tray is None
     assert tray._menu is None
@@ -210,10 +202,8 @@ def test_forced_tray_destroy_survives_child_process_exit() -> None:
     """
     Subprocess-only regression for construct → destroy → interpreter exit.
 
-    Never build QSystemTrayIcon in the main pytest process under offscreen —
-    that poisons Qt global tray state and SIGSEGVs at suite teardown on
-    ubuntu-latest / macos-15 (even after destroy()). Isolation in a child
-    process is the only safe way to exercise the native object graph in CI.
+    Never build or import QSystemTrayIcon in the main pytest process under
+    offscreen — that poisons Qt tray state and SIGSEGVs at suite teardown.
     """
     repo = Path(__file__).resolve().parents[1]
     script = textwrap.dedent(
@@ -229,7 +219,6 @@ def test_forced_tray_destroy_survives_child_process_exit() -> None:
         print("child_headless", TrayController.is_headless_platform(), flush=True)
         print("child_controller_available", TrayController.is_available(), flush=True)
 
-        # Production path must refuse construction under offscreen.
         assert TrayController.is_available() is False
         refused = TrayController()
         assert refused.ensure_shown() is False
@@ -237,7 +226,6 @@ def test_forced_tray_destroy_survives_child_process_exit() -> None:
         refused.destroy()
         print("child_refused_ok", flush=True)
 
-        # Forced native graph + synchronous destroy (production destroy()).
         TrayController.is_available = staticmethod(lambda: True)
         tray = TrayController()
         ok = tray.ensure_shown()
@@ -262,7 +250,6 @@ def test_forced_tray_destroy_survives_child_process_exit() -> None:
     )
     print(completed.stdout)
     print(completed.stderr, file=sys.stderr)
-    # 0 = clean; 139/-11 = SIGSEGV (the bug we are fixing).
     assert completed.returncode == 0, (
         f"Child exited {completed.returncode} (0x{completed.returncode & 0xFFFFFFFF:08X}); "
         f"stdout={completed.stdout!r} stderr={completed.stderr!r}"
