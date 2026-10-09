@@ -140,6 +140,7 @@ class MainWindow(QMainWindow):
         diagnostics_info_provider: Optional[Callable[[], dict]] = None,
         on_watch_folders_changed: Optional[Callable[[], None]] = None,
         on_check_updates: Optional[Callable[[], None]] = None,
+        on_minimize_to_tray_changed: Optional[Callable[[bool], None]] = None,
         vector_index=None,
         parent: Optional[QWidget] = None,
     ) -> None:
@@ -193,8 +194,15 @@ class MainWindow(QMainWindow):
         self._diagnostics_info_provider = diagnostics_info_provider
         self._on_watch_folders_changed = on_watch_folders_changed
         self._on_check_updates = on_check_updates
+        self._on_minimize_to_tray_changed = on_minimize_to_tray_changed
         self._vector_index = vector_index
         self._current_theme = getattr(self._settings, "theme", "dark") if self._settings is not None else "dark"
+        # When True, closeEvent hides to tray instead of quitting (opt-in setting).
+        self._minimize_to_tray_on_close = bool(
+            getattr(self._settings, "minimize_to_tray_on_close", False)
+        ) if self._settings is not None else False
+        # Set by tray Quit / license cutover so closeEvent actually exits.
+        self._force_quit_requested = False
 
         self.setWindowTitle("TileVision AI — Visual Tile Search")
         if APP_ICON_PATH.exists():
@@ -321,6 +329,7 @@ class MainWindow(QMainWindow):
                 indexed_folders_provider=self._indexed_folders_provider,
                 on_catalog_changed=self._on_catalog_changed,
                 on_watch_folders_changed=self._on_watch_folders_changed,
+                on_minimize_to_tray_changed=self._on_minimize_to_tray_setting_changed,
                 feature_version_provider=self._feature_version_provider,
                 gpu_info_provider=self._gpu_info_provider,
                 diagnostics_info_provider=self._diagnostics_info_provider,
@@ -574,6 +583,47 @@ class MainWindow(QMainWindow):
         self._update_status_bar(message)
         self._on_catalog_changed()
 
+    def set_minimize_to_tray_on_close(self, enabled: bool) -> None:
+        """Sync the opt-in tray-minimize flag (also updated from Settings)."""
+        self._minimize_to_tray_on_close = bool(enabled)
+
+    def request_quit(self) -> None:
+        """Full quit from the tray menu — bypasses minimize-to-tray."""
+        self._force_quit_requested = True
+        self.close()
+
+    def restore_from_tray(self) -> None:
+        """Show and raise the main window after tray Open / double-click."""
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def cancel_active_indexing_for_license_cutover(self) -> None:
+        """
+        Cancel in-flight indexing so license cutover can hide the main window.
+
+        Mirrors the confirm/cancel path in closeEvent, but always proceeds —
+        an expired license must not leave the user on the main UI.
+        """
+        vm = self._indexing_viewmodel
+        if vm.state in (
+            IndexingState.RUNNING,
+            IndexingState.PAUSED,
+            IndexingState.CANCELLING,
+        ):
+            logger.warning(
+                "License expired during active indexing — cancelling worker for cutover."
+            )
+            try:
+                vm.cancel_indexing()
+            except Exception:
+                logger.exception("Failed to cancel indexing during license cutover")
+
+    def _on_minimize_to_tray_setting_changed(self, enabled: bool) -> None:
+        self.set_minimize_to_tray_on_close(enabled)
+        if self._on_minimize_to_tray_changed is not None:
+            self._on_minimize_to_tray_changed(enabled)
+
     def refresh_stale_feature_banner(self) -> None:
         """Show or hide the stale-feature warning banner."""
         if self._feature_version_provider is None:
@@ -762,7 +812,9 @@ class MainWindow(QMainWindow):
         Handle the window close event.
 
         Prompt the user if an indexing operation is currently running
-        to prevent accidental data loss.
+        to prevent accidental data loss. When minimize-to-tray is enabled,
+        hide the window instead of quitting (unless Quit was chosen from
+        the tray menu or an in-app update force-quit is active).
 
         Args:
             event: The Qt close event.
@@ -787,6 +839,22 @@ class MainWindow(QMainWindow):
                 except Exception:
                     logger.exception("Failed to cancel indexing during update quit")
             event.accept()
+            return
+
+        # Opt-in tray mode: closing the window keeps monitoring alive.
+        if self._minimize_to_tray_on_close and not self._force_quit_requested:
+            if vm.state in (
+                IndexingState.RUNNING,
+                IndexingState.PAUSED,
+                IndexingState.CANCELLING,
+            ):
+                # Indexing continues in the background while hidden.
+                logger.info(
+                    "Hiding to system tray while indexing continues in the background."
+                )
+            self.hide()
+            event.ignore()
+            logger.info("Main window hidden to system tray (minimize_to_tray_on_close).")
             return
 
         if vm.state in (IndexingState.RUNNING, IndexingState.PAUSED, IndexingState.CANCELLING):

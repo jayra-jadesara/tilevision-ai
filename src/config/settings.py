@@ -43,6 +43,9 @@ class AppSettings:
             "index_path": str(self._config_dir / "index" / "tiles.index"),
             "thumbnail_dir": str(self._config_dir / "thumbnails"),
             "watch_folders": [],
+            # Opt-in: closing the main window hides to tray instead of quitting
+            # so folder monitoring can keep running. Default off — close = quit.
+            "minimize_to_tray_on_close": False,
             "top_k": 10,
             "theme": "light",
             "thumbnail_size": 200,
@@ -194,6 +197,16 @@ class AppSettings:
     @watch_folders.setter
     def watch_folders(self, folders: List[str]) -> None:
         self._settings["watch_folders"] = [str(Path(f).resolve()) for f in folders]
+        self.save()
+
+    @property
+    def minimize_to_tray_on_close(self) -> bool:
+        """When True, closing the main window hides to the system tray instead of quitting."""
+        return bool(self._settings.get("minimize_to_tray_on_close", False))
+
+    @minimize_to_tray_on_close.setter
+    def minimize_to_tray_on_close(self, value: bool) -> None:
+        self._settings["minimize_to_tray_on_close"] = bool(value)
         self.save()
 
     @property
