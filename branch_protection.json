@@ -1,0 +1,15 @@
+{
+  "required_status_checks": {
+    "strict": true,
+    "contexts": [
+      "Compare platform parity",
+      "pytest (ubuntu-latest)",
+      "pytest (windows-latest)",
+      "pytest (macos-15)",
+      "pytest (macos-15-intel)"
+    ]
+  },
+  "enforce_admins": false,
+  "required_pull_request_reviews": null,
+  "restrictions": null
+}
