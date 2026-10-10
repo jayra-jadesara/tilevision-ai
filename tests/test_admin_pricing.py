@@ -14,8 +14,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "admin_tool"))
 from pricing_manager import (  # noqa: E402
     apply_editable_fields,
     backup_current,
+    compute_effective_per_year,
+    format_effective_per_year_display,
     load_template,
     plan_row_from_dict,
+    plans_to_publish_rows,
     save_draft,
     serialize_prices_json,
 )
@@ -68,13 +71,14 @@ def test_apply_editable_fields_updates_vendor_and_plans():
         hero_body="New body",
         pricing_heading="License pricing (INR)",
         taxes_line="GST extra",
-        vendor_name="JD Software",
+        vendor_name="Adesara Tech",
         vendor_email="test@example.com",
         vendor_phone="+91 99999 99999",
         vendor_phone_display="WhatsApp: +91 99999 99999",
         plans=plans,
     )
     assert updated["location"] == "Morbi, Gujarat"
+    assert updated["vendor"]["name"] == "Adesara Tech"
     assert updated["vendor"]["email"] == "test@example.com"
     assert updated["footer"]["taxes"] == "GST extra"
     assert updated["plans"][0]["price"] == 40000
@@ -152,6 +156,42 @@ def test_plan_row_from_dict_lifetime():
         }
     )
     assert row["effective_label"] == "One-time"
+    assert row["effective_per_year"] is None
+
+
+def test_compute_effective_per_year_from_plan_id():
+    assert compute_effective_per_year("1y", 38000) == (38000, None)
+    assert compute_effective_per_year("2y", 68400) == (34200, None)
+    assert compute_effective_per_year("3y", 96900) == (32300, None)
+    assert compute_effective_per_year("4y", 121600) == (30400, None)
+    assert compute_effective_per_year("lifetime", 200000) == (None, "One-time")
+    assert format_effective_per_year_display("2y", 68400) == "34200"
+    assert format_effective_per_year_display("lifetime", 200000) == "One-time"
+
+
+def test_plans_to_publish_rows_recomputes_per_year():
+    rows = plans_to_publish_rows(
+        [
+            {
+                "id": "2y",
+                "label": "2 Year",
+                "price": 70000,
+                "effective_per_year": 99999,  # stale — must be overwritten
+                "discount_note": "10% off",
+                "badge": None,
+            }
+        ]
+    )
+    assert rows[0]["effective_per_year"] == 35000
+
+
+def test_pricing_dropdowns_omit_per_year(vendor_dir):
+    from vendor_settings import get_pricing_dropdown_options
+
+    options = get_pricing_dropdown_options()
+    assert "per_year" not in options
+    assert "1 Year" in options["plan_labels"]
+    assert "1 Year License" in options["plan_labels"]
 
 
 def test_verify_github_token_success(monkeypatch):

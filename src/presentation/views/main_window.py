@@ -18,6 +18,7 @@ Design Decision:
 
 import logging
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Callable, List, Optional
 
@@ -438,17 +439,23 @@ class MainWindow(QMainWindow):
 
         layout.addStretch()
 
-        # ── Bottom: Version Label (credits JD Software via tooltip — the
-        # sidebar is too narrow to show the full credit line as text; the
-        # complete "Made by JD Software" + contact number also appears in
-        # the Help page footer for anyone who wants it front-and-center)
-        version_label = QLabel(f"v{APP_VERSION}")
-        version_label.setObjectName("VersionLabel")
-        version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        version_label.setToolTip(f"TileVision AI v{APP_VERSION}\nMade by JD Software\nContact: 88662 77767")
-        version_label.setCursor(Qt.CursorShape.PointingHandCursor)
-        version_label.mousePressEvent = lambda event: self._navigate(4)
-        layout.addWidget(version_label)
+        # ── Bottom: version + vendor credit (always visible; Help has the
+        # fuller contact line + copyright as well)
+        version_credit = QLabel(
+            f"v{APP_VERSION}\nAdesara Tech"
+        )
+        version_credit.setObjectName("VersionLabel")
+        version_credit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        version_credit.setWordWrap(True)
+        version_credit.setToolTip(
+            f"TileVision AI v{APP_VERSION}\n"
+            f"Made by Adesara Tech\n"
+            f"Contact: 88662 77767\n"
+            f"© {date.today().year} Adesara Tech. All rights reserved."
+        )
+        version_credit.setCursor(Qt.CursorShape.PointingHandCursor)
+        version_credit.mousePressEvent = lambda event: self._navigate(4)
+        layout.addWidget(version_credit)
 
         return sidebar
 
@@ -461,6 +468,12 @@ class MainWindow(QMainWindow):
         self._status_label = QLabel("Ready.")
         self._status_label.setObjectName("StatusBarLabel")
         status_bar.addWidget(self._status_label)
+
+        self._copyright_label = QLabel(
+            f"© {date.today().year} Adesara Tech. All rights reserved."
+        )
+        self._copyright_label.setObjectName("StatusBarCopyright")
+        status_bar.addPermanentWidget(self._copyright_label)
 
         self._license_status_widget = QWidget()
         license_layout = QHBoxLayout(self._license_status_widget)
@@ -968,6 +981,11 @@ class MainWindow(QMainWindow):
                 color: {p['text_muted']};
                 font-size: 11px;
                 padding-left: 8px;
+            }}
+            #StatusBarCopyright {{
+                color: {p['text_faint']};
+                font-size: 10px;
+                padding-right: 10px;
             }}
             #LicenseStatusIcon {{
                 background: transparent;

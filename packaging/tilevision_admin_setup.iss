@@ -3,7 +3,7 @@
 
 #define MyAppName "TileVision AI Admin"
 #define MyAppVersion "1.2.40"
-#define MyAppPublisher "JD Software"
+#define MyAppPublisher "Adesara Tech"
 #define MyAppExeName "TileVisionAI-Admin.exe"
 #define BuildSource "..\dist\TileVisionAI-Admin"
 

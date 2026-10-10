@@ -125,14 +125,58 @@ def apply_editable_fields(
     return validate_prices_data(payload)
 
 
+# Years encoded in plan ids — used to compute effective_per_year from price.
+_PLAN_DURATION_YEARS: dict[str, int] = {
+    "1y": 1,
+    "2y": 2,
+    "3y": 3,
+    "4y": 4,
+}
+
+
+def compute_effective_per_year(
+    plan_id: str, price: int
+) -> tuple[int | None, str | None]:
+    """
+    Compute per-year rate from plan id and total price.
+
+    Returns ``(effective_per_year, effective_label)``. Lifetime plans use
+    ``effective_label="One-time"`` and ``effective_per_year=None``.
+    """
+    pid = str(plan_id or "").strip().lower()
+    amount = int(price)
+    if pid == "lifetime":
+        return None, "One-time"
+    years = _PLAN_DURATION_YEARS.get(pid)
+    if years is None or years <= 0:
+        return None, None
+    return int(round(amount / years)), None
+
+
+def format_effective_per_year_display(
+    plan_id: str, price: int
+) -> str:
+    """Human-readable Per-year cell text for the admin table."""
+    per_year, label = compute_effective_per_year(plan_id, price)
+    if label:
+        return label
+    if per_year is None:
+        return ""
+    return str(per_year)
+
+
 def plan_row_from_dict(plan: Mapping[str, Any]) -> dict[str, Any]:
     """Normalize a plan object for the admin table."""
+    plan_id = str(plan.get("id", ""))
+    price = int(round(float(plan.get("price", 0))))
+    # Prefer freshly computed per-year so the table stays consistent with price.
+    per_year, eff_label = compute_effective_per_year(plan_id, price)
     row = {
-        "id": str(plan.get("id", "")),
+        "id": plan_id,
         "label": str(plan.get("label", "")),
-        "price": int(round(float(plan.get("price", 0)))),
-        "effective_per_year": plan.get("effective_per_year"),
-        "effective_label": plan.get("effective_label"),
+        "price": price,
+        "effective_per_year": per_year,
+        "effective_label": eff_label,
         "discount_note": str(plan.get("discount_note") or "-"),
         "badge": plan.get("badge"),
     }
@@ -145,6 +189,8 @@ def plans_to_publish_rows(plans: list[Mapping[str, Any]]) -> list[dict[str, Any]
     rows: list[dict[str, Any]] = []
     for plan in plans:
         row = plan_row_from_dict(plan)
+        # Recompute from id + price so published JSON never drifts from math.
+        per_year, eff_label = compute_effective_per_year(row["id"], row["price"])
         cleaned: dict[str, Any] = {
             "id": row["id"],
             "label": row["label"],
@@ -152,11 +198,11 @@ def plans_to_publish_rows(plans: list[Mapping[str, Any]]) -> list[dict[str, Any]
             "discount_note": row["discount_note"],
             "badge": row["badge"],
         }
-        if row.get("effective_label"):
-            cleaned["effective_label"] = row["effective_label"]
+        if eff_label:
+            cleaned["effective_label"] = eff_label
             cleaned["effective_per_year"] = None
-        elif row.get("effective_per_year") is not None:
-            cleaned["effective_per_year"] = int(row["effective_per_year"])
+        elif per_year is not None:
+            cleaned["effective_per_year"] = int(per_year)
         rows.append(cleaned)
     return rows
 

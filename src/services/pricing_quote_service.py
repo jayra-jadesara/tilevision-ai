@@ -479,7 +479,7 @@ def render_pricing_pdf(
     pdf.rect(0, 28 * mm, width, 1 * mm, fill=1, stroke=0)
 
     made_by = str(footer.get("made_by_prefix") or "Software by")
-    vendor_name = str(vendor.get("name") or "JD Software")
+    vendor_name = str(vendor.get("name") or "Adesara Tech")
     pdf.setFillColor(white)
     pdf.setFont("Helvetica-Bold", 10)
     pdf.drawString(14 * mm, 18 * mm, f"{made_by} {vendor_name}")

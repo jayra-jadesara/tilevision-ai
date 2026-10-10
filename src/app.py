@@ -131,7 +131,7 @@ def build_application() -> int:
     # ── 3. Create QApplication (must happen before any QWidget is created) ────
     app = QApplication(sys.argv)
     app.setApplicationName("TileVision AI")
-    app.setOrganizationName("JD Software")
+    app.setOrganizationName("Adesara Tech")
     app.setApplicationVersion(APP_VERSION)
 
     icon_path = app_icon_path()
