@@ -224,6 +224,40 @@ class TileImageEventHandler(FileSystemEventHandler):
         if not event.is_directory:
             self._process_deleted(event.src_path)
 
+    def reconcile_existing_file(self, file_path_str: str) -> None:
+        """
+        Catch-up index for a file already on disk (no settle wait).
+
+        Used when monitoring (re)starts so images added while the app was
+        closed are indexed without waiting for a filesystem event.
+        """
+        if self._paused.is_set():
+            logger.info(
+                "Skipping reconcile while Search is active: %s",
+                Path(file_path_str).name,
+            )
+            return
+
+        file_path = Path(file_path_str).resolve()
+        if not self._is_supported(file_path):
+            return
+        if not file_path.exists():
+            return
+        if not validate_image(file_path):
+            logger.debug("Reconcile skipped invalid image: %s", file_path.name)
+            return
+
+        try:
+            logger.info("Reconcile auto-indexing: %s", file_path.name)
+            db_id = self._use_case.index_changed_file(file_path)
+            if db_id is None:
+                self._notify(str(file_path), "skipped", True, "")
+                return
+            self._notify(str(file_path), "indexed", True, "")
+        except Exception as exc:
+            logger.error("Reconcile indexing failed for %s: %s", file_path, exc)
+            self._notify(str(file_path), "failed", False, str(exc))
+
 
 class FolderMonitorController:
     """Manages starting and stopping Watchdog observers across multiple paths."""
@@ -238,6 +272,8 @@ class FolderMonitorController:
         self._observer = None
         self._active_watches: list = []
         self._handler: Optional[TileImageEventHandler] = None
+        self._reconcile_thread: Optional[threading.Thread] = None
+        self._reconcile_stop = threading.Event()
 
     @property
     def is_running(self) -> bool:
@@ -256,6 +292,7 @@ class FolderMonitorController:
 
         self._observer = Observer()
         self._active_watches = []
+        self._reconcile_stop.clear()
         self._handler = TileImageEventHandler(
             indexing_use_case=self._use_case,
             on_file_indexed_callback=self._on_indexed,
@@ -284,6 +321,8 @@ class FolderMonitorController:
         if self._active_watches:
             self._observer.start()
             logger.info("Watchdog folder observer thread started successfully.")
+            # Catch up files added while the app was not watching.
+            self._start_reconcile(folders)
         else:
             logger.warning("No valid folders monitored. Watchdog was not started.")
 
@@ -305,6 +344,11 @@ class FolderMonitorController:
             self._handler.resume_after_search()
 
     def stop_monitoring(self) -> None:
+        self._reconcile_stop.set()
+        if self._reconcile_thread is not None and self._reconcile_thread.is_alive():
+            self._reconcile_thread.join(timeout=30.0)
+        self._reconcile_thread = None
+
         if self._observer is not None:
             logger.info("Stopping folder monitor observer thread...")
             self._observer.stop()
@@ -313,3 +357,58 @@ class FolderMonitorController:
             self._active_watches = []
             self._handler = None
             logger.info("Folder monitor observer stopped.")
+
+    def _start_reconcile(self, folders: List[str]) -> None:
+        """Run catch-up indexing on a daemon thread so the UI stays responsive."""
+        folders_copy = list(folders)
+
+        def _run() -> None:
+            try:
+                self._reconcile_folders(folders_copy)
+            except Exception as exc:
+                logger.error("Folder reconcile pass failed: %s", exc)
+
+        self._reconcile_thread = threading.Thread(
+            target=_run,
+            name="tilevision-folder-reconcile",
+            daemon=True,
+        )
+        self._reconcile_thread.start()
+
+    def _reconcile_folders(self, folders: List[str]) -> None:
+        """One-pass compare of watched folders against the index."""
+        handler = self._handler
+        if handler is None:
+            return
+
+        total = 0
+        for folder_str in folders:
+            if self._reconcile_stop.is_set():
+                logger.info("Reconcile interrupted (monitoring stopped).")
+                return
+            folder_path = Path(folder_str).resolve()
+            if not folder_path.exists() or not folder_path.is_dir():
+                continue
+            for image_path in self._iter_supported_images(folder_path):
+                if self._reconcile_stop.is_set():
+                    logger.info("Reconcile interrupted (monitoring stopped).")
+                    return
+                handler.reconcile_existing_file(str(image_path))
+                total += 1
+
+        logger.info("Reconcile-on-start finished (%d image file(s) checked).", total)
+
+    @staticmethod
+    def _iter_supported_images(folder_path: Path):
+        """Yield supported image paths under ``folder_path`` (recursive)."""
+        seen: Set[str] = set()
+        for ext in SUPPORTED_IMAGE_EXTENSIONS:
+            for pattern in (f"*{ext}", f"*{ext.upper()}"):
+                for path in folder_path.rglob(pattern):
+                    if not path.is_file():
+                        continue
+                    key = str(path.resolve())
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    yield path

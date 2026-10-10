@@ -19,7 +19,7 @@ Design Decision:
 import logging
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QFont, QIcon
@@ -48,7 +48,8 @@ from src.licensing.validator import LicenseValidator
 from src.presentation.viewmodels.indexing_viewmodel import IndexingViewModel
 from src.presentation.viewmodels.search_viewmodel import SearchViewModel
 from src.presentation.views.main_window import MainWindow, DashboardDataProviders
-from src.presentation.views.license_view import LicenseView
+from src.presentation.license_gate import LicenseSessionGuard, show_license_activation
+from src.presentation.tray_controller import TrayController
 from src.presentation.auto_index_notifier import AutoIndexNotifier
 from src.presentation.update_controller import UpdateController
 from src.utils.platform_info import app_icon_path, default_ui_font_family
@@ -66,11 +67,19 @@ def _on_auto_indexed(
     *,
     activity_log_repository,
     auto_index_notifier: AutoIndexNotifier,
+    notifications_enabled: Callable[[], bool],
 ) -> None:
     """
     Callback invoked by FolderMonitorController after auto-index events.
     Runs on the watchdog background thread — must not touch QWidget directly.
     """
+    if not notifications_enabled():
+        _app_logger.debug(
+            "Suppressing auto-index notification after license cutover: %s",
+            file_path,
+        )
+        return
+
     name = Path(file_path).name
     if action == "indexed" and success:
         _app_logger.info("Auto-indexed file: %s", file_path)
@@ -164,19 +173,18 @@ def build_application() -> int:
     )
 
     # ── 6. License Gate on Startup ────────────────────────────────────────────
+    # Behavior must stay identical: verify first; if missing/invalid, show the
+    # shared LicenseView path (also used by mid-session expiry cutover).
     logger.info("Checking startup license status...")
     license_details = validate_license_use_case.verify_existing_license()
 
     if license_details is None:
-        logger.info("Showing license activation dialog.")
-        license_dialog = LicenseView(
-            validate_use_case=validate_license_use_case,
+        license_details = show_license_activation(
+            validate_license_use_case,
             theme=settings.theme,
             show_back=True,
         )
-        license_dialog.exec()
-
-        if not license_dialog.is_activated:
+        if license_details is None:
             logger.warning("License activation skipped or failed. Exiting.")
             message_box.critical(
                 None,
@@ -186,8 +194,6 @@ def build_application() -> int:
                 "The application will now close.",
             )
             return 1
-
-        license_details = validate_license_use_case.verify_existing_license()
     else:
         customer = license_details.get("customer_name", "Unknown")
         if license_details.get("is_trial"):
@@ -378,6 +384,8 @@ def build_application() -> int:
     folder_monitor: Optional[FolderMonitorController] = None
     auto_index_notifier = AutoIndexNotifier()
     watch_folders = settings.watch_folders
+    # Cleared on license cutover so no status-bar/activity noise fires after expiry.
+    auto_index_notifications_enabled = True
 
     def _auto_index_callback(path: str, action: AutoIndexAction, success: bool, message: str) -> None:
         _on_auto_indexed(
@@ -387,6 +395,7 @@ def build_application() -> int:
             message,
             activity_log_repository=activity_log_repository,
             auto_index_notifier=auto_index_notifier,
+            notifications_enabled=lambda: auto_index_notifications_enabled,
         )
 
     def _create_folder_monitor() -> Optional[FolderMonitorController]:
@@ -536,6 +545,95 @@ def build_application() -> int:
             payload["compatibility"] = compatibility_report.to_dict()
         return payload
 
+    tray_controller = TrayController()
+    license_guard = LicenseSessionGuard(validate_license_use_case)
+
+    def _sync_tray_with_setting(enabled: bool) -> None:
+        """Show/hide tray and adjust quit-on-last-window when the setting changes."""
+        main_window.set_minimize_to_tray_on_close(enabled)
+        if enabled:
+            # Keep the process alive when the main window is hidden to tray.
+            app.setQuitOnLastWindowClosed(False)
+            if not tray_controller.ensure_shown():
+                message_box.warning(
+                    main_window,
+                    "System Tray Unavailable",
+                    "This desktop does not expose a system tray, so TileVision AI "
+                    "cannot stay running in the background after the window is closed.\n\n"
+                    "Closing the window will still quit the app on this machine.",
+                )
+                settings.minimize_to_tray_on_close = False
+                main_window.set_minimize_to_tray_on_close(False)
+                app.setQuitOnLastWindowClosed(True)
+        else:
+            tray_controller.hide()
+            app.setQuitOnLastWindowClosed(True)
+
+    def _on_tray_open() -> None:
+        main_window.restore_from_tray()
+
+    def _on_tray_quit() -> None:
+        logger.info("Quit requested from system tray.")
+        main_window.request_quit()
+        app.quit()
+
+    tray_controller.open_requested.connect(_on_tray_open)
+    tray_controller.quit_requested.connect(_on_tray_quit)
+
+    def _handle_license_expiry_cutover() -> None:
+        """
+        Mid-session expiry: stop monitoring/notifications, drop tray, and force
+        the same license-only screen used at startup.
+        """
+        nonlocal auto_index_notifications_enabled, folder_monitor, license_details
+
+        logger.warning("License expired or invalidated mid-session — starting cutover.")
+        auto_index_notifications_enabled = False
+
+        if folder_monitor is not None:
+            try:
+                folder_monitor.stop_monitoring()
+                logger.info("Folder monitoring stopped due to license cutover.")
+            except Exception:
+                logger.exception("Failed to stop folder monitor during license cutover")
+
+        tray_controller.hide()
+        app.setQuitOnLastWindowClosed(False)
+
+        main_window.cancel_active_indexing_for_license_cutover()
+        main_window.hide()
+
+        renewed = show_license_activation(
+            validate_license_use_case,
+            theme=settings.theme,
+            show_back=True,
+            parent=None,
+        )
+        if renewed is None:
+            logger.warning("License not renewed after mid-session expiry — exiting.")
+            message_box.critical(
+                None,
+                "License Required",
+                "TileVision AI requires a valid license key to run.\n\n"
+                "Please contact your supplier for a trial or full license key.\n\n"
+                "The application will now close.",
+            )
+            tray_controller.destroy()
+            app.quit()
+            return
+
+        license_details = renewed
+        auto_index_notifications_enabled = True
+        license_guard.mark_cutover_complete()
+        license_guard.start()
+
+        main_window.restore_from_tray()
+        _sync_tray_with_setting(settings.minimize_to_tray_on_close)
+        _restart_folder_monitor()
+        logger.info("License renewed mid-session — main window and monitoring restored.")
+
+    license_guard.license_invalidated.connect(_handle_license_expiry_cutover)
+
     main_window = MainWindow(
         indexing_viewmodel=indexing_viewmodel,
         search_viewmodel=search_viewmodel,
@@ -552,15 +650,22 @@ def build_application() -> int:
         gpu_info_provider=lambda: embedder.runtime_info,
         diagnostics_info_provider=_diagnostics_info,
         on_watch_folders_changed=_restart_folder_monitor,
+        on_minimize_to_tray_changed=_sync_tray_with_setting,
         on_check_updates=lambda: update_controller.check_now(main_window),
         vector_index=vector_index,
     )
     auto_index_notifier.catalog_updated.connect(main_window.handle_auto_index_event)
+
+    # Apply tray setting after MainWindow exists (callback references main_window).
+    if settings.minimize_to_tray_on_close:
+        _sync_tray_with_setting(True)
+
     main_window.show()
     from src.ai.query_warmup import start_background_query_warmup
 
     start_background_query_warmup(feature_extractor, vector_index=vector_index)
     update_controller.schedule_startup_check(main_window)
+    license_guard.start()
 
     if compatibility_report is not None and compatibility_report.requires_rebuild:
         summary = compatibility_report.summary_message()
@@ -574,6 +679,9 @@ def build_application() -> int:
 
     # ── 11. Run Qt Event Loop ─────────────────────────────────────────────────
     exit_code = app.exec()
+
+    license_guard.stop()
+    tray_controller.destroy()
 
     if folder_monitor is not None:
         logger.info("Stopping folder monitor before shutdown...")

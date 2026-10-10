@@ -143,9 +143,30 @@ def pytest_configure():
     _configure_faiss_runtime()
 
 
-# NOTE: Do not os._exit from pytest_sessionfinish on Windows. With PySide
-# loaded, that path can itself access-violate (0xC0000005). CI uses
-# scripts/run_ci_pytest.py to recover green junit after crash exit codes.
+@pytest.hookimpl(trylast=True)
+def pytest_sessionfinish(session, exitstatus):
+    """
+    Skip native Qt/PySide teardown after a green suite on Linux/macOS.
+
+    Under QT_QPA_PLATFORM=offscreen, interpreter shutdown with PySide6 loaded
+    can SIGSEGV after every test passed (ubuntu-latest / macos-15 CI). Hard
+    exit here (trylast — after junitxml/terminal summary hooks) avoids that
+    destructor path while still recording a green junit report.
+
+    Do NOT os._exit on Windows — with PySide loaded that path can itself
+    access-violate (0xC0000005). Windows recovery stays in
+    scripts/run_ci_pytest.py (green junit + crash exit → success).
+    """
+    import os
+
+    if sys.platform == "win32":
+        return
+    if int(exitstatus) != 0:
+        return
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
+
 
 def simulate_platform(monkeypatch, platform: str, *, machine: str | None = None) -> None:
     """Pretend the app runs on win32 or darwin (for cross-platform UI tests)."""

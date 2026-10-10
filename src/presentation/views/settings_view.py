@@ -71,6 +71,7 @@ class SettingsView(QWidget):
         indexed_folders_provider: Optional[Callable[[], List[str]]] = None,
         on_catalog_changed: Optional[Callable[[], None]] = None,
         on_watch_folders_changed: Optional[Callable[[], None]] = None,
+        on_minimize_to_tray_changed: Optional[Callable[[bool], None]] = None,
         on_check_updates: Optional[Callable[[], None]] = None,
         feature_version_provider: Optional[Callable[[], FeatureVersionStatus]] = None,
         gpu_info_provider: Optional[Callable[[], GpuRuntimeInfo]] = None,
@@ -111,6 +112,7 @@ class SettingsView(QWidget):
         self._indexed_folders_provider = indexed_folders_provider
         self._on_catalog_changed = on_catalog_changed
         self._on_watch_folders_changed = on_watch_folders_changed
+        self._on_minimize_to_tray_changed = on_minimize_to_tray_changed
         self._on_check_updates = on_check_updates
         self._feature_version_provider = feature_version_provider
         self._gpu_info_provider = gpu_info_provider
@@ -338,6 +340,21 @@ class SettingsView(QWidget):
         note.setObjectName("SectionNote")
         note.setWordWrap(True)
         layout.addWidget(note)
+
+        self._minimize_to_tray_checkbox = QCheckBox(
+            "Keep running in the system tray when I close the window "
+            "(background folder monitoring)"
+        )
+        self._minimize_to_tray_checkbox.setChecked(
+            bool(getattr(self._settings, "minimize_to_tray_on_close", False))
+        )
+        self._minimize_to_tray_checkbox.setToolTip(
+            "When enabled, closing the window hides TileVision AI to the system tray "
+            "instead of quitting, so watched folders keep being monitored. "
+            "Use Quit from the tray menu for a full exit. Default is off."
+        )
+        self._minimize_to_tray_checkbox.toggled.connect(self._on_minimize_to_tray_toggled)
+        layout.addWidget(self._minimize_to_tray_checkbox)
 
         self._watchdog_warning = QLabel(
             "Folder monitoring requires the watchdog package, which is not installed. "
@@ -684,6 +701,12 @@ class SettingsView(QWidget):
 
     def _on_auto_update_toggled(self, enabled: bool) -> None:
         self._settings.check_for_updates = enabled
+
+    def _on_minimize_to_tray_toggled(self, enabled: bool) -> None:
+        self._settings.minimize_to_tray_on_close = enabled
+        if self._on_minimize_to_tray_changed is not None:
+            self._on_minimize_to_tray_changed(enabled)
+        logger.info("minimize_to_tray_on_close set to %s", enabled)
 
     # ── Handlers: Watched Folders ────────────────────────────────────────
 
