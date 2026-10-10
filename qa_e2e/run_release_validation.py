@@ -30,7 +30,14 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+# When validating a packaged .app, product modules must come from the frozen
+# bundle (sys._MEIPASS). Only append the checkout root so `qa_e2e` resolves;
+# never prepend it (that would shadow packaged `src` with source-tree `src`).
+if getattr(sys, "frozen", False) or os.environ.get("TILEVISION_QA_PACKAGED_APP") == "1":
+    if str(ROOT) not in sys.path:
+        sys.path.append(str(ROOT))
+else:
+    sys.path.insert(0, str(ROOT))
 
 
 def _apply_profile(profile: str) -> None:
@@ -90,6 +97,8 @@ def main() -> int:
     print(f" Profile : {args.profile}")
     print(f" Out     : {out}")
     print(f" Qt      : {os.environ.get('QT_QPA_PLATFORM')}")
+    print(f" Packaged: {os.environ.get('TILEVISION_QA_PACKAGED_APP', '0')}")
+    print(f" Frozen  : {bool(getattr(sys, 'frozen', False))}")
     print(" Policy  : PASS only if ALL gates and ALL scenarios pass")
     print(" Mocks   : FORBIDDEN")
     print("=" * 72)

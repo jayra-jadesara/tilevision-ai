@@ -1,0 +1,217 @@
+# Packaged-app Release Validation
+# Verify the DMG-installed .app (customer install path), NOT the source tree.
+#
+# Flow per arch:
+#   1. Build TileVision AI.app + professional DMG (same packaging as release)
+#   2. Mount DMG → install to /Applications/TileVision AI.app
+#   3. Launch INSTALLED binary --verify-bundle
+#   4. Launch INSTALLED binary --release-validation (S01–S30)
+#   5. FAIL the job unless verdict == PASS
+#
+# Drivers (qa_e2e) come from the checkout via TILEVISION_QA_SUITE_DIR.
+# Product code + models + native libs come from the installed .app.
+
+name: Packaged App Release Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "pr (faster) or full"
+        required: true
+        default: pr
+        type: choice
+        options: [pr, full]
+  pull_request:
+    paths:
+      - "packaging/**"
+      - "scripts/build_mac.sh"
+      - "scripts/create_mac_dmg.sh"
+      - "scripts/validate_installed_mac_dmg.sh"
+      - "scripts/smoke_launch_mac_app.sh"
+      - "main.py"
+      - "qa_e2e/**"
+      - ".github/workflows/packaged_app_release_validation.yml"
+      - ".github/workflows/build.yml"
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: packaged-rv-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  packaged-validation:
+    name: Packaged RV (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            arch: x64
+            verify: x86_64
+            dmg: TileVision-AI-Intel.dmg
+          - os: macos-15
+            arch: arm64
+            verify: arm64
+            dmg: TileVision-AI-AppleSilicon.dmg
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate build config
+        run: python3 scripts/validate_ci_build.py
+
+      - name: Set up Python 3.12
+        id: setup-python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: ${{ matrix.arch == 'x64' && 'x64' || 'arm64' }}
+
+      - name: Cache DINOv2 model weights
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: model_weights/dinov2-large
+          key: dinov2-large-v2-${{ hashFiles('scripts/download_dinov2_model.py') }}
+
+      - name: Install Mac build dependencies
+        shell: bash
+        env:
+          PYTHON_SETUP_PATH: ${{ steps.setup-python.outputs.python-path }}
+        run: |
+          set -euo pipefail
+          source scripts/install_mac_deps.sh "${{ matrix.arch }}"
+          echo "MACOS_BUILD_ARCH=$MACOS_BUILD_ARCH" >> "$GITHUB_ENV"
+          echo "MACOS_PYTHON_PATH=$MACOS_PYTHON_PATH" >> "$GITHUB_ENV"
+          "$MACOS_PYTHON_PATH" -m pip install --no-cache-dir pytest psutil reportlab
+
+      - name: Download DINOv2 weights
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: bash scripts/macos_build_python.sh scripts/download_dinov2_model.py
+
+      - name: Verify DINOv2 weights
+        run: test -f model_weights/dinov2-large/config.json
+
+      - name: Cache ONNX SAM2 weights
+        id: sam2-cache
+        uses: actions/cache@v4
+        with:
+          path: model_weights/sam2.1-hiera-tiny-onnx
+          key: sam2-onnx-tiny-v1-${{ hashFiles('scripts/download_sam2_onnx_model.py') }}
+
+      - name: Download ONNX SAM2 weights
+        if: steps.sam2-cache.outputs.cache-hit != 'true'
+        run: bash scripts/macos_build_python.sh scripts/download_sam2_onnx_model.py
+
+      - name: Verify ONNX SAM2 weights
+        run: test -f model_weights/sam2.1-hiera-tiny-onnx/sam2.1_hiera_tiny.encoder.onnx
+
+      - name: Free disk space
+        run: bash scripts/free_mac_runner_disk.sh
+
+      - name: Build packaged .app (PyInstaller)
+        shell: bash
+        env:
+          TILEVISION_OFFLINE_MODEL: "1"
+          TILEVISION_BUNDLE_SAM2: "auto"
+          MACOS_BUILD_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          bash scripts/verify_mac_native_libs.sh "${{ matrix.verify }}"
+          rm -rf build "dist/TileVisionAI" "dist/TileVision AI.app"
+          bash scripts/macos_build_python.sh -m PyInstaller packaging/tilevision_mac.spec --clean --noconfirm
+          bash scripts/verify_frozen_mac_app.sh "dist/TileVision AI.app" "${{ matrix.verify }}"
+
+      - name: Create professional DMG
+        run: |
+          set -euo pipefail
+          # Drop PyInstaller work dirs before allocating the RW DMG image.
+          rm -rf build dist/TileVisionAI
+          bash scripts/free_mac_runner_disk.sh
+          bash scripts/create_mac_dmg.sh "dist/TileVision AI.app" "dist/${{ matrix.dmg }}" "TileVision AI"
+          ls -lh "dist/${{ matrix.dmg }}"
+          # Keep only the customer DMG on disk for the install step.
+          rm -rf "dist/TileVision AI.app" build dist/TileVisionAI
+          df -h .
+
+      - name: Resolve validation profile
+        id: profile
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "profile=${{ github.event.inputs.profile }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            echo "profile=full" >> "$GITHUB_OUTPUT"
+          else
+            echo "profile=pr" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install from DMG → /Applications and run packaged Release Validation
+        id: packaged-rv
+        shell: bash
+        env:
+          TILEVISION_RELEASE_PROFILE: ${{ steps.profile.outputs.profile }}
+          TILEVISION_QA_TILES: "4"
+          TILEVISION_QA_INDEX_TIMEOUT: "3600"
+          TILEVISION_QA_SEARCH_STALL_S: "180"
+          TILEVISION_RELEASE_SEARCH_TIMEOUT: "360"
+          QT_QPA_PLATFORM: offscreen
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          VECLIB_MAXIMUM_THREADS: "1"
+          KMP_DUPLICATE_LIB_OK: "TRUE"
+        run: |
+          set -euo pipefail
+          chmod +x scripts/validate_installed_mac_dmg.sh
+          OUT="${{ github.workspace }}/qa_e2e/artifacts/packaged_rv_${{ matrix.verify }}"
+          rm -rf "$OUT"
+          bash scripts/validate_installed_mac_dmg.sh \
+            "dist/${{ matrix.dmg }}" \
+            "${{ github.workspace }}" \
+            "$OUT"
+
+      - name: Enforce packaged verdict
+        if: always()
+        shell: bash
+        env:
+          SUMMARY_PATH: qa_e2e/artifacts/packaged_rv_${{ matrix.verify }}/release_summary.json
+        run: |
+          set -euo pipefail
+          if [ ! -f "$SUMMARY_PATH" ]; then
+            echo "Missing packaged release_summary.json — FAIL"
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          p = Path(os.environ["SUMMARY_PATH"])
+          data = json.loads(p.read_text(encoding="utf-8"))
+          print(json.dumps(data, indent=2))
+          ok = (
+              data.get("verdict") == "PASS"
+              and bool(data.get("frozen"))
+              and bool(data.get("packaged_app"))
+          )
+          if not ok:
+              print(
+                  "FAIL: packaged ship gate requires verdict=PASS, frozen=true, packaged_app=true",
+                  file=sys.stderr,
+              )
+          sys.exit(0 if ok else 1)
+          PY
+
+      - name: Upload packaged validation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: packaged-rv-${{ matrix.verify }}
+          path: |
+            qa_e2e/artifacts/packaged_rv_${{ matrix.verify }}/
+            dist/${{ matrix.dmg }}
+          if-no-files-found: warn
+          retention-days: 30

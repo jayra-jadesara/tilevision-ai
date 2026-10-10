@@ -387,16 +387,24 @@ def _finalize(
     (Path(out_dir) / "release_summary.json").write_text(
         __import__("json").dumps(
             {
-                k: payload[k]
-                for k in (
-                    "verdict",
-                    "duration_s",
-                    "gates_passed",
-                    "gates_total",
-                    "scenarios_passed",
-                    "scenarios_total",
-                    "reports",
-                )
+                **{
+                    k: payload[k]
+                    for k in (
+                        "verdict",
+                        "duration_s",
+                        "gates_passed",
+                        "gates_total",
+                        "scenarios_passed",
+                        "scenarios_total",
+                        "reports",
+                    )
+                },
+                "packaged_app": bool(
+                    getattr(__import__("sys"), "frozen", False)
+                    or __import__("os").environ.get("TILEVISION_QA_PACKAGED_APP") == "1"
+                ),
+                "frozen": bool(getattr(__import__("sys"), "frozen", False)),
+                "executable": __import__("sys").executable,
             },
             indent=2,
         ),
