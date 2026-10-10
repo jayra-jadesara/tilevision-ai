@@ -65,7 +65,7 @@ def _sample_payload() -> dict:
         "why_heading": "Why showrooms choose TileVision AI",
         "why_points": ["Faster matching.", "Fewer wrong tiles."],
         "vendor": {
-            "name": "JD Software",
+            "name": "Adesara Tech",
             "email": "jayrajadesara@gmail.com",
             "phone": "(+91) 88662 77767",
             "phone_display": "Mobile / WhatsApp: (+91) 88662 77767",

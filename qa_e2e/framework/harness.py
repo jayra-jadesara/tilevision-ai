@@ -128,7 +128,7 @@ def launch_customer_app(
 
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("TileVision AI")
-    app.setOrganizationName("JD Software")
+    app.setOrganizationName("Adesara Tech")
     app.setApplicationVersion(APP_VERSION)
 
     # Headless CI: never block forever on customer QMessageBox dialogs.

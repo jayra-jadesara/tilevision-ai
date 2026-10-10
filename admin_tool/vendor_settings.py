@@ -100,9 +100,22 @@ def ensure_github_defaults() -> None:
     sanitize_stored_github_token()
 
 
+# Plan labels are display names on the quote PDF (row identity stays 1y/2y/…).
+# Seed a fixed sensible set — not only "whatever was typed before".
 _DEFAULT_PRICING_DROPDOWNS: dict[str, list[str]] = {
-    "plan_labels": ["1 Year", "2 Year", "3 Year", "4 Year", "Lifetime"],
-    "per_year": ["38000", "34200", "32300", "30400", "One-time"],
+    "plan_labels": [
+        "1 Year",
+        "2 Year",
+        "3 Year",
+        "4 Year",
+        "Lifetime",
+        "1 Year License",
+        "2 Year License",
+        "3 Year License",
+        "4 Year License",
+        "Lifetime License",
+    ],
+    # "per_year" is computed from price ÷ plan duration — not a dropdown.
     "discount_notes": ["-", "5% off", "10% off", "15% off", "20% off", "Best for long-term"],
     "badges": ["", "Best value", "Popular", "Limited offer"],
 }

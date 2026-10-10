@@ -47,7 +47,7 @@ logger = logging.getLogger("tilevision.licensing.validator")
 #   3. Keep the private key (.pem file) securely offline — never commit it.
 #   4. Build the application: the public key is baked in; private key stays out.
 #
-# Production vendor public key (JD Software). Matching private key lives in
+# Production vendor public key (Adesara Tech). Matching private key lives in
 # ~/.tilevision_ai_vendor/vendor_private_key.pem — never commit the private key.
 # For local dev without the vendor folder, use admin_tool or dev_tools/generate_license.py
 # with a test keypair and pass public_key_pem= to LicenseValidator.

@@ -12,11 +12,13 @@ from typing import Any, Optional
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -42,7 +44,9 @@ from github_pricing_publish import GitHubPublishError, publish_prices_to_github
 from pricing_manager import (
     apply_editable_fields,
     backup_current,
+    compute_effective_per_year,
     fetch_live_prices,
+    format_effective_per_year_display,
     load_template,
     plan_row_from_dict,
     plans_to_publish_rows,
@@ -56,6 +60,11 @@ from vendor_settings import (
 )
 
 _PLAN_IDS = ("1y", "2y", "3y", "4y", "lifetime")
+_COL_PLAN = 0
+_COL_PRICE = 1
+_COL_PER_YEAR = 2
+_COL_DISCOUNT = 3
+_COL_BADGE = 4
 
 
 class _GitHubTokenDialog(QDialog):
@@ -253,16 +262,32 @@ class PricingTab(QWidget):
         layout = QVBoxLayout(box)
         self._plans_table = QTableWidget(0, 5)
         self._plans_table.setHorizontalHeaderLabels(
-            ["Plan", "Price (INR)", "Per year", "Discount note", "Badge"]
+            ["Plan label", "Price (INR)", "Per year", "Discount note", "Badge"]
         )
         header = self._plans_table.horizontalHeader()
-        header.setStretchLastSection(True)
+        header.setSectionResizeMode(_COL_PLAN, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(_COL_PRICE, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(_COL_PER_YEAR, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(_COL_DISCOUNT, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(_COL_BADGE, QHeaderView.ResizeMode.Stretch)
         self._plans_table.verticalHeader().setVisible(False)
         self._plans_table.verticalHeader().setDefaultSectionSize(40)
         self._plans_table.setMinimumHeight(240)
+        self._plans_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self._plans_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.DoubleClicked
+            | QAbstractItemView.EditTrigger.EditKeyPressed
+            | QAbstractItemView.EditTrigger.SelectedClicked
+        )
+        self._plans_table.itemChanged.connect(self._on_plan_item_changed)
         layout.addWidget(self._plans_table)
         hint = QLabel(
-            "Click a cell to open the dropdown. Pick a value or type a new one and press Enter."
+            "Plan label is the name shown on the quote PDF (row identity stays "
+            "1y / 2y / 3y / 4y / lifetime). Per year is calculated automatically "
+            "from Price ÷ years (Lifetime → One-time). Discount and Badge use "
+            "dropdowns — pick a value or type a new one and press Enter."
         )
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
@@ -271,6 +296,11 @@ class PricingTab(QWidget):
 
     def _set_status(self, message: str) -> None:
         self._status.setText(message)
+
+    def showEvent(self, event) -> None:  # noqa: N802 — Qt override
+        """Refresh GitHub status whenever the Pricing page is shown."""
+        super().showEvent(event)
+        self._refresh_github_status()
 
     def _on_connect_github(self) -> None:
         cli_token = try_github_cli_token()
@@ -351,21 +381,23 @@ class PricingTab(QWidget):
         options = get_pricing_dropdown_options()
         plans = data.get("plans") or []
         by_id = {str(p.get("id")): p for p in plans if isinstance(p, dict)}
+        self._plans_table.blockSignals(True)
         self._plans_table.setRowCount(len(_PLAN_IDS))
         for row, plan_id in enumerate(_PLAN_IDS):
             plan = by_id.get(plan_id, {"id": plan_id, "label": plan_id, "price": 0})
             normalized = plan_row_from_dict(plan)
-            per_year = normalized.get("effective_label") or normalized.get("effective_per_year")
             badge = normalized.get("badge") or ""
 
             price_item = QTableWidgetItem(str(normalized["price"]))
             price_item.setTextAlignment(int(Qt.AlignmentFlag.AlignVCenter))
-            self._plans_table.setItem(row, 1, price_item)
+            self._plans_table.setItem(row, _COL_PRICE, price_item)
+            self._set_per_year_cell(row, plan_id, int(normalized["price"]))
 
+            # Plan label: cosmetic PDF name; seeded with a fixed sensible set.
             attach_table_combo(
                 self._plans_table,
                 row,
-                0,
+                _COL_PLAN,
                 options["plan_labels"],
                 str(normalized["label"]),
                 on_remember=lambda v, c="plan_labels": remember_pricing_dropdown_value(c, v),
@@ -373,15 +405,7 @@ class PricingTab(QWidget):
             attach_table_combo(
                 self._plans_table,
                 row,
-                2,
-                [str(v) for v in options["per_year"]],
-                str(per_year or ""),
-                on_remember=lambda v, c="per_year": remember_pricing_dropdown_value(c, v),
-            )
-            attach_table_combo(
-                self._plans_table,
-                row,
-                3,
+                _COL_DISCOUNT,
                 options["discount_notes"],
                 str(normalized["discount_note"]),
                 on_remember=lambda v, c="discount_notes": remember_pricing_dropdown_value(c, v),
@@ -389,12 +413,42 @@ class PricingTab(QWidget):
             attach_table_combo(
                 self._plans_table,
                 row,
-                4,
+                _COL_BADGE,
                 options["badges"],
                 str(badge),
                 allow_none=True,
                 on_remember=lambda v, c="badges": remember_pricing_dropdown_value(c, v),
             )
+        self._plans_table.blockSignals(False)
+
+    def _set_per_year_cell(self, row: int, plan_id: str, price: int) -> None:
+        """Read-only auto-calculated Per year cell (not a dropdown)."""
+        text = format_effective_per_year_display(plan_id, price)
+        item = QTableWidgetItem(text)
+        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        item.setTextAlignment(int(Qt.AlignmentFlag.AlignVCenter))
+        item.setToolTip(
+            "Calculated automatically from Price ÷ plan years "
+            "(Lifetime stays One-time)."
+        )
+        # Clear any leftover combo from older builds.
+        self._plans_table.setCellWidget(row, _COL_PER_YEAR, None)
+        self._plans_table.setItem(row, _COL_PER_YEAR, item)
+
+    def _on_plan_item_changed(self, item: QTableWidgetItem) -> None:
+        if item is None or item.column() != _COL_PRICE:
+            return
+        row = item.row()
+        if row < 0 or row >= len(_PLAN_IDS):
+            return
+        plan_id = _PLAN_IDS[row]
+        try:
+            price = int(round(float(item.text().strip().replace(",", "") or "0")))
+        except ValueError:
+            return
+        self._plans_table.blockSignals(True)
+        self._set_per_year_cell(row, plan_id, price)
+        self._plans_table.blockSignals(False)
 
     def _cell_combo_text(self, row: int, column: int, *, allow_none: bool = False) -> str:
         widget = self._plans_table.cellWidget(row, column)
@@ -408,12 +462,11 @@ class PricingTab(QWidget):
     def _collect_plans_from_table(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for row, plan_id in enumerate(_PLAN_IDS):
-            label = self._cell_combo_text(row, 0) or plan_id
-            price_item = self._plans_table.item(row, 1)
+            label = self._cell_combo_text(row, _COL_PLAN) or plan_id
+            price_item = self._plans_table.item(row, _COL_PRICE)
             price_text = price_item.text().strip() if price_item else "0"
-            per_year_text = self._cell_combo_text(row, 2)
-            discount = self._cell_combo_text(row, 3) or "-"
-            badge_raw = self._cell_combo_text(row, 4, allow_none=True)
+            discount = self._cell_combo_text(row, _COL_DISCOUNT) or "-"
+            badge_raw = self._cell_combo_text(row, _COL_BADGE, allow_none=True)
             badge = badge_raw or None
 
             try:
@@ -421,6 +474,7 @@ class PricingTab(QWidget):
             except ValueError as exc:
                 raise PricingQuoteError(f"Invalid price for {label}: {price_text}") from exc
 
+            per_year, eff_label = compute_effective_per_year(plan_id, price)
             plan: dict[str, Any] = {
                 "id": plan_id,
                 "label": label,
@@ -428,18 +482,11 @@ class PricingTab(QWidget):
                 "discount_note": discount or "-",
                 "badge": badge,
             }
-            if plan_id == "lifetime" or per_year_text.lower() in {"one-time", "onetime", "once"}:
-                plan["effective_label"] = per_year_text or "One-time"
+            if eff_label:
+                plan["effective_label"] = eff_label
                 plan["effective_per_year"] = None
-            elif per_year_text:
-                try:
-                    plan["effective_per_year"] = int(
-                        round(float(per_year_text.replace(",", "")))
-                    )
-                except ValueError as exc:
-                    raise PricingQuoteError(
-                        f"Invalid per-year value for {label}: {per_year_text}"
-                    ) from exc
+            elif per_year is not None:
+                plan["effective_per_year"] = per_year
             rows.append(plan)
         return plans_to_publish_rows(rows)
 
@@ -460,6 +507,9 @@ class PricingTab(QWidget):
         )
 
     def _on_save(self) -> None:
+        # Refresh status first so a stale "connected" label cannot hide a
+        # missing/expired token when the user clicks Save.
+        self._refresh_github_status()
         ok, _ = connection_status()
         if not ok:
             answer = QMessageBox.question(
@@ -473,6 +523,15 @@ class PricingTab(QWidget):
             ok, _ = connection_status()
             if not ok:
                 return
+
+        if not self._vendor_name.text().strip():
+            QMessageBox.warning(
+                self,
+                "Validation failed",
+                "Company name is required before saving pricing.",
+            )
+            self._vendor_name.setFocus()
+            return
 
         try:
             data = self._collect_payload()

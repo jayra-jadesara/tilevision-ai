@@ -8,6 +8,7 @@ content-only screenshots (no nested sidebar).
 from __future__ import annotations
 
 import logging
+from datetime import date
 from pathlib import Path
 from typing import List, NamedTuple, Optional
 
@@ -30,7 +31,7 @@ logger = logging.getLogger("tilevision.presentation.views.help_view")
 _RESOURCES_DIR = Path(__file__).resolve().parents[2] / "resources"
 _LOGO_SMALL_PATH = _RESOURCES_DIR / "logo_small.png"
 
-_COMPANY_NAME = "JD Software"
+_COMPANY_NAME = "Adesara Tech"
 _CONTACT_NUMBER = "88662 77767"
 
 # Display screenshots near full content width; render at width * max(dpr, 2).
@@ -257,11 +258,19 @@ class HelpView(QWidget):
             logo_label.setPixmap(scaled)
             layout.addWidget(logo_label)
 
+        credit_block = QVBoxLayout()
+        credit_block.setSpacing(2)
         credit_label = QLabel(
             f"TileVision AI — made by {_COMPANY_NAME}  •  {_CONTACT_NUMBER}"
         )
         credit_label.setObjectName("CreditLabel")
-        layout.addWidget(credit_label)
+        copyright_label = QLabel(
+            f"© {date.today().year} {_COMPANY_NAME}. All rights reserved."
+        )
+        copyright_label.setObjectName("CopyrightLabel")
+        credit_block.addWidget(credit_label)
+        credit_block.addWidget(copyright_label)
+        layout.addLayout(credit_block)
         layout.addStretch()
         return footer
 
@@ -316,5 +325,6 @@ class HelpView(QWidget):
             }}
             #Footer {{ border-top: 1px solid {p['border']}; margin-top: 2px; }}
             #CreditLabel {{ color: {p['text_muted']}; font-size: 12px; }}
+            #CopyrightLabel {{ color: {p['text_faint']}; font-size: 11px; }}
             """
         )
