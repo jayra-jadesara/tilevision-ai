@@ -219,8 +219,10 @@ def test_mac_search_page_controls(mac_main_window):
     window._navigate(1)
     view = window._search_view
     assert view._drop_zone is not None
-    assert view._export_button.isEnabled()
+    # Export stays disabled until a search returns results (no empty export).
+    assert not view._export_button.isEnabled()
     assert view._crop_button is not None  # enabled after user picks an image
+    assert not view._crop_button.isEnabled()
     assert view._auto_crop_button is not None
     assert view._precise_crop_button is not None
     assert view._results_table is not None
