@@ -10,7 +10,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from PySide6.QtWidgets import QApplication, QFrame, QHeaderView
+from PySide6.QtWidgets import QApplication, QFrame, QHeaderView, QWidget
 
 from src.core.models import SearchResult, TileImage
 from src.presentation.views.search_view import (
@@ -186,10 +186,45 @@ def test_action_buttons_are_grouped_with_separators(search_view):
     assert len(separators) == 3
 
     clear = search_view._clear_button
-    assert clear.objectName() == "ClearActionButton"
+    assert clear.objectName() == "SecondaryButton"
     assert search_view._export_button.objectName() == "SecondaryButton"
     assert search_view._crop_button.objectName() == "SecondaryButton"
     assert search_view._history_button.objectName() == "SecondaryButton"
+
+
+def test_action_column_is_compact(search_view):
+    col = search_view.findChild(QWidget, "SearchActionColumn")
+    assert col is not None
+    assert col.width() <= 168
+    assert col.maximumWidth() <= 168
+
+
+def test_export_disabled_without_query_or_results(search_view):
+    search_view._current_query_image_path = None
+    search_view._current_results = []
+    search_view._refresh_action_buttons()
+    assert not search_view._export_button.isEnabled()
+    assert not search_view._clear_button.isEnabled()
+    assert not search_view._crop_button.isEnabled()
+
+
+def test_history_rerun_enables_crop_and_clear(search_view, tmp_path):
+    img = tmp_path / "history.jpg"
+    img.write_bytes(b"x")
+    search_view._current_results = []
+    search_view._refresh_action_buttons()
+    # Simulate ViewModel.repeat_search → query_image_selected
+    search_view._on_query_image_selected(str(img))
+    assert search_view._current_query_image_path == str(img)
+    assert search_view._clear_button.isEnabled()
+    assert search_view._crop_button.isEnabled()
+    assert search_view._auto_crop_button.isEnabled()
+    assert search_view._precise_crop_button.isEnabled()
+    # Export still needs results
+    assert not search_view._export_button.isEnabled()
+    search_view._current_results = [_tile(str(img))]
+    search_view._refresh_action_buttons()
+    assert search_view._export_button.isEnabled()
 
 
 def test_hover_qss_sets_text_color_in_both_themes():
