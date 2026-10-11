@@ -178,11 +178,18 @@ def build_application() -> int:
     logger.info("Checking startup license status...")
     license_details = validate_license_use_case.verify_existing_license()
 
+    def _record_activity(activity_type: str, message: str) -> None:
+        try:
+            activity_log_repository.record_activity(activity_type, message)
+        except Exception:
+            logger.exception("Failed to record activity: %s", message)
+
     if license_details is None:
         license_details = show_license_activation(
             validate_license_use_case,
             theme=settings.theme,
             show_back=True,
+            activity_recorder=_record_activity,
         )
         if license_details is None:
             logger.warning("License activation skipped or failed. Exiting.")
@@ -500,6 +507,28 @@ def build_application() -> int:
         recent_searches=lambda: search_history_repository.get_recent_searches(limit=8),
     )
 
+    def _folders_with_counts():
+        folders = indexed_folder_repository.get_all_folders()
+        counts = image_repository.count_indexed_tiles_by_folders(
+            [f.folder_path for f in folders]
+        )
+        for folder in folders:
+            folder.indexed_image_count = counts.get(folder.folder_path, 0)
+        return folders
+
+    from src.presentation.views.main_window import HistoryActivityProviders
+
+    history_activity_providers = HistoryActivityProviders(
+        search_history_page=lambda limit, offset: search_history_repository.get_recent_searches(
+            limit=limit, offset=offset
+        ),
+        folder_counts=_folders_with_counts,
+        activity_log_page=lambda limit, offset: activity_log_repository.get_recent_activity(
+            limit=limit, offset=offset
+        ),
+        activity_recorder=_record_activity,
+    )
+
     update_controller = UpdateController(settings, theme=settings.theme)
 
     def _diagnostics_info() -> dict:
@@ -588,6 +617,7 @@ def build_application() -> int:
         nonlocal auto_index_notifications_enabled, folder_monitor, license_details
 
         logger.warning("License expired or invalidated mid-session — starting cutover.")
+        _record_activity("license", "License expired — activation required")
         auto_index_notifications_enabled = False
 
         if folder_monitor is not None:
@@ -608,9 +638,11 @@ def build_application() -> int:
             theme=settings.theme,
             show_back=True,
             parent=None,
+            activity_recorder=_record_activity,
         )
         if renewed is None:
             logger.warning("License not renewed after mid-session expiry — exiting.")
+            _record_activity("license", "License not renewed — application closed")
             message_box.critical(
                 None,
                 "License Required",
@@ -643,6 +675,7 @@ def build_application() -> int:
         settings=settings,
         catalog_count_provider=lambda: len(image_repository.get_all()),
         dashboard_providers=dashboard_providers,
+        history_activity_providers=history_activity_providers,
         db_path_provider=lambda: db_context.db_path,
         indexing_use_case=index_images_use_case,
         indexed_folders_provider=lambda: [f.folder_path for f in indexed_folder_repository.get_all_folders()],

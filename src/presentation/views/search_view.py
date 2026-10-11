@@ -453,6 +453,11 @@ class SearchView(QWidget):
         self._history_menu_pending = False
         button_col.addWidget(self._history_button)
 
+        self._view_all_history_button = QPushButton("View full history")
+        self._view_all_history_button.setObjectName("SecondaryButton")
+        self._view_all_history_button.setVisible(False)
+        button_col.addWidget(self._view_all_history_button)
+
         button_col.addStretch()
         layout.addLayout(button_col)
 
@@ -539,6 +544,9 @@ class SearchView(QWidget):
             message_box.critical(self, "Export Failed", str(exc))
             return
 
+        count = len(selected_indices) if selected_indices is not None else len(self._current_results)
+        if hasattr(self._viewmodel, "record_catalogue_export"):
+            self._viewmodel.record_catalogue_export(created, count)
         message_box.information(self, "Export Complete", f"Catalogue saved to:\n{created}")
         
     @Slot(dict)
@@ -842,6 +850,16 @@ class SearchView(QWidget):
         self._progress_bar.setVisible(False)
         self._viewmodel.clear_results()
         
+    def set_view_all_history(self, callback) -> None:
+        """Wire the Search page's 'View full history' button to the History stack page."""
+        self._view_all_history_button.setVisible(callback is not None)
+        if callback is not None:
+            try:
+                self._view_all_history_button.clicked.disconnect()
+            except RuntimeError:
+                pass
+            self._view_all_history_button.clicked.connect(callback)
+
     def _on_history_clicked(self) -> None:
         """Show a popup menu of recent searches (Task C: Search History)."""
         self._history_menu_pending = True
@@ -866,6 +884,10 @@ class SearchView(QWidget):
                 action.triggered.connect(
                     lambda checked=False, path=entry.query_image_path: self._viewmodel.repeat_search(path)
                 )
+        if self._view_all_history_button.isVisible():
+            menu.addSeparator()
+            view_all = menu.addAction("View full history…")
+            view_all.triggered.connect(self._view_all_history_button.click)
         menu.exec(self._history_button.mapToGlobal(self._history_button.rect().bottomLeft()))
 
     @Slot(str)
@@ -1071,9 +1093,12 @@ class SearchView(QWidget):
         if row < 0 or row >= len(self._current_results):
             return
 
+        from src.utils.reveal_file import reveal_action_label, reveal_in_file_manager
+
         menu = QMenu(self)
         open_image_action = menu.addAction("Open Image")
         open_folder_action = menu.addAction("📂  Open Containing Folder")
+        reveal_action = menu.addAction(reveal_action_label())
         copy_path_action = menu.addAction("Copy Path")
 
         chosen = menu.exec(self._results_table.viewport().mapToGlobal(position))
@@ -1081,6 +1106,8 @@ class SearchView(QWidget):
             self._open_image_at_row(row)
         elif chosen == open_folder_action:
             self._open_folder_at_row(row)
+        elif chosen == reveal_action:
+            self._reveal_file_at_row(row)
         elif chosen == copy_path_action:
             self._copy_path_at_row(row)
 
@@ -1109,6 +1136,16 @@ class SearchView(QWidget):
             message_box.warning(self, "Folder Not Found", f"This folder no longer exists:\n{folder}")
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+
+    def _reveal_file_at_row(self, row: int) -> None:
+        from src.utils.reveal_file import reveal_in_file_manager
+
+        if row < 0 or row >= len(self._current_results):
+            return
+        path = self._current_results[row].tile.file_path
+        ok, error = reveal_in_file_manager(path)
+        if not ok:
+            message_box.warning(self, "File Not Found", error)
 
     # ── Styling ──────────────────────────────────────────────────────────
 

@@ -555,6 +555,29 @@ class SQLiteImageRepository(IImageRepository):
             logger.error(f"Failed to fetch all tiles: {e}")
             return []
 
+    def count_indexed_tiles_by_folders(
+        self, folder_paths: List[str]
+    ) -> Dict[str, int]:
+        """Bulk-count indexed tiles under each folder (longest-prefix wins)."""
+        counts = {path: 0 for path in folder_paths}
+        if not folder_paths:
+            return counts
+        ordered = sorted(folder_paths, key=len, reverse=True)
+        query = "SELECT file_path FROM tiles WHERE is_indexed = 1;"
+        try:
+            with self._db.session() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query)
+                for row in cursor.fetchall():
+                    file_path = row["file_path"]
+                    for folder in ordered:
+                        if file_path.startswith(folder):
+                            counts[folder] += 1
+                            break
+        except sqlite3.Error as e:
+            logger.error(f"Failed to count indexed tiles by folder: {e}")
+        return counts
+
     def get_by_ids(self, ids: List[int]) -> List[TileImage]:
         """
         Fetch multiple tile records by their IDs.
@@ -1125,12 +1148,17 @@ class SQLiteSearchHistoryRepository(ISearchHistoryRepository):
         except sqlite3.Error as e:
             logger.error(f"Failed to record search history: {e}")
 
-    def get_recent_searches(self, limit: int = 10) -> List[SearchHistoryEntry]:
-        query = "SELECT * FROM search_history ORDER BY searched_at DESC LIMIT ?;"
+    def get_recent_searches(
+        self, limit: int = 10, offset: int = 0
+    ) -> List[SearchHistoryEntry]:
+        query = (
+            "SELECT * FROM search_history "
+            "ORDER BY searched_at DESC LIMIT ? OFFSET ?;"
+        )
         try:
             with self._db.session() as conn:
                 cursor = conn.cursor()
-                cursor.execute(query, (limit,))
+                cursor.execute(query, (limit, max(0, int(offset))))
                 rows = cursor.fetchall()
                 return [self._row_to_entity(row) for row in rows]
         except sqlite3.Error as e:
@@ -1169,12 +1197,17 @@ class SQLiteActivityLogRepository(IActivityLogRepository):
         except sqlite3.Error as e:
             logger.error(f"Failed to record activity log entry: {e}")
 
-    def get_recent_activity(self, limit: int = 10) -> List[ActivityLogEntry]:
-        query = "SELECT * FROM activity_log ORDER BY created_at DESC LIMIT ?;"
+    def get_recent_activity(
+        self, limit: int = 10, offset: int = 0
+    ) -> List[ActivityLogEntry]:
+        query = (
+            "SELECT * FROM activity_log "
+            "ORDER BY created_at DESC LIMIT ? OFFSET ?;"
+        )
         try:
             with self._db.session() as conn:
                 cursor = conn.cursor()
-                cursor.execute(query, (limit,))
+                cursor.execute(query, (limit, max(0, int(offset))))
                 rows = cursor.fetchall()
                 return [
                     ActivityLogEntry(

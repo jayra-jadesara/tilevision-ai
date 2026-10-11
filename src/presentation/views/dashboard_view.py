@@ -90,6 +90,8 @@ class DashboardView(QWidget):
         on_go_to_search: Optional[Callable[[], None]] = None,
         on_go_to_duplicates: Optional[Callable[[], None]] = None,
         on_go_to_settings: Optional[Callable[[], None]] = None,
+        on_go_to_history: Optional[Callable[[], None]] = None,
+        on_go_to_activity: Optional[Callable[[], None]] = None,
         on_repeat_search: Optional[Callable[[str], None]] = None,
         theme: str = "dark",
         parent: Optional[QWidget] = None,
@@ -109,6 +111,8 @@ class DashboardView(QWidget):
         self._on_go_to_search = on_go_to_search
         self._on_go_to_duplicates = on_go_to_duplicates
         self._on_go_to_settings = on_go_to_settings
+        self._on_go_to_history = on_go_to_history
+        self._on_go_to_activity = on_go_to_activity
         self._on_repeat_search = on_repeat_search
         self._setup_ui()
         self._apply_styles()
@@ -284,9 +288,17 @@ class DashboardView(QWidget):
         panel.setObjectName("ListPanel")
         layout = QVBoxLayout(panel)
 
+        header = QHBoxLayout()
         label = QLabel("Recent Activity")
         label.setObjectName("SectionLabel")
-        layout.addWidget(label)
+        header.addWidget(label)
+        header.addStretch()
+        if self._on_go_to_activity is not None:
+            view_all = QPushButton("View all")
+            view_all.setObjectName("LinkButton")
+            view_all.clicked.connect(self._on_go_to_activity)
+            header.addWidget(view_all)
+        layout.addLayout(header)
 
         self._activity_list_layout = QVBoxLayout()
         self._activity_list_layout.setSpacing(4)
@@ -331,9 +343,17 @@ class DashboardView(QWidget):
         panel.setObjectName("ListPanel")
         layout = QVBoxLayout(panel)
 
+        header = QHBoxLayout()
         label = QLabel("Recent Searches")
         label.setObjectName("SectionLabel")
-        layout.addWidget(label)
+        header.addWidget(label)
+        header.addStretch()
+        if self._on_go_to_history is not None:
+            view_all = QPushButton("View all")
+            view_all.setObjectName("LinkButton")
+            view_all.clicked.connect(self._on_go_to_history)
+            header.addWidget(view_all)
+        layout.addLayout(header)
 
         self._search_list_layout = QVBoxLayout()
         self._search_list_layout.setSpacing(4)
@@ -434,7 +454,18 @@ class DashboardView(QWidget):
             #SearchHistoryRow:hover {{
                 background-color:{p['button_hover']};
             }}
-            #SearchHistoryRow:hover {{ background-color: {p['button_hover']}; }}
+            #LinkButton {{
+                background: transparent;
+                border: none;
+                color: {p['accent_text']};
+                font-size: 12px;
+                font-weight: 600;
+                padding: 2px 4px;
+            }}
+            #LinkButton:hover {{
+                color: {p['accent']};
+                text-decoration: underline;
+            }}
             QLabel {{
                 background: transparent;
             }}

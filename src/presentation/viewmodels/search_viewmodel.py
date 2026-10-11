@@ -598,3 +598,16 @@ class SearchViewModel(QObject):
             )
             return
         self.search_by_image(query_image_path)
+
+    def record_catalogue_export(self, output_path: str, result_count: int) -> None:
+        """Record a successful catalogue/PDF export in the activity log."""
+        if self._activity_repo is None:
+            return
+        try:
+            name = Path(output_path).name
+            self._activity_repo.record_activity(
+                "export",
+                f"Exported catalogue '{name}' — {result_count} tile(s)",
+            )
+        except Exception as e:
+            logger.error(f"Failed to record export activity: {e}")

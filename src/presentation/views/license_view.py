@@ -57,6 +57,7 @@ class LicenseView(QDialog):
         theme: str = "light",
         show_back: bool = True,
         parent: Optional[QWidget] = None,
+        activity_recorder=None,
     ) -> None:
         """
         Initialize the LicenseView dialog.
@@ -66,6 +67,8 @@ class LicenseView(QDialog):
             theme: UI theme ("light" or "dark") matching app settings.
             show_back: When True, show a Back button that closes without activating.
             parent: Optional parent widget.
+            activity_recorder: Optional ``(activity_type, message) -> None``
+                callable for the Activity Log (read-only logging only).
         """
         super().__init__(parent)
         self._use_case = validate_use_case
@@ -73,6 +76,7 @@ class LicenseView(QDialog):
         self._palette = get_palette(self._theme)
         self._show_back = show_back
         self._is_activated = False
+        self._activity_recorder = activity_recorder
 
         self.setWindowTitle("TileVision AI — License Activation")
         self.setFixedSize(560, 580)
@@ -297,6 +301,7 @@ class LicenseView(QDialog):
         if is_valid:
             logger.info("License successfully activated.")
             self._is_activated = True
+            self._record_activity("license", "License activated successfully")
             self._show_status("License activated successfully! Welcome to TileVision AI.", error=False)
             message_box.information(
                 self,
@@ -306,9 +311,18 @@ class LicenseView(QDialog):
             self.accept()
         else:
             logger.warning(f"License key validation failed: {message}")
+            self._record_activity("license", "License activation failed")
             self._show_status(message, error=True)
             self._license_key_edit.selectAll()
             self._license_key_edit.setFocus()
+
+    def _record_activity(self, activity_type: str, message: str) -> None:
+        if self._activity_recorder is None:
+            return
+        try:
+            self._activity_recorder(activity_type, message)
+        except Exception as e:
+            logger.error(f"Failed to record license activity: {e}")
 
     @staticmethod
     def _normalize_license_key(raw: str) -> str:
