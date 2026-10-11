@@ -89,7 +89,12 @@ def test_path_column_has_copy_control(search_view):
     assert isinstance(cell, _PathCellWidget)
     assert cell._copy_btn.toolTip() == "Copy path"
     assert "Click to" in cell._path_label.toolTip()
-    assert search_view._current_results[0].tile.file_path in cell._path_label.toolTip()
+    path = search_view._current_results[0].tile.file_path
+    assert path in cell._path_label.toolTip()
+    # Item text kept for E2E / tooling readers under the cell widget.
+    item = search_view._results_table.item(0, _PATH_COL)
+    assert item is not None
+    assert item.text() == path
 
 
 def test_copy_button_sets_clipboard_and_shows_toast(search_view, qapp):

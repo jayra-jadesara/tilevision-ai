@@ -304,12 +304,18 @@ class UIDriver:
     def visible_result_paths(self) -> List[str]:
         table = self.results_table()
         paths: List[str] = []
-        # Image Path is last column
+        # Image Path is last column (may be a cell widget with copy control).
         path_col = table.columnCount() - 1
         for row in range(table.rowCount()):
+            cell = table.cellWidget(row, path_col)
+            if cell is not None:
+                path = getattr(cell, "_path", None)
+                if path:
+                    paths.append(str(path))
+                    continue
             item = table.item(row, path_col)
-            if item is not None:
-                paths.append(item.text())
+            if item is not None and item.text().strip():
+                paths.append(item.text().strip())
         return paths
 
     def result_count_ui(self) -> int:
@@ -317,7 +323,7 @@ class UIDriver:
 
     def result_paths(self) -> List[str]:
         """UI paths first; fall back to ViewModel results."""
-        paths = self.visible_result_paths()
+        paths = [p for p in self.visible_result_paths() if p]
         if paths:
             return paths
         return [r.tile.file_path for r in self.s.search_viewmodel.last_results]

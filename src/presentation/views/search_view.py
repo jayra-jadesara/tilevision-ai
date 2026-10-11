@@ -1258,9 +1258,9 @@ class SearchView(QWidget):
             preview_item.setToolTip("Preview Tile")
             self._results_table.setItem(row, _PREVIEW_COL, preview_item)
 
-            # Placeholder item so row selection/background still works; the
-            # interactive path + copy control is a cell widget on top.
-            path_item = QTableWidgetItem("")
+            # Keep the path on the item (for selection tooling / E2E readers);
+            # the interactive path + copy control is a cell widget on top.
+            path_item = QTableWidgetItem(tile.file_path)
             path_item.setToolTip(f"{tile.file_path}\n\nClick to {reveal_tip}")
             self._results_table.setItem(row, _PATH_COL, path_item)
             path_cell = _PathCellWidget(
