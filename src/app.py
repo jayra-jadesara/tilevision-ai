@@ -523,8 +523,10 @@ def build_application() -> int:
             limit=limit, offset=offset
         ),
         folder_counts=_folders_with_counts,
-        activity_log_page=lambda limit, offset: activity_log_repository.get_recent_activity(
-            limit=limit, offset=offset
+        activity_log_page=lambda limit, offset, since=None, until=None: (
+            activity_log_repository.get_recent_activity(
+                limit=limit, offset=offset, since=since, until=until
+            )
         ),
         activity_recorder=_record_activity,
     )

@@ -95,3 +95,23 @@ def test_activity_ordered_newest_first(tmp_path):
 
     results = repo.get_recent_activity()
     assert [r.message for r in results] == ["third", "second", "first"]
+
+
+def test_activity_date_filter_since_until(tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    repo = _activity_repo(tmp_path)
+    repo.record_activity("theme", "Theme changed from dark to light")
+    repo.record_activity("settings", "Search results shown set to 20")
+    # All just-inserted rows share "now"; a future until should include them.
+    since = datetime.now(timezone.utc) - timedelta(hours=1)
+    until = datetime.now(timezone.utc) + timedelta(hours=1)
+    results = repo.get_recent_activity(since=since, until=until)
+    assert len(results) == 2
+    assert {r.activity_type for r in results} == {"theme", "settings"}
+
+    # A since far in the future yields nothing.
+    empty = repo.get_recent_activity(
+        since=datetime.now(timezone.utc) + timedelta(days=1)
+    )
+    assert empty == []

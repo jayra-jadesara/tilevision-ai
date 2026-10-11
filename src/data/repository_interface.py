@@ -6,6 +6,7 @@ decoupling of the business logic from data storage implementations.
 """
 
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import TYPE_CHECKING, Dict, List, Optional
 
 from src.ai.feature_versions import FeatureVersionStatus
@@ -375,7 +376,12 @@ class IActivityLogRepository(ABC):
 
     @abstractmethod
     def get_recent_activity(
-        self, limit: int = 10, offset: int = 0
+        self,
+        limit: int = 10,
+        offset: int = 0,
+        *,
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
     ) -> List[ActivityLogEntry]:
         """
         Retrieve the most recent activity events, newest first.
@@ -383,6 +389,8 @@ class IActivityLogRepository(ABC):
         Args:
             limit: Maximum number of entries to return.
             offset: Number of newest rows to skip (for pagination).
+            since: Optional inclusive lower bound on ``created_at``.
+            until: Optional exclusive upper bound on ``created_at``.
 
         Returns:
             A list of ActivityLogEntry, newest first.

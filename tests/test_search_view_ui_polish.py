@@ -10,12 +10,21 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QFrame, QPushButton
 
 from src.core.models import SearchResult, TileImage
-from src.presentation.views.search_view import SearchView, _ResultPreviewPanel
+from src.presentation.views.search_view import (
+    SearchView,
+    _PathCellWidget,
+    _PREVIEW_COL,
+    _PATH_COL,
+    _PREVIEW_COL_WIDTH,
+    _ResultPreviewPanel,
+)
 from src.presentation.viewmodels.search_viewmodel import SearchViewModel
 from src.theme.theme_manager import get_app_stylesheet, get_palette
+from PySide6.QtWidgets import QHeaderView
 
 
 @pytest.fixture()
@@ -53,7 +62,7 @@ def search_view(qapp, tmp_path):
     view.deleteLater()
 
 
-def test_path_column_click_calls_reveal(search_view, monkeypatch):
+def test_path_cell_reveal_is_deferred(search_view, monkeypatch, qapp):
     called = {}
 
     def fake_reveal(path):
@@ -63,17 +72,43 @@ def test_path_column_click_calls_reveal(search_view, monkeypatch):
     monkeypatch.setattr(
         "src.utils.reveal_file.reveal_in_file_manager", fake_reveal
     )
-    search_view._on_table_clicked(0, 6)
-    assert called["path"] == search_view._current_results[0].tile.file_path
+    path = search_view._current_results[0].tile.file_path
+    search_view._reveal_path_deferred(path)
+    assert "path" not in called  # deferred
+    qapp.processEvents()
+    # singleShot(0) may need another tick
+    QTimer.singleShot(0, qapp.quit)
+    qapp.processEvents()
+    # Directly flush deferred reveal:
+    search_view._reveal_path_now(path)
+    assert called["path"] == path
 
 
-def test_path_column_has_link_affordance(search_view):
-    path_item = search_view._results_table.item(0, 6)
-    assert path_item is not None
-    assert path_item.font().underline()
-    tip = path_item.toolTip()
-    assert "Click to" in tip
-    assert search_view._current_results[0].tile.file_path in tip
+def test_path_column_has_copy_control(search_view):
+    cell = search_view._results_table.cellWidget(0, _PATH_COL)
+    assert isinstance(cell, _PathCellWidget)
+    assert cell._copy_btn.toolTip() == "Copy path"
+    assert "Click to" in cell._path_label.toolTip()
+    assert search_view._current_results[0].tile.file_path in cell._path_label.toolTip()
+
+
+def test_copy_button_sets_clipboard_and_shows_toast(search_view, qapp):
+    cell = search_view._results_table.cellWidget(0, _PATH_COL)
+    assert isinstance(cell, _PathCellWidget)
+    path = search_view._current_results[0].tile.file_path
+    cell._handle_copy()
+    assert QApplication.clipboard().text() == path
+    # Parent may not be shown in headless tests — isHidden() reflects our show.
+    assert not cell._copied_label.isHidden()
+    assert cell._copied_label.text() == "Copied"
+    assert cell._fade_anim is not None
+
+
+def test_preview_column_is_narrow_fixed(search_view):
+    header = search_view._results_table.horizontalHeader()
+    assert header.sectionResizeMode(_PREVIEW_COL) == QHeaderView.ResizeMode.Fixed
+    assert search_view._results_table.columnWidth(_PREVIEW_COL) == _PREVIEW_COL_WIDTH
+    assert header.sectionResizeMode(_PATH_COL) == QHeaderView.ResizeMode.Stretch
 
 
 def test_preview_column_still_opens_preview(search_view, monkeypatch):
@@ -83,7 +118,7 @@ def test_preview_column_still_opens_preview(search_view, monkeypatch):
         shown["path"] = result.tile.file_path
 
     monkeypatch.setattr(search_view._preview_panel, "show_result", fake_show)
-    search_view._on_table_clicked(0, 5)
+    search_view._on_table_clicked(0, _PREVIEW_COL)
     assert shown["path"] == search_view._current_results[0].tile.file_path
 
 
@@ -106,6 +141,8 @@ def test_preview_panel_path_link_reveals(qapp, tmp_path, monkeypatch):
         "src.utils.reveal_file.reveal_in_file_manager", fake_reveal
     )
     panel._on_path_link_activated("reveal")
+    # Deferred — invoke the worker directly after scheduling.
+    panel._reveal_path_now(str(img))
     assert called["path"] == str(img)
     panel.close()
 
@@ -120,7 +157,7 @@ def test_preview_panel_reveal_failure_shows_inline_status(qapp, tmp_path, monkey
         "src.utils.reveal_file.reveal_in_file_manager",
         lambda path: (False, "This file no longer exists:\n" + path),
     )
-    panel._on_path_link_activated("reveal")
+    panel._reveal_path_now(str(img))
     assert panel._status_label.isVisible()
     assert "no longer exists" in panel._status_label.text()
     panel.close()

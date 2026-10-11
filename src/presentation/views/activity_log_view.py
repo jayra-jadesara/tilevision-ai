@@ -5,10 +5,14 @@ Activity Log page — full feed from IActivityLogRepository.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, time
 from typing import Callable, List, Optional
 
+from PySide6.QtCore import QDate
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
+    QDateEdit,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -21,6 +25,10 @@ from PySide6.QtWidgets import (
 
 from src.core.models import ActivityLogEntry
 from src.theme.theme_manager import get_palette, get_shared_view_qss
+from src.utils.activity_date_filters import (
+    ACTIVITY_DATE_PRESETS,
+    resolve_activity_date_range,
+)
 
 logger = logging.getLogger("tilevision.presentation.views.activity_log_view")
 
@@ -33,16 +41,20 @@ _TYPE_LABELS = {
     "duplicate_scan": "Duplicates",
     "export": "Export",
     "license": "License",
+    "theme": "Theme",
+    "settings": "Settings",
+    "maintenance": "Maintenance",
+    "navigation": "Navigation",
 }
 
 
 class ActivityLogView(QWidget):
-    """Stack page listing system activity with load-more pagination."""
+    """Stack page listing system activity with date filters and load-more."""
 
     def __init__(
         self,
         activity_provider: Optional[
-            Callable[[int, int], List[ActivityLogEntry]]
+            Callable[..., List[ActivityLogEntry]]
         ] = None,
         theme: str = "dark",
         parent: Optional[QWidget] = None,
@@ -52,6 +64,7 @@ class ActivityLogView(QWidget):
         self._activity_provider = activity_provider
         self._offset = 0
         self._entries: List[ActivityLogEntry] = []
+        self._filter_key = "all"
         self.setObjectName("ActivityLogView")
         self._setup_ui()
         self._apply_styles()
@@ -76,11 +89,51 @@ class ActivityLogView(QWidget):
 
         subtitle = QLabel(
             "A running record of indexing, searches, exports, duplicate scans, "
-            "and license events."
+            "theme changes, settings, maintenance, and license events."
         )
         subtitle.setObjectName("PageSubtitle")
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
+
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(10)
+        filter_label = QLabel("Show")
+        filter_label.setObjectName("FilterLabel")
+        filter_row.addWidget(filter_label)
+
+        self._filter_combo = QComboBox()
+        self._filter_combo.setObjectName("ActivityFilterCombo")
+        for preset in ACTIVITY_DATE_PRESETS:
+            self._filter_combo.addItem(preset.label, preset.key)
+        self._filter_combo.currentIndexChanged.connect(self._on_filter_changed)
+        filter_row.addWidget(self._filter_combo)
+
+        self._custom_from = QDateEdit()
+        self._custom_from.setObjectName("ActivityDateEdit")
+        self._custom_from.setCalendarPopup(True)
+        self._custom_from.setDisplayFormat("MMM d, yyyy")
+        self._custom_from.setDate(QDate.currentDate().addDays(-7))
+        self._custom_from.dateChanged.connect(self._on_custom_date_changed)
+
+        self._custom_to = QDateEdit()
+        self._custom_to.setObjectName("ActivityDateEdit")
+        self._custom_to.setCalendarPopup(True)
+        self._custom_to.setDisplayFormat("MMM d, yyyy")
+        self._custom_to.setDate(QDate.currentDate())
+        self._custom_to.dateChanged.connect(self._on_custom_date_changed)
+
+        self._custom_from_label = QLabel("From")
+        self._custom_from_label.setObjectName("FilterLabel")
+        self._custom_to_label = QLabel("To")
+        self._custom_to_label.setObjectName("FilterLabel")
+
+        filter_row.addWidget(self._custom_from_label)
+        filter_row.addWidget(self._custom_from)
+        filter_row.addWidget(self._custom_to_label)
+        filter_row.addWidget(self._custom_to)
+        filter_row.addStretch()
+        layout.addLayout(filter_row)
+        self._set_custom_range_visible(False)
 
         self._table = QTableWidget(0, 3)
         self._table.setObjectName("ActivityTable")
@@ -113,13 +166,67 @@ class ActivityLogView(QWidget):
         actions.addStretch()
         layout.addLayout(actions)
 
+    def _set_custom_range_visible(self, visible: bool) -> None:
+        for w in (
+            self._custom_from_label,
+            self._custom_from,
+            self._custom_to_label,
+            self._custom_to,
+        ):
+            w.setVisible(visible)
+
+    def _on_filter_changed(self, _index: int = 0) -> None:
+        key = self._filter_combo.currentData()
+        self._filter_key = str(key or "all")
+        self._set_custom_range_visible(self._filter_key == "custom")
+        self.refresh()
+
+    def _on_custom_date_changed(self, *_args) -> None:
+        if self._filter_key == "custom":
+            self.refresh()
+
+    def _current_bounds(self):
+        custom_since = None
+        custom_until = None
+        if self._filter_key == "custom":
+            from datetime import date as date_cls
+
+            q_from = self._custom_from.date()
+            q_to = self._custom_to.date()
+            local_tz = datetime.now().astimezone().tzinfo
+            custom_since = datetime.combine(
+                date_cls(q_from.year(), q_from.month(), q_from.day()),
+                time.min,
+                tzinfo=local_tz,
+            )
+            custom_until = datetime.combine(
+                date_cls(q_to.year(), q_to.month(), q_to.day()),
+                time.min,
+                tzinfo=local_tz,
+            )
+        return resolve_activity_date_range(
+            self._filter_key,
+            custom_since=custom_since,
+            custom_until=custom_until,
+        )
+
     def _load_more(self, *, reset: bool) -> None:
         if self._activity_provider is None:
             self._empty.setVisible(True)
             self._load_more_btn.setEnabled(False)
             return
+        since, until = self._current_bounds()
         try:
-            batch = self._activity_provider(_PAGE_SIZE, self._offset)
+            batch = self._activity_provider(
+                _PAGE_SIZE, self._offset, since=since, until=until
+            )
+        except TypeError:
+            # Older provider signature (limit, offset) only.
+            try:
+                batch = self._activity_provider(_PAGE_SIZE, self._offset)
+            except Exception as exc:
+                logger.error("Activity log provider failed: %s", exc)
+                batch = []
         except Exception as exc:
             logger.error("Activity log provider failed: %s", exc)
             batch = []
@@ -151,6 +258,9 @@ class ActivityLogView(QWidget):
             self._table.setItem(row, 2, msg_item)
 
         empty = len(self._entries) == 0
+        self._empty.setText(
+            "No activity in this date range." if self._filter_key != "all" else "No activity yet."
+        )
         self._empty.setVisible(empty)
         self._table.setVisible(not empty)
 
@@ -165,6 +275,21 @@ class ActivityLogView(QWidget):
             }}
             #PageSubtitle {{
                 font-size: 14px; color: {p['text_secondary']}; padding-bottom: 4px;
+            }}
+            #FilterLabel {{
+                color: {p['text_muted']}; font-size: 12px; font-weight: 600;
+            }}
+            #ActivityFilterCombo, #ActivityDateEdit {{
+                background-color: {p['bg_input']};
+                color: {p['text_secondary']};
+                border: 1px solid {p['border_strong']};
+                border-radius: 6px;
+                padding: 4px 8px;
+                min-width: 120px;
+                font-size: 12px;
+            }}
+            #ActivityFilterCombo:hover, #ActivityDateEdit:hover {{
+                border-color: {p['accent_hover']};
             }}
             #EmptyListLabel {{ color: {p['text_faint']}; font-size: 12px; }}
             #ActivityTable {{

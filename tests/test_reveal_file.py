@@ -40,11 +40,11 @@ def test_reveal_macos_uses_open_r(tmp_path, monkeypatch):
     monkeypatch.setattr("src.utils.reveal_file.is_windows", lambda: False)
     monkeypatch.setattr("src.utils.reveal_file.is_macos", lambda: True)
     monkeypatch.setattr("src.utils.reveal_file.is_linux", lambda: False)
-    with patch("src.utils.reveal_file.subprocess.run") as run:
+    with patch("src.utils.reveal_file.subprocess.Popen") as popen:
         ok, err = reveal_in_file_manager(target)
     assert ok is True
-    run.assert_called_once()
-    assert run.call_args[0][0][:2] == ["open", "-R"]
+    popen.assert_called_once()
+    assert popen.call_args[0][0][:2] == ["open", "-R"]
 
 
 def test_reveal_linux_opens_parent_folder(tmp_path, monkeypatch):
