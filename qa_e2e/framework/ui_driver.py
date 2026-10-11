@@ -301,21 +301,31 @@ class UIDriver:
             f"Search did not settle within {timeout}s (state={self.s.search_viewmodel.state})"
         )
 
+    def _image_path_column(self) -> int:
+        """Resolve the Image Path column index by header label (fallback: -2)."""
+        table = self.results_table()
+        for col in range(table.columnCount()):
+            header = table.horizontalHeaderItem(col)
+            if header is not None and header.text().strip().lower() == "image path":
+                return col
+        # Actions is typically last; Image Path is usually second-to-last.
+        return max(0, table.columnCount() - 2)
+
     def visible_result_paths(self) -> List[str]:
         table = self.results_table()
         paths: List[str] = []
-        # Image Path is last column (may be a cell widget with copy control).
-        path_col = table.columnCount() - 1
+        path_col = self._image_path_column()
         for row in range(table.rowCount()):
+            item = table.item(row, path_col)
+            if item is not None and item.text().strip():
+                paths.append(item.text().strip())
+                continue
+            # Legacy: path lived on a cell widget.
             cell = table.cellWidget(row, path_col)
             if cell is not None:
                 path = getattr(cell, "_path", None)
                 if path:
                     paths.append(str(path))
-                    continue
-            item = table.item(row, path_col)
-            if item is not None and item.text().strip():
-                paths.append(item.text().strip())
         return paths
 
     def result_count_ui(self) -> int:

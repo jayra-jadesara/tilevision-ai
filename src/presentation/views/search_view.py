@@ -28,6 +28,7 @@ from PySide6.QtCore import (
     QUrl,
     QSize,
     QTimer,
+    QPoint,
     QPropertyAnimation,
     QEasingCurve,
 )
@@ -75,99 +76,145 @@ _TABLE_COLUMNS = [
     "Product Code",
     "Brand",
     "Category",
-    "Preview",
-    "Image Path"
+    "Image Path",
+    "Actions",
 ]
 
-_PREVIEW_COL = 5
-_PATH_COL = 6
-_PREVIEW_COL_WIDTH = 52
+_PATH_COL = 5
+_ACTIONS_COL = 6
+_ACTIONS_COL_WIDTH = 108
 
 
-class _PathCellWidget(QWidget):
-    """Clickable path + copy control with a theme-matched 'Copied' fade toast."""
+class _ResultActionsWidget(QWidget):
+    """
+    Compact icon actions: Preview, Copy path, Reveal in file manager.
+
+    Copied feedback is a floating overlay (not in the layout) so it never
+    squeezes the Image Path column or causes double-text overlap.
+    """
 
     def __init__(
         self,
         path: str,
         *,
         theme: str,
-        on_reveal,
+        on_preview,
         on_copy,
+        on_reveal,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self._path = path
         self._theme = theme
-        self._on_reveal = on_reveal
+        self._on_preview = on_preview
         self._on_copy = on_copy
+        self._on_reveal = on_reveal
         self._fade_anim: Optional[QPropertyAnimation] = None
+        self._copied_toast: Optional[QLabel] = None
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(6, 2, 4, 2)
+        layout.setContentsMargins(4, 2, 4, 2)
         layout.setSpacing(4)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self._path_label = QLabel(path)
-        self._path_label.setObjectName("PathCellLink")
-        self._path_label.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._path_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
-        self._path_label.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-        )
         from src.utils.reveal_file import reveal_action_label
 
-        tip = reveal_action_label().lstrip("📍 ").strip()
-        self._path_label.setToolTip(f"{path}\n\nClick to {tip}")
-        self._path_label.mousePressEvent = self._on_path_pressed  # type: ignore[method-assign]
-        layout.addWidget(self._path_label, stretch=1)
+        reveal_tip = reveal_action_label().lstrip("📍 ").strip()
 
-        self._copy_btn = QToolButton()
-        self._copy_btn.setObjectName("PathCopyButton")
-        self._copy_btn.setText("⧉")
-        self._copy_btn.setToolTip("Copy path")
-        self._copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._copy_btn.setFixedSize(26, 26)
+        self._preview_btn = self._make_action_btn(
+            "👁", "Preview tile", "ResultPreviewButton"
+        )
+        self._preview_btn.clicked.connect(lambda: self._on_preview(self._path))
+
+        self._copy_btn = self._make_action_btn(
+            "⧉", "Copy path", "ResultCopyButton"
+        )
         self._copy_btn.clicked.connect(self._handle_copy)
+
+        self._reveal_btn = self._make_action_btn(
+            "📂", reveal_tip, "ResultRevealButton"
+        )
+        self._reveal_btn.clicked.connect(lambda: self._on_reveal(self._path))
+
+        layout.addWidget(self._preview_btn)
         layout.addWidget(self._copy_btn)
-
-        self._copied_label = QLabel("Copied")
-        self._copied_label.setObjectName("PathCopiedToast")
-        self._copied_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._copied_label.setVisible(False)
-        layout.addWidget(self._copied_label)
-
+        layout.addWidget(self._reveal_btn)
         self._apply_styles()
 
-    def _on_path_pressed(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._on_reveal(self._path)
-        event.accept()
+    @staticmethod
+    def _make_action_btn(icon_text: str, tooltip: str, object_name: str) -> QToolButton:
+        btn = QToolButton()
+        btn.setObjectName(object_name)
+        btn.setText(icon_text)
+        btn.setToolTip(tooltip)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setFixedSize(28, 28)
+        btn.setAutoRaise(True)
+        return btn
 
     def _handle_copy(self) -> None:
         self._on_copy(self._path)
         self._show_copied_toast()
 
     def _show_copied_toast(self) -> None:
+        """Floating tooltip-style 'Copied' badge over the copy icon (no layout shift)."""
         if self._fade_anim is not None:
             self._fade_anim.stop()
             self._fade_anim.deleteLater()
             self._fade_anim = None
+        if self._copied_toast is not None:
+            self._copied_toast.hide()
+            self._copied_toast.deleteLater()
+            self._copied_toast = None
 
-        self._copied_label.setVisible(True)
-        effect = QGraphicsOpacityEffect(self._copied_label)
-        self._copied_label.setGraphicsEffect(effect)
+        p = get_palette(self._theme)
+        toast = QLabel("Copied")
+        toast.setObjectName("PathCopiedToast")
+        toast.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        toast.setWindowFlags(
+            Qt.WindowType.ToolTip
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
+        toast.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        toast.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        toast.setStyleSheet(
+            f"""
+            #PathCopiedToast {{
+                color: {p['accent_text']};
+                background-color: {p['highlight_bg']};
+                border: 1px solid {p['accent_soft']};
+                border-radius: 5px;
+                padding: 3px 8px;
+                font-size: 10px;
+                font-weight: 700;
+            }}
+            """
+        )
+        toast.adjustSize()
+        # Center horizontally on the copy button; sit just above it.
+        anchor = self._copy_btn.mapToGlobal(
+            QPoint(self._copy_btn.width() // 2, 0)
+        )
+        toast.move(anchor.x() - toast.width() // 2, anchor.y() - toast.height() - 6)
+        toast.show()
+        self._copied_toast = toast
+
+        effect = QGraphicsOpacityEffect(toast)
+        toast.setGraphicsEffect(effect)
         effect.setOpacity(1.0)
-
         anim = QPropertyAnimation(effect, b"opacity", self)
-        anim.setDuration(1400)
+        anim.setDuration(1200)
         anim.setStartValue(1.0)
         anim.setKeyValueAt(0.55, 1.0)
         anim.setEndValue(0.0)
         anim.setEasingCurve(QEasingCurve.Type.OutCubic)
 
         def _hide() -> None:
-            self._copied_label.setVisible(False)
-            self._copied_label.setGraphicsEffect(None)
+            if self._copied_toast is not None:
+                self._copied_toast.hide()
+                self._copied_toast.deleteLater()
+                self._copied_toast = None
             self._fade_anim = None
 
         anim.finished.connect(_hide)
@@ -176,40 +223,27 @@ class _PathCellWidget(QWidget):
 
     def set_theme(self, theme: str) -> None:
         self._theme = theme
+        from src.utils.reveal_file import reveal_action_label
+
+        self._reveal_btn.setToolTip(reveal_action_label().lstrip("📍 ").strip())
         self._apply_styles()
 
     def _apply_styles(self) -> None:
         p = get_palette(self._theme)
         self.setStyleSheet(
             f"""
-            #PathCellLink {{
-                color: {p['accent_text']};
-                text-decoration: underline;
-                font-size: 11px;
-                background: transparent;
-            }}
-            #PathCopyButton {{
+            QToolButton {{
                 background-color: {p['bg_panel']};
                 color: {p['text_secondary']};
                 border: 1px solid {p['border_strong']};
                 border-radius: 5px;
                 font-size: 13px;
-                font-weight: 600;
                 padding: 0;
             }}
-            #PathCopyButton:hover {{
+            QToolButton:hover {{
                 background-color: {p['button_hover']};
                 color: {p['accent_text']};
                 border-color: {p['accent_soft']};
-            }}
-            #PathCopiedToast {{
-                color: {p['accent_text']};
-                background-color: {p['highlight_bg']};
-                border: 1px solid {p['accent_soft']};
-                border-radius: 5px;
-                padding: 2px 8px;
-                font-size: 10px;
-                font-weight: 700;
             }}
             """
         )
@@ -817,22 +851,21 @@ class SearchView(QWidget):
         self._results_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
 
         header = self._results_table.horizontalHeader()
+        header.setMinimumSectionSize(40)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         self._results_table.setColumnWidth(0, 88)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        # Preview is a short "View" link — keep it narrow (was Stretch by mistake).
-        header.setMinimumSectionSize(40)
-        header.setSectionResizeMode(_PREVIEW_COL, QHeaderView.ResizeMode.Fixed)
-        self._results_table.setColumnWidth(_PREVIEW_COL, _PREVIEW_COL_WIDTH)
-        # Path + copy control takes the remaining width.
+        # Path is plain text (no cell widget) — stretch to fill.
         header.setSectionResizeMode(_PATH_COL, QHeaderView.ResizeMode.Stretch)
-        header.setStretchLastSection(True)
+        # Actions: preview / copy / reveal icons.
+        header.setSectionResizeMode(_ACTIONS_COL, QHeaderView.ResizeMode.Fixed)
+        self._results_table.setColumnWidth(_ACTIONS_COL, _ACTIONS_COL_WIDTH)
+        header.setStretchLastSection(False)
 
         self._results_table.cellDoubleClicked.connect(self._on_row_double_clicked)
-        self._results_table.cellClicked.connect(self._on_table_clicked)
         self._results_table.customContextMenuRequested.connect(self._on_results_context_menu)
 
         self._empty_state_icon = QLabel("")
@@ -1222,12 +1255,9 @@ class SearchView(QWidget):
         # search scenario (WhatsApp photo, phone snapshot) where the user
         # usually wants "which exact tile is this" first, with the rest as
         # fallback options if the best match isn't quite right.
-        from src.utils.reveal_file import reveal_action_label
-
         palette = get_palette(self._theme)
         best_match_bg = QColor(palette["highlight_bg"])
         best_match_text = QColor(palette["text_primary"])
-        reveal_tip = reveal_action_label().lstrip("📍 ").strip()
 
         for row, result in enumerate(results):
             tile = result.tile
@@ -1253,38 +1283,37 @@ class SearchView(QWidget):
             self._results_table.setItem(row, 3, QTableWidgetItem(tile.brand or "—"))
             self._results_table.setItem(row, 4, QTableWidgetItem(tile.category or "—"))
 
-            preview_item = QTableWidgetItem("View")
-            preview_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            preview_item.setToolTip("Preview Tile")
-            self._results_table.setItem(row, _PREVIEW_COL, preview_item)
-
-            # Keep the path on the item (for selection tooling / E2E readers);
-            # the interactive path + copy control is a cell widget on top.
+            # Plain path text only — actions live in the Actions column so the
+            # path never double-paints under a cell widget.
             path_item = QTableWidgetItem(tile.file_path)
-            path_item.setToolTip(f"{tile.file_path}\n\nClick to {reveal_tip}")
+            path_item.setToolTip(tile.file_path)
             self._results_table.setItem(row, _PATH_COL, path_item)
-            path_cell = _PathCellWidget(
+
+            # Placeholder item under the actions widget (selection/background).
+            actions_item = QTableWidgetItem("")
+            actions_item.setFlags(actions_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self._results_table.setItem(row, _ACTIONS_COL, actions_item)
+            actions = _ResultActionsWidget(
                 tile.file_path,
                 theme=self._theme,
-                on_reveal=self._reveal_path_deferred,
+                on_preview=lambda _p, r=row: self._preview_at_row(r),
                 on_copy=self._copy_path_text,
+                on_reveal=self._reveal_path_deferred,
                 parent=self._results_table,
             )
-            self._results_table.setCellWidget(row, _PATH_COL, path_cell)
+            self._results_table.setCellWidget(row, _ACTIONS_COL, actions)
 
             if is_best_match:
                 for col in range(self._results_table.columnCount()):
                     item = self._results_table.item(row, col)
                     if item is not None:
                         item.setBackground(best_match_bg)
-                        if col != _PATH_COL:
-                            item.setForeground(best_match_text)
-                            font = item.font()
-                            font.setBold(True)
-                            item.setFont(font)
+                        item.setForeground(best_match_text)
+                        font = item.font()
+                        font.setBold(True)
+                        item.setFont(font)
 
-        # Keep Preview pinned narrow after content-driven resizes.
-        self._results_table.setColumnWidth(_PREVIEW_COL, _PREVIEW_COL_WIDTH)
+        self._results_table.setColumnWidth(_ACTIONS_COL, _ACTIONS_COL_WIDTH)
 
         # Defer pixmap I/O until after the table is visible.
         generation = self._results_generation
@@ -1320,16 +1349,10 @@ class SearchView(QWidget):
     def _on_row_double_clicked(self, row: int, _column: int) -> None:
         self._open_image_at_row(row)
 
-    def _on_table_clicked(self, row: int, column: int) -> None:
+    def _preview_at_row(self, row: int) -> None:
         if row < 0 or row >= len(self._current_results):
             return
-
-        # Preview column
-        if column == _PREVIEW_COL:
-            self._preview_panel.show_result(self._current_results[row])
-            return
-
-        # Path interactions are handled by _PathCellWidget (reveal + copy).
+        self._preview_panel.show_result(self._current_results[row])
 
     def _on_results_context_menu(self, position) -> None:
         row = self._results_table.rowAt(position.y())
@@ -1355,16 +1378,16 @@ class SearchView(QWidget):
             self._copy_path_at_row(row)
 
     def _copy_path_text(self, path: str) -> None:
+        """Copy path silently — Copied feedback is the floating toast on the icon."""
         QApplication.clipboard().setText(path)
-        self._status_label.setText(f"Copied path to clipboard: {path}")
 
     def _copy_path_at_row(self, row: int) -> None:
         if row < 0 or row >= len(self._current_results):
             return
         path = self._current_results[row].tile.file_path
         self._copy_path_text(path)
-        cell = self._results_table.cellWidget(row, _PATH_COL)
-        if isinstance(cell, _PathCellWidget):
+        cell = self._results_table.cellWidget(row, _ACTIONS_COL)
+        if isinstance(cell, _ResultActionsWidget):
             cell._show_copied_toast()
 
     def _open_image_at_row(self, row: int) -> None:
@@ -1409,8 +1432,8 @@ class SearchView(QWidget):
         self._theme = theme
         self._preview_panel.set_theme(theme)
         for row in range(self._results_table.rowCount()):
-            cell = self._results_table.cellWidget(row, _PATH_COL)
-            if isinstance(cell, _PathCellWidget):
+            cell = self._results_table.cellWidget(row, _ACTIONS_COL)
+            if isinstance(cell, _ResultActionsWidget):
                 cell.set_theme(theme)
         self._apply_styles()
 
