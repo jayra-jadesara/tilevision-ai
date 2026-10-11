@@ -491,12 +491,13 @@ def s25_preview_image(session, driver: UIDriver) -> ScenarioResult:
         table = driver.results_table()
         if table.rowCount() < 1:
             raise AssertionError("no rows to preview")
-        # Click the Preview cell
-        preview = table.item(0, 5)
-        if preview is None:
-            raise AssertionError("preview cell missing")
-        rect = table.visualItemRect(preview)
-        QTest.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, rect.center())
+        # Click the Preview icon in the Actions column (last column).
+        actions_col = table.columnCount() - 1
+        actions = table.cellWidget(0, actions_col)
+        preview_btn = getattr(actions, "_preview_btn", None) if actions is not None else None
+        if preview_btn is None:
+            raise AssertionError("preview action button missing")
+        QTest.mouseClick(preview_btn, Qt.MouseButton.LeftButton)
         QApplication.processEvents()
         QTest.qWait(400)
         freeze = detect_ui_freeze(session)
