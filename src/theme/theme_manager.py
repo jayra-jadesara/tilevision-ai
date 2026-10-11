@@ -74,6 +74,11 @@ QTableWidget {{
 }}
 QTableWidget::item:hover {{
     background-color: {hover_bg};
+    /* Explicit text color: hover previously only set background, so rows with
+       programmatic foregrounds (e.g. Search best-match) could clash. Both
+       themes use text that contrasts with hover_bg (dark: #F1F5F9 on #273449;
+       light: #0F172A on #E0F2FE). */
+    color: {hover_text};
 }}
 QHeaderView::section {{
     background-color: {header_bg};
@@ -131,6 +136,7 @@ QWidget { color: #F1F5F9; }
     selection_bg="#0369A1",
     selection_text="#FFFFFF",
     hover_bg="#273449",
+    hover_text="#F1F5F9",  # text_primary — readable on hover_bg
     header_bg="#172033",
     scrollbar_handle="#475569",
     scrollbar_handle_hover="#0EA5E9",
@@ -149,6 +155,7 @@ QWidget { color: #0F172A; }
     selection_bg="#0284C7",
     selection_text="#FFFFFF",
     hover_bg="#E0F2FE",
+    hover_text="#0F172A",  # text_primary — readable on hover_bg
     header_bg="#F8FAFC",
     scrollbar_handle="#CBD5E1",
     scrollbar_handle_hover="#0EA5E9",
@@ -205,6 +212,7 @@ _DARK_PALETTE = {
     "accent_soft": "#22D3EE",
     "highlight_bg": "#164E63",
     "highlight_border": "#0EA5E9",
+    "hover_bg": "#273449",
     "button_bg": "#1E293B",
     "button_hover": "#334155",
     "success_bg": "#064E3B",
@@ -238,6 +246,7 @@ _LIGHT_PALETTE = {
     "accent_soft": "#38BDF8",
     "highlight_bg": "#E0F2FE",
     "highlight_border": "#7DD3FC",
+    "hover_bg": "#E0F2FE",
     "button_bg": "#F8FAFC",
     "button_hover": "#E2E8F0",
     "success_bg": "#DCFCE7",
