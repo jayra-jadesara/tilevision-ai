@@ -245,6 +245,9 @@ class _ResultPreviewPanel(QWidget):
     A single click on a results row calls show_result() on one shared
     instance, which updates its content and pops to the front — cheaper
     than constructing a new dialog per click.
+
+    Note: ``Qt.WindowType.Tool`` keeps the OS native title bar/frame —
+    that chrome is intentionally left alone (not themeable from Qt).
     """
 
     def __init__(self, parent=None, theme: str = "dark") -> None:
@@ -252,6 +255,7 @@ class _ResultPreviewPanel(QWidget):
         self.setWindowTitle("Tile Preview")
         self.setMinimumSize(360, 420)
         self._theme = theme
+        self._current_path: Optional[str] = None
         self._setup_ui()
         self._apply_styles()
 
@@ -269,12 +273,28 @@ class _ResultPreviewPanel(QWidget):
         self._details_label = QLabel()
         self._details_label.setObjectName("PreviewDetails")
         self._details_label.setWordWrap(True)
+        self._details_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextBrowserInteraction
+        )
+        self._details_label.setOpenExternalLinks(False)
+        self._details_label.linkActivated.connect(self._on_path_link_activated)
         layout.addWidget(self._details_label)
+
+        self._status_label = QLabel("")
+        self._status_label.setObjectName("PreviewStatus")
+        self._status_label.setWordWrap(True)
+        self._status_label.setVisible(False)
+        layout.addWidget(self._status_label)
         layout.addStretch()
 
     def show_result(self, result: SearchResult) -> None:
+        from src.utils.reveal_file import reveal_action_label
+
         p = get_palette(self._theme)
         tile = result.tile
+        self._current_path = tile.file_path
+        self._status_label.setVisible(False)
+        self._status_label.clear()
         pixmap = QPixmap(tile.file_path)
         if pixmap.isNull():
             pixmap = QPixmap(result.thumbnail_path)
@@ -284,17 +304,42 @@ class _ResultPreviewPanel(QWidget):
             )
             self._image_label.setPixmap(scaled)
 
+        # Escape path for HTML attribute/body; link triggers reveal_in_file_manager.
+        safe_path = (
+            tile.file_path.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
+        )
+        reveal_hint = reveal_action_label().lstrip("📍 ").strip()
         self._details_label.setText(
             f"<b>{tile.file_name}</b><br>"
             f"Similarity: {result.similarity_score:.1f}%<br>"
             f"Product Code: {tile.product_code or '—'}<br>"
             f"Brand: {tile.brand or '—'}<br>"
             f"Category: {tile.category or '—'}<br>"
-            f"<span style='color:{p['text_muted']}; font-size:10px;'>{tile.file_path}</span>"
+            f"<a href='reveal' style='color:{p['accent_text']}; font-size:10px;' "
+            f"title='{reveal_hint}'>{safe_path}</a>"
         )
         self.show()
         self.raise_()
         self.activateWindow()
+
+    def _on_path_link_activated(self, _href: str) -> None:
+        from src.utils.reveal_file import reveal_in_file_manager
+
+        if not self._current_path:
+            return
+        ok, error = reveal_in_file_manager(self._current_path)
+        if ok:
+            self._status_label.setVisible(False)
+            self._status_label.clear()
+            return
+        # Inline status avoids stacking a message box on top of this Tool popup.
+        p = get_palette(self._theme)
+        self._status_label.setStyleSheet(f"color: {p['danger_text']}; font-size: 11px;")
+        self._status_label.setText(error)
+        self._status_label.setVisible(True)
 
     def set_theme(self, theme: str) -> None:
         """Re-skin this panel for a newly-selected theme."""
@@ -308,6 +353,8 @@ class _ResultPreviewPanel(QWidget):
             QWidget {{ background-color: {p['bg_panel_alt']}; color: {p['text_primary']}; }}
             #PreviewImage {{ background-color: {p['bg_sidebar']}; border-radius: 8px; }}
             #PreviewDetails {{ font-size: 12px; line-height: 1.5; }}
+            #PreviewDetails a {{ color: {p['accent_text']}; text-decoration: underline; }}
+            #PreviewStatus {{ color: {p['danger_text']}; font-size: 11px; }}
             """
         )
 
@@ -406,11 +453,15 @@ class SearchView(QWidget):
         button_col.setSpacing(8)
         button_col.addStretch()
 
+        # ── Export
         self._export_button = QPushButton("Export Catalogue")
         self._export_button.setObjectName("SecondaryButton")
         self._export_button.clicked.connect(self._on_export_clicked)
         button_col.addWidget(self._export_button)
 
+        button_col.addWidget(self._make_button_separator())
+
+        # ── Crop & Search
         self._crop_button = QPushButton("Crop and Search")
         self._crop_button.setObjectName("SecondaryButton")
         self._crop_button.clicked.connect(self._on_crop_clicked)
@@ -438,12 +489,18 @@ class SearchView(QWidget):
         self._precise_crop_button.setEnabled(False)
         button_col.addWidget(self._precise_crop_button)
 
+        button_col.addWidget(self._make_button_separator())
+
+        # ── Reset (visually set apart from crop/history groups)
         self._clear_button = QPushButton("Clear")
-        self._clear_button.setObjectName("SecondaryButton")
+        self._clear_button.setObjectName("ClearActionButton")
         self._clear_button.clicked.connect(self._on_clear_clicked)
         self._clear_button.setEnabled(False)
         button_col.addWidget(self._clear_button)
 
+        button_col.addWidget(self._make_button_separator())
+
+        # ── History
         self._history_button = QPushButton("Recent Searches")
         self._history_button.setObjectName("SecondaryButton")
         self._history_button.clicked.connect(self._on_history_clicked)
@@ -462,6 +519,16 @@ class SearchView(QWidget):
         layout.addLayout(button_col)
 
         return panel
+
+    @staticmethod
+    def _make_button_separator() -> QFrame:
+        """Horizontal rule between action-button groups (matches sidebar idiom)."""
+        separator = QFrame()
+        separator.setFrameShape(QFrame.Shape.HLine)
+        separator.setObjectName("SearchButtonSeparator")
+        separator.setFixedHeight(8)
+        separator.setMinimumWidth(120)
+        return separator
 
     def _build_filter_bar(self) -> QWidget:
         bar = QWidget()
@@ -998,8 +1065,13 @@ class SearchView(QWidget):
         # search scenario (WhatsApp photo, phone snapshot) where the user
         # usually wants "which exact tile is this" first, with the rest as
         # fallback options if the best match isn't quite right.
-        best_match_bg = QColor(get_palette(self._theme)["highlight_bg"])
-        best_match_text = QColor(get_palette(self._theme)["text_primary"])
+        from src.utils.reveal_file import reveal_action_label
+
+        palette = get_palette(self._theme)
+        best_match_bg = QColor(palette["highlight_bg"])
+        best_match_text = QColor(palette["text_primary"])
+        link_color = QColor(palette["accent_text"])
+        reveal_tip = reveal_action_label().lstrip("📍 ").strip()
 
         for row, result in enumerate(results):
             tile = result.tile
@@ -1031,7 +1103,11 @@ class SearchView(QWidget):
             self._results_table.setItem(row, 5, preview_item)
 
             path_item = QTableWidgetItem(tile.file_path)
-            path_item.setToolTip(tile.file_path)
+            path_item.setForeground(link_color)
+            path_font = path_item.font()
+            path_font.setUnderline(True)
+            path_item.setFont(path_font)
+            path_item.setToolTip(f"{tile.file_path}\n\nClick to {reveal_tip}")
             self._results_table.setItem(row, 6, path_item)
 
             if is_best_match:
@@ -1039,10 +1115,18 @@ class SearchView(QWidget):
                     item = self._results_table.item(row, col)
                     if item is not None:
                         item.setBackground(best_match_bg)
-                        item.setForeground(best_match_text)
-                        font = item.font()
-                        font.setBold(True)
-                        item.setFont(font)
+                        # Keep path column as a link color even on the best-match row.
+                        if col == 6:
+                            item.setForeground(link_color)
+                            font = item.font()
+                            font.setBold(True)
+                            font.setUnderline(True)
+                            item.setFont(font)
+                        else:
+                            item.setForeground(best_match_text)
+                            font = item.font()
+                            font.setBold(True)
+                            item.setFont(font)
 
         # Defer pixmap I/O until after the table is visible.
         generation = self._results_generation
@@ -1079,14 +1163,17 @@ class SearchView(QWidget):
         self._open_image_at_row(row)
 
     def _on_table_clicked(self, row: int, column: int) -> None:
-        # Preview column
-        if column != 5:
-            return
-
         if row < 0 or row >= len(self._current_results):
             return
 
-        self._preview_panel.show_result(self._current_results[row])
+        # Preview column
+        if column == 5:
+            self._preview_panel.show_result(self._current_results[row])
+            return
+
+        # Image Path column — reveal in file manager (same helper as context menu)
+        if column == 6:
+            self._reveal_file_at_row(row)
 
     def _on_results_context_menu(self, position) -> None:
         row = self._results_table.rowAt(position.y())
@@ -1194,6 +1281,35 @@ class SearchView(QWidget):
                 border-radius: 8px;
             }}
             #ResultsTable::item:selected {{ background-color: {p['highlight_bg']}; color: {p['text_primary']}; }}
+            #ResultsTable::item:hover {{
+                background-color: {p['hover_bg']};
+                color: {p['text_primary']};
+            }}
+            #SearchButtonSeparator {{
+                border: none;
+                border-top: 1px solid {p['border_strong']};
+                margin: 6px 4px 2px 4px;
+                background: transparent;
+            }}
+            #ClearActionButton {{
+                background-color: {p['bg_panel']};
+                color: {p['text_muted']};
+                border: 1px dashed {p['border_strong']};
+                border-radius: 6px;
+                padding: 6px 14px;
+                font-size: 12px;
+                font-weight: 600;
+            }}
+            #ClearActionButton:hover:enabled {{
+                background-color: {p['button_hover']};
+                color: {p['text_primary']};
+                border-style: solid;
+                border-color: {p['accent_soft']};
+            }}
+            #ClearActionButton:disabled {{
+                color: {p['text_faint']};
+                border-color: {p['border']};
+            }}
             QHeaderView::section {{
                 background-color: {p['row_alt']};
                 color: {p['text_secondary']};
