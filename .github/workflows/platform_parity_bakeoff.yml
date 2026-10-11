@@ -4,39 +4,50 @@
 # diffs them against macos-15-intel.
 #
 # Note: "Compare platform parity" is a required branch-protection check.
-# Path filters below skip the bakeoff when search/AI code is untouched; if a
-# PR still needs the required check to run, re-trigger via workflow_dispatch
-# or include a no-op touch under these paths.
+# This workflow always runs on every PR / push to main so that check is always
+# reported. A fast detect-changes job decides whether the expensive 4-platform
+# bakeoff is needed; when no search/AI paths changed, bakeoff is skipped and
+# Compare platform parity exits 0 immediately (nothing to compare).
 
 name: Platform Parity Bakeoff
 
 on:
   workflow_dispatch:
   pull_request:
-    paths:
-      - "dev_tools/search_quality/**"
-      - "eval/real_customer_release.jsonl"
-      - "eval/real_customer_release/**"
-      - "src/ai/**"
-      - "src/core/use_cases/search_tiles.py"
-      - ".github/workflows/platform_parity_bakeoff.yml"
   push:
     branches: [main]
-    paths:
-      - "dev_tools/search_quality/**"
-      - "eval/real_customer_release.jsonl"
-      - "eval/real_customer_release/**"
-      - "src/ai/**"
-      - "src/core/use_cases/search_tiles.py"
-      - ".github/workflows/platform_parity_bakeoff.yml"
 
 concurrency:
   group: platform-parity-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  detect-changes:
+    name: Detect search/AI changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pin exact v3.0.4 commit (latest stable v3.x as of this change).
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - "dev_tools/search_quality/**"
+              - "eval/real_customer_release.jsonl"
+              - "eval/real_customer_release/**"
+              - "src/ai/**"
+              - "src/core/use_cases/search_tiles.py"
+              - ".github/workflows/platform_parity_bakeoff.yml"
+
   bakeoff:
     name: Bakeoff (${{ matrix.os }})
+    needs: detect-changes
+    if: needs.detect-changes.outputs.relevant == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     strategy:
@@ -179,20 +190,35 @@ jobs:
 
   compare:
     name: Compare platform parity
-    needs: bakeoff
-    # Still diff whichever platform artifacts landed (fail-fast is off on bakeoff).
+    needs: [detect-changes, bakeoff]
+    # Always report a status for branch protection. When bakeoff was skipped
+    # (no relevant paths), exit 0 without downloading artifacts.
     if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Fail if change detection failed
+        if: needs.detect-changes.result != 'success'
+        run: |
+          echo "::error::detect-changes did not succeed (result=${{ needs.detect-changes.result }})."
+          exit 1
+
+      - name: Skip compare — no search/AI code changed
+        if: needs.detect-changes.outputs.relevant != 'true'
+        run: |
+          echo "No search/AI code changed on this PR — platform parity bakeoff was skipped, nothing to compare."
+
       - uses: actions/checkout@v4
+        if: needs.detect-changes.outputs.relevant == 'true'
 
       - name: Set up Python 3.12
+        if: needs.detect-changes.outputs.relevant == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Download all platform bakeoff artifacts
+        if: needs.detect-changes.outputs.relevant == 'true'
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
@@ -202,6 +228,7 @@ jobs:
 
       - name: Diff platforms vs macos-15-intel
         id: compare
+        if: needs.detect-changes.outputs.relevant == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -239,7 +266,7 @@ jobs:
           exit "${code}"
 
       - name: Upload parity comparison
-        if: always()
+        if: ${{ always() && needs.detect-changes.outputs.relevant == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: platform-parity-comparison
