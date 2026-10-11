@@ -1198,16 +1198,34 @@ class SQLiteActivityLogRepository(IActivityLogRepository):
             logger.error(f"Failed to record activity log entry: {e}")
 
     def get_recent_activity(
-        self, limit: int = 10, offset: int = 0
+        self,
+        limit: int = 10,
+        offset: int = 0,
+        *,
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
     ) -> List[ActivityLogEntry]:
+        from src.utils.activity_date_filters import format_dt_for_sqlite
+
+        clauses: List[str] = []
+        params: List[object] = []
+        if since is not None:
+            clauses.append("created_at >= ?")
+            params.append(format_dt_for_sqlite(since))
+        if until is not None:
+            clauses.append("created_at < ?")
+            params.append(format_dt_for_sqlite(until))
+
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         query = (
-            "SELECT * FROM activity_log "
+            f"SELECT * FROM activity_log{where} "
             "ORDER BY created_at DESC LIMIT ? OFFSET ?;"
         )
+        params.extend([limit, max(0, int(offset))])
         try:
             with self._db.session() as conn:
                 cursor = conn.cursor()
-                cursor.execute(query, (limit, max(0, int(offset))))
+                cursor.execute(query, tuple(params))
                 rows = cursor.fetchall()
                 return [
                     ActivityLogEntry(

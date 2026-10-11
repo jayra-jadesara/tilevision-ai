@@ -93,7 +93,7 @@ class HistoryActivityProviders:
 
     search_history_page: Optional[Callable[[int, int], List[object]]] = None
     folder_counts: Optional[Callable[[], List[object]]] = None
-    activity_log_page: Optional[Callable[[int, int], List[object]]] = None
+    activity_log_page: Optional[Callable[..., List[object]]] = None
     activity_recorder: Optional[Callable[[str, str], None]] = None
 
 
@@ -354,6 +354,7 @@ class MainWindow(QMainWindow):
                 diagnostics_info_provider=self._diagnostics_info_provider,
                 on_check_updates=self._on_check_updates,
                 vector_index=self._vector_index,
+                activity_recorder=self._history_activity_providers.activity_recorder,
                 theme=self._current_theme,
             )
             self._content_stack.addWidget(self._settings_view)  # index 3
@@ -812,6 +813,16 @@ class MainWindow(QMainWindow):
         self._navigate(1)
         self._search_viewmodel.repeat_search(query_image_path)
 
+    def _record_activity(self, activity_type: str, message: str) -> None:
+        """Best-effort write to the activity log (never raises into the UI)."""
+        recorder = self._history_activity_providers.activity_recorder
+        if recorder is None:
+            return
+        try:
+            recorder(activity_type, message)
+        except Exception as exc:
+            logger.error("Failed to record activity (%s): %s", activity_type, exc)
+
     def _on_theme_changed_request(self, theme: str) -> None:
         """
         Apply the new theme app-wide: the MainWindow chrome (via the
@@ -820,6 +831,7 @@ class MainWindow(QMainWindow):
         palette (see theme_manager.get_palette) and exposes set_theme()
         for exactly this purpose.
         """
+        previous = getattr(self, "_current_theme", None)
         self._current_theme = theme
         app = QApplication.instance()
         if app is not None:
@@ -855,6 +867,13 @@ class MainWindow(QMainWindow):
             btn.set_nav_theme(theme)
 
         self._refresh_license_status_display()
+
+        # Log user-driven theme switches (skip the initial bootstrap apply).
+        if previous is not None and previous != theme:
+            self._record_activity(
+                "theme",
+                f"Theme changed from {previous} to {theme}",
+            )
 
         logger.info(f"Applied '{theme}' theme.")
         self._apply_stale_banner_style()

@@ -77,6 +77,7 @@ class SettingsView(QWidget):
         gpu_info_provider: Optional[Callable[[], GpuRuntimeInfo]] = None,
         diagnostics_info_provider: Optional[Callable[[], dict]] = None,
         vector_index=None,
+        activity_recorder: Optional[Callable[[str, str], None]] = None,
         theme: str = "dark",
         parent: Optional[QWidget] = None,
     ) -> None:
@@ -118,11 +119,20 @@ class SettingsView(QWidget):
         self._gpu_info_provider = gpu_info_provider
         self._diagnostics_info_provider = diagnostics_info_provider
         self._vector_index = vector_index
+        self._activity_recorder = activity_recorder
         self._rebuild_worker: Optional[RebuildIndexWorker] = None
         self._rebuild_progress_dialog: Optional[QProgressDialog] = None
         self._setup_ui()
         self._apply_styles()
         self.refresh_feature_status()
+
+    def _record_activity(self, activity_type: str, message: str) -> None:
+        if self._activity_recorder is None:
+            return
+        try:
+            self._activity_recorder(activity_type, message)
+        except Exception as exc:
+            logger.error("Failed to record settings activity: %s", exc)
 
     def refresh_feature_status(self) -> None:
         """Update overview stat cards that depend on live catalog data."""
@@ -621,6 +631,10 @@ class SettingsView(QWidget):
             configure_sam2_from_settings(enabled)
         except Exception as exc:
             logger.warning("Could not apply SAM2 setting: %s", exc)
+        self._record_activity(
+            "settings",
+            f"SAM 2 Precise Crop {'enabled' if enabled else 'disabled'}",
+        )
         self._refresh_sam2_status()
 
     def _build_maintenance_section(self) -> QGroupBox:
@@ -696,16 +710,25 @@ class SettingsView(QWidget):
         return box
 
     def _on_check_updates_clicked(self) -> None:
+        self._record_activity("settings", "Checked for updates")
         if self._on_check_updates is not None:
             self._on_check_updates()
 
     def _on_auto_update_toggled(self, enabled: bool) -> None:
         self._settings.check_for_updates = enabled
+        self._record_activity(
+            "settings",
+            f"Automatic update checks {'enabled' if enabled else 'disabled'}",
+        )
 
     def _on_minimize_to_tray_toggled(self, enabled: bool) -> None:
         self._settings.minimize_to_tray_on_close = enabled
         if self._on_minimize_to_tray_changed is not None:
             self._on_minimize_to_tray_changed(enabled)
+        self._record_activity(
+            "settings",
+            f"Minimize to tray on close {'enabled' if enabled else 'disabled'}",
+        )
         logger.info("minimize_to_tray_on_close set to %s", enabled)
 
     # ── Handlers: Watched Folders ────────────────────────────────────────
@@ -725,6 +748,7 @@ class SettingsView(QWidget):
         self._settings.watch_folders = current
         self._folders_list.addItem(QListWidgetItem(resolved))
         logger.info(f"Added watched folder: {resolved}")
+        self._record_activity("settings", f"Added watched folder: {resolved}")
         self._apply_watch_folder_changes()
 
     def _apply_watch_folder_changes(self) -> None:
@@ -751,6 +775,7 @@ class SettingsView(QWidget):
 
         self._folders_list.takeItem(self._folders_list.row(selected))
         logger.info(f"Removed watched folder: {folder_path}")
+        self._record_activity("settings", f"Removed watched folder: {folder_path}")
         self._apply_watch_folder_changes()
 
     # ── Handlers: Preferences ────────────────────────────────────────────
@@ -758,6 +783,9 @@ class SettingsView(QWidget):
     def _on_top_k_changed(self, value: str) -> None:
         try:
             self._settings.top_k = int(value)
+            self._record_activity(
+                "settings", f"Search results shown set to {value}"
+            )
         except ValueError:
             logger.warning(f"Ignoring non-numeric Search Results Shown value: {value!r}")
 
@@ -765,6 +793,7 @@ class SettingsView(QWidget):
         self._settings.theme = theme
         if self._on_theme_changed:
             self._on_theme_changed(theme)
+        # Theme activity is recorded in MainWindow once the switch applies.
 
     # ── Handlers: Maintenance ────────────────────────────────────────────
 
@@ -787,6 +816,9 @@ class SettingsView(QWidget):
             shutil.copy2(db_path, dest_str)
             message_box.information(self, "Backup Complete", f"Database backed up to:\n{dest_str}")
             logger.info(f"Database backed up to {dest_str}")
+            self._record_activity(
+                "maintenance", f"Database backed up to '{Path(dest_str).name}'"
+            )
         except OSError as e:
             message_box.critical(self, "Backup Failed", f"Could not back up database:\n{e}")
             logger.error(f"Database backup failed: {e}")
@@ -807,6 +839,9 @@ class SettingsView(QWidget):
             shutil.copy2(log_path, dest_str)
             message_box.information(self, "Logs Exported", f"Logs exported to:\n{dest_str}")
             logger.info(f"Logs exported to {dest_str}")
+            self._record_activity(
+                "maintenance", f"Logs exported to '{Path(dest_str).name}'"
+            )
         except OSError as e:
             message_box.critical(self, "Export Failed", f"Could not export logs:\n{e}")
             logger.error(f"Log export failed: {e}")
@@ -831,6 +866,10 @@ class SettingsView(QWidget):
                 self,
                 "Diagnostics Exported",
                 f"Diagnostics report exported to:\n{path}",
+            )
+            self._record_activity(
+                "maintenance",
+                f"Diagnostics exported to '{Path(str(path)).name}'",
             )
         except Exception as e:
             message_box.critical(
@@ -890,6 +929,9 @@ class SettingsView(QWidget):
             message += f" ({errors} could not be deleted.)"
         message_box.information(self, "Cache Cleared", message)
         logger.info(f"Cleared thumbnail cache: {deleted} deleted, {errors} errors")
+        self._record_activity(
+            "maintenance", f"Cleared thumbnail cache — {deleted} file(s)"
+        )
 
     def _on_rebuild_faiss(self) -> None:
         if self._indexing_use_case is None or self._indexed_folders_provider is None:
@@ -1001,6 +1043,7 @@ class SettingsView(QWidget):
         if total_failed:
             message += f" {total_failed} failed."
         message_box.information(self, "Rebuild Complete", message)
+        self._record_activity("maintenance", message)
 
     def _on_rebuild_failed(self, error_message: str) -> None:
         self._rebuild_button.setEnabled(True)
@@ -1009,6 +1052,9 @@ class SettingsView(QWidget):
             self._rebuild_progress_dialog = None
         self._rebuild_worker = None
         message_box.critical(self, "Rebuild Failed", error_message)
+        self._record_activity(
+            "maintenance", f"Search index rebuild failed: {error_message}"
+        )
 
     def set_theme(self, theme: str) -> None:
         """Re-skin this view for a newly-selected theme (called by MainWindow)."""
