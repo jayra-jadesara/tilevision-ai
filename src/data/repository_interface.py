@@ -99,6 +99,34 @@ class IImageRepository(ABC):
         """
         pass
 
+    def count_indexed_tiles_by_folders(
+        self, folder_paths: List[str]
+    ) -> Dict[str, int]:
+        """
+        Bulk-count indexed tiles under each folder path.
+
+        Each tile is assigned to the *longest* matching folder prefix
+        (same ``startswith`` semantics as
+        ``IndexImagesUseCase._count_indexed_tiles_under``). Nested folders
+        therefore do not double-count tiles that belong to a more specific
+        folder.
+
+        Default implementation scans ``get_all()``; SQLite overrides with a
+        lighter path-only query.
+        """
+        counts = {path: 0 for path in folder_paths}
+        if not folder_paths:
+            return counts
+        ordered = sorted(folder_paths, key=len, reverse=True)
+        for tile in self.get_all():
+            if not tile.is_indexed:
+                continue
+            for folder in ordered:
+                if tile.file_path.startswith(folder):
+                    counts[folder] += 1
+                    break
+        return counts
+
     @abstractmethod
     def get_by_ids(self, ids: List[int]) -> List[TileImage]:
         """
@@ -299,12 +327,15 @@ class ISearchHistoryRepository(ABC):
         pass
 
     @abstractmethod
-    def get_recent_searches(self, limit: int = 10) -> List[SearchHistoryEntry]:
+    def get_recent_searches(
+        self, limit: int = 10, offset: int = 0
+    ) -> List[SearchHistoryEntry]:
         """
         Retrieve the most recent searches, newest first.
 
         Args:
             limit: Maximum number of entries to return.
+            offset: Number of newest rows to skip (for pagination).
 
         Returns:
             A list of SearchHistoryEntry, newest first.
@@ -343,12 +374,15 @@ class IActivityLogRepository(ABC):
         pass
 
     @abstractmethod
-    def get_recent_activity(self, limit: int = 10) -> List[ActivityLogEntry]:
+    def get_recent_activity(
+        self, limit: int = 10, offset: int = 0
+    ) -> List[ActivityLogEntry]:
         """
         Retrieve the most recent activity events, newest first.
 
         Args:
             limit: Maximum number of entries to return.
+            offset: Number of newest rows to skip (for pagination).
 
         Returns:
             A list of ActivityLogEntry, newest first.

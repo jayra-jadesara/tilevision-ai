@@ -50,6 +50,7 @@ def show_license_activation(
     *,
     show_back: bool = True,
     parent=None,
+    activity_recorder=None,
 ) -> Optional[Dict[str, Any]]:
     """
     Show the same LicenseView used at startup.
@@ -63,6 +64,7 @@ def show_license_activation(
         theme=theme,
         show_back=show_back,
         parent=parent,
+        activity_recorder=activity_recorder,
     )
     license_dialog.exec()
 

@@ -127,6 +127,14 @@ class _DuplicateGroupWidget(QFrame):
         folder_button.clicked.connect(lambda: self._open_folder(tile))
         button_row.addWidget(folder_button)
 
+        reveal_button = QPushButton("📍")
+        from src.utils.reveal_file import reveal_action_label
+
+        reveal_button.setToolTip(reveal_action_label().lstrip("📍 ").strip())
+        reveal_button.setFixedWidth(28)
+        reveal_button.clicked.connect(lambda: self._reveal_file(tile))
+        button_row.addWidget(reveal_button)
+
         delete_button = QPushButton("Delete")
         delete_button.setObjectName("DeleteButton")
         delete_button.setToolTip("Delete this duplicate")
@@ -184,15 +192,29 @@ class _DuplicateGroupWidget(QFrame):
         else:
             message_box.warning(self, "Folder Not Found", f"This folder no longer exists:\n{folder}")
 
+    def _reveal_file(self, tile: TileImage) -> None:
+        from src.utils.reveal_file import reveal_in_file_manager
+
+        ok, error = reveal_in_file_manager(tile.file_path)
+        if not ok:
+            message_box.warning(self, "File Not Found", error)
+
 
 class DuplicatesView(QDialog):
     """Modal dialog for scanning and reviewing duplicate/near-duplicate tiles."""
 
-    def __init__(self, use_case: FindDuplicatesUseCase, parent=None, theme: str = "dark") -> None:
+    def __init__(
+        self,
+        use_case: FindDuplicatesUseCase,
+        parent=None,
+        theme: str = "dark",
+        activity_recorder=None,
+    ) -> None:
         super().__init__(parent)
         self._use_case = use_case
         self._worker: DuplicatesWorker = None
         self._theme = theme
+        self._activity_recorder = activity_recorder
 
         self.setWindowTitle("Duplicate Detection")
         if APP_ICON_PATH.exists():
@@ -271,6 +293,16 @@ class DuplicatesView(QDialog):
                 f"Found {len(exact_groups)} exact duplicate group(s) and "
                 f"{len(near_groups)} near-duplicate group(s)."
             )
+
+        if self._activity_recorder is not None:
+            try:
+                self._activity_recorder(
+                    "duplicate_scan",
+                    f"Duplicate scan — {len(exact_groups)} exact, "
+                    f"{len(near_groups)} near-duplicate group(s)",
+                )
+            except Exception:
+                pass
 
         for group in exact_groups:
             widget = _DuplicateGroupWidget(group, is_exact=True, use_case=self._use_case)

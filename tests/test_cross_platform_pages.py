@@ -198,9 +198,22 @@ def test_settings_export_profiles_tab(full_main_window):
 
 def test_all_pages_cycle_without_error(full_main_window):
     window = full_main_window
-    for index in (0, 1, 2, 3, 4, 5, 0, 1):
+    for index in (0, 1, 2, 3, 4, 5, 6, 7, 0, 1):
         window._navigate(index)
         assert window._content_stack.currentIndex() == index
+
+
+def test_history_and_activity_pages_open(full_main_window):
+    window = full_main_window
+    window._navigate(6)
+    assert window._content_stack.currentIndex() == 6
+    assert window._image_history_view is window._content_stack.currentWidget()
+    assert window._nav_history_button.isChecked()
+
+    window._navigate(7)
+    assert window._content_stack.currentIndex() == 7
+    assert window._activity_log_view is window._content_stack.currentWidget()
+    assert window._nav_activity_button.isChecked()
 
 
 def test_help_page_opens(full_main_window):

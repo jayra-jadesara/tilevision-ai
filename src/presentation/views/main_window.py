@@ -54,6 +54,8 @@ from src.presentation.views.settings_view import SettingsView
 from src.presentation.views.dashboard_view import DashboardView
 from src.presentation.views.help_view import HelpView
 from src.presentation.views.pricing_quote_view import PricingQuoteView
+from src.presentation.views.image_history_view import ImageHistoryView
+from src.presentation.views.activity_log_view import ActivityLogView
 from src.theme.theme_manager import adapt_legacy_stylesheet, get_app_stylesheet, get_palette
 from src.utils.brand_assets import (
     APP_ICON_PATH,
@@ -83,6 +85,16 @@ class DashboardDataProviders:
     last_search: Optional[Callable[[], object]] = None
     recent_activity: Optional[Callable[[], List[object]]] = None
     recent_searches: Optional[Callable[[], List[object]]] = None
+
+
+@dataclass
+class HistoryActivityProviders:
+    """Providers for the Image History and Activity Log stack pages."""
+
+    search_history_page: Optional[Callable[[int, int], List[object]]] = None
+    folder_counts: Optional[Callable[[], List[object]]] = None
+    activity_log_page: Optional[Callable[[int, int], List[object]]] = None
+    activity_recorder: Optional[Callable[[str, str], None]] = None
 
 
 class NavButton(QToolButton):
@@ -133,6 +145,7 @@ class MainWindow(QMainWindow):
         settings=None,
         catalog_count_provider: Optional[Callable[[], int]] = None,
         dashboard_providers: Optional[DashboardDataProviders] = None,
+        history_activity_providers: Optional[HistoryActivityProviders] = None,
         db_path_provider: Optional[Callable[[], object]] = None,
         indexing_use_case=None,
         indexed_folders_provider: Optional[Callable[[], List[str]]] = None,
@@ -187,6 +200,9 @@ class MainWindow(QMainWindow):
         self._settings = settings
         self._catalog_count_provider = catalog_count_provider
         self._dashboard_providers = dashboard_providers or DashboardDataProviders()
+        self._history_activity_providers = (
+            history_activity_providers or HistoryActivityProviders()
+        )
         self._db_path_provider = db_path_provider
         self._indexing_use_case = indexing_use_case
         self._indexed_folders_provider = indexed_folders_provider
@@ -308,6 +324,8 @@ class MainWindow(QMainWindow):
                 on_go_to_search=lambda: self._navigate(1),
                 on_go_to_duplicates=self._on_duplicates_clicked if self._find_duplicates_use_case else None,
                 on_go_to_settings=(lambda: self._navigate(3)) if self._settings is not None else None,
+                on_go_to_history=lambda: self._navigate(6),
+                on_go_to_activity=lambda: self._navigate(7),
                 on_repeat_search=self._on_dashboard_repeat_search,
                 theme=self._current_theme,
             )
@@ -352,6 +370,32 @@ class MainWindow(QMainWindow):
         # index 5: Pricing Quote (normal page, not a popup)
         self._pricing_view = PricingQuoteView(theme=self._current_theme)
         self._content_stack.addWidget(self._pricing_view)
+
+        # index 6: Image History
+        hap = self._history_activity_providers
+        self._image_history_view = ImageHistoryView(
+            search_history_provider=hap.search_history_page,
+            folder_counts_provider=hap.folder_counts,
+            on_repeat_search=self._on_dashboard_repeat_search,
+            theme=self._current_theme,
+        )
+        self._content_stack.addWidget(self._image_history_view)
+        self._nav_history_button.setEnabled(True)
+        self._nav_history_button.setToolTip("Search history & folder image counts")
+        self._nav_history_button.clicked.connect(lambda: self._navigate(6))
+
+        # index 7: Activity Log
+        self._activity_log_view = ActivityLogView(
+            activity_provider=hap.activity_log_page,
+            theme=self._current_theme,
+        )
+        self._content_stack.addWidget(self._activity_log_view)
+        self._nav_activity_button.setEnabled(True)
+        self._nav_activity_button.setToolTip("Full activity log")
+        self._nav_activity_button.clicked.connect(lambda: self._navigate(7))
+
+        if self._search_viewmodel is not None and hasattr(self, "_search_view"):
+            self._search_view.set_view_all_history(lambda: self._navigate(6))
 
         # Activate the first nav button by default
         self._nav_index_button.setChecked(True)
@@ -418,6 +462,18 @@ class MainWindow(QMainWindow):
         self._nav_catalog_button.setToolTip("Showroom overview")
         self._nav_button_group.addButton(self._nav_catalog_button)
         layout.addWidget(self._nav_catalog_button)
+
+        self._nav_history_button = NavButton("History", "history", theme=self._current_theme)
+        self._nav_history_button.setEnabled(False)
+        self._nav_history_button.setToolTip("Image / search history")
+        self._nav_button_group.addButton(self._nav_history_button)
+        layout.addWidget(self._nav_history_button)
+
+        self._nav_activity_button = NavButton("Activity", "activity", theme=self._current_theme)
+        self._nav_activity_button.setEnabled(False)
+        self._nav_activity_button.setToolTip("Activity log")
+        self._nav_button_group.addButton(self._nav_activity_button)
+        layout.addWidget(self._nav_activity_button)
 
         self._nav_settings_button = NavButton("Settings", "settings", theme=self._current_theme)
         self._nav_settings_button.setEnabled(False)
@@ -684,6 +740,8 @@ class MainWindow(QMainWindow):
             self._nav_index_button,
             self._nav_search_button,
             self._nav_catalog_button,
+            self._nav_history_button,
+            self._nav_activity_button,
             self._nav_settings_button,
             self._nav_duplicates_button,
             self._nav_help_button,
@@ -699,6 +757,8 @@ class MainWindow(QMainWindow):
             3: self._nav_settings_button,
             4: self._nav_help_button,
             5: self._nav_pricing_button,
+            6: self._nav_history_button,
+            7: self._nav_activity_button,
         }
         if index in nav_map:
             nav_map[index].setChecked(True)
@@ -716,6 +776,10 @@ class MainWindow(QMainWindow):
             settings = getattr(self, "_settings_view", None)
             if settings is not None and hasattr(settings, "refresh_feature_status"):
                 settings.refresh_feature_status()
+        if index == 6 and hasattr(self, "_image_history_view"):
+            self._image_history_view.refresh()
+        if index == 7 and hasattr(self, "_activity_log_view"):
+            self._activity_log_view.refresh()
 
     def navigate_to_settings_export_profiles(self) -> None:
         """Open Settings on the Export Profiles tab (from Export Catalogue)."""
@@ -732,7 +796,12 @@ class MainWindow(QMainWindow):
         """Open the Duplicate Detection dialog (modal, like License activation)."""
         if self._find_duplicates_use_case is None:
             return
-        dialog = DuplicatesView(self._find_duplicates_use_case, parent=self, theme=self._current_theme)
+        dialog = DuplicatesView(
+            self._find_duplicates_use_case,
+            parent=self,
+            theme=self._current_theme,
+            activity_recorder=self._history_activity_providers.activity_recorder,
+        )
         dialog.exec()
         self._sync_nav_selection()
 
@@ -765,6 +834,8 @@ class MainWindow(QMainWindow):
             "_settings_view",
             "_help_view",
             "_pricing_view",
+            "_image_history_view",
+            "_activity_log_view",
         ):
             view = getattr(self, view_attr, None)
             if view is not None and hasattr(view, "set_theme"):
@@ -775,6 +846,8 @@ class MainWindow(QMainWindow):
             self._nav_search_button,
             self._nav_duplicates_button,
             self._nav_catalog_button,
+            self._nav_history_button,
+            self._nav_activity_button,
             self._nav_settings_button,
             self._nav_help_button,
             self._nav_pricing_button,
