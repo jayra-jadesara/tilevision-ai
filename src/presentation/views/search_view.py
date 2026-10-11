@@ -635,7 +635,15 @@ class SearchView(QWidget):
         )
         layout.addWidget(self._drop_zone, stretch=1)
 
-        button_col = QVBoxLayout()
+        # Keep the action stack compact — do not let it expand to half the row.
+        button_panel = QWidget()
+        button_panel.setObjectName("SearchActionColumn")
+        button_panel.setFixedWidth(168)
+        button_panel.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred
+        )
+        button_col = QVBoxLayout(button_panel)
+        button_col.setContentsMargins(0, 0, 0, 0)
         button_col.setSpacing(8)
         button_col.addStretch()
 
@@ -643,6 +651,7 @@ class SearchView(QWidget):
         self._export_button = QPushButton("Export Catalogue")
         self._export_button.setObjectName("SecondaryButton")
         self._export_button.clicked.connect(self._on_export_clicked)
+        self._export_button.setEnabled(False)
         button_col.addWidget(self._export_button)
 
         button_col.addWidget(self._make_button_separator())
@@ -677,9 +686,9 @@ class SearchView(QWidget):
 
         button_col.addWidget(self._make_button_separator())
 
-        # ── Reset (visually set apart from crop/history groups)
+        # ── Reset (same SecondaryButton look as the rest — not a dashed "off" style)
         self._clear_button = QPushButton("Clear")
-        self._clear_button.setObjectName("ClearActionButton")
+        self._clear_button.setObjectName("SecondaryButton")
         self._clear_button.clicked.connect(self._on_clear_clicked)
         self._clear_button.setEnabled(False)
         button_col.addWidget(self._clear_button)
@@ -702,7 +711,7 @@ class SearchView(QWidget):
         button_col.addWidget(self._view_all_history_button)
 
         button_col.addStretch()
-        layout.addLayout(button_col)
+        layout.addWidget(button_panel, stretch=0)
 
         return panel
 
@@ -713,7 +722,6 @@ class SearchView(QWidget):
         separator.setFrameShape(QFrame.Shape.HLine)
         separator.setObjectName("SearchButtonSeparator")
         separator.setFixedHeight(8)
-        separator.setMinimumWidth(120)
         return separator
 
     def _build_filter_bar(self) -> QWidget:
@@ -919,11 +927,13 @@ class SearchView(QWidget):
         self._viewmodel.results_ready.connect(self._on_results_ready)
         self._viewmodel.status_message.connect(self._status_label.setText)
         self._viewmodel.search_error.connect(self._on_search_error)
-        self._viewmodel.query_image_selected.connect(self._drop_zone.show_preview)
+        # History re-run / search_by_image emit this — keep path + action buttons in sync.
+        self._viewmodel.query_image_selected.connect(self._on_query_image_selected)
         self._viewmodel.filters_available.connect(self._on_filters_available)
         self._viewmodel.search_history_updated.connect(self._show_history_menu)
         self._viewmodel.search_stats_ready.connect(self._on_search_stats_ready)
         self._viewmodel.load_filter_options()
+        self._refresh_action_buttons()
 
     def _start_searching_animation(self) -> None:
         """Animate the status label with cycling dots while a search runs
@@ -942,16 +952,18 @@ class SearchView(QWidget):
 
     # ── Event Handlers ───────────────────────────────────────────────────
 
+    def _on_query_image_selected(self, image_path: str) -> None:
+        """Keep drop-zone preview and action buttons aligned with the ViewModel query."""
+        self._current_query_image_path = image_path
+        self._drop_zone.show_preview(image_path)
+        self._refresh_action_buttons()
+
     def _on_image_chosen(self, image_path: str) -> None:
         logger.info(f"Query image selected: {image_path}")
         self._current_query_image_path = image_path
-        self._crop_button.setEnabled(True)
-        self._auto_crop_button.setEnabled(True)
-        self._precise_crop_button.setEnabled(True)
-        # Customer can Clear as soon as a photo is loaded — do not wait for
-        # SEARCHING (state can lag one event-loop tick after drop).
-        self._clear_button.setEnabled(True)
         self._confidence_banner.setVisible(False)
+        # Enable Clear / crop immediately (SEARCHING can lag one event-loop tick).
+        self._refresh_action_buttons()
 
         suggest_crop, crop_reason = should_suggest_crop(image_path)
         if suggest_crop:
@@ -1062,7 +1074,7 @@ class SearchView(QWidget):
     def _on_background_crop_failed(self, mode: str, message: str) -> None:
         self._crop_busy = False
         self._progress_bar.setVisible(self._viewmodel.is_searching)
-        self._refresh_crop_controls()
+        self._refresh_action_buttons()
         logger.error("%s crop failed: %s", mode, message)
         if mode == "precise":
             message_box.warning(
@@ -1080,7 +1092,7 @@ class SearchView(QWidget):
             )
 
     def _set_crop_controls_enabled(self, enabled: bool) -> None:
-        has_query = self._current_query_image_path is not None
+        has_query = bool(self._current_query_image_path)
         allow = enabled and has_query and not self._crop_busy
         self._crop_button.setEnabled(allow)
         self._auto_crop_button.setEnabled(allow)
@@ -1089,6 +1101,18 @@ class SearchView(QWidget):
     def _refresh_crop_controls(self) -> None:
         searching = self._viewmodel.is_searching
         self._set_crop_controls_enabled(not searching and not self._crop_busy)
+
+    def _refresh_action_buttons(self) -> None:
+        """Sync Export / Clear / crop enablement from query + results state."""
+        has_query = bool(self._current_query_image_path)
+        searching = self._viewmodel.is_searching
+        has_results = bool(self._current_results)
+        # Export needs results (and implies a query was run).
+        self._export_button.setEnabled(
+            has_results and not searching and not self._crop_busy
+        )
+        self._clear_button.setEnabled(has_query and not self._crop_busy)
+        self._refresh_crop_controls()
 
     def _on_clear_clicked(self) -> None:
         if self._crop_worker is not None and self._crop_worker.isRunning():
@@ -1100,13 +1124,12 @@ class SearchView(QWidget):
         self._crop_worker = None
         self._drop_zone.reset()
         self._current_query_image_path = None
-        self._crop_button.setEnabled(False)
-        self._auto_crop_button.setEnabled(False)
-        self._precise_crop_button.setEnabled(False)
+        self._current_results = []
         self._confidence_banner.setVisible(False)
         self._progress_bar.setVisible(False)
         self._viewmodel.clear_results()
-        
+        self._refresh_action_buttons()
+
     def set_view_all_history(self, callback) -> None:
         """Wire the Search page's 'View full history' button to the History stack page."""
         self._view_all_history_button.setVisible(callback is not None)
@@ -1152,9 +1175,7 @@ class SearchView(QWidget):
         is_searching = state == SearchState.SEARCHING
         self._drop_zone.set_busy(is_searching or self._crop_busy)
         self._progress_bar.setVisible(is_searching or self._crop_busy)
-        has_query = self._current_query_image_path is not None
-        self._clear_button.setEnabled((state != SearchState.IDLE or has_query) and not self._crop_busy)
-        self._refresh_crop_controls()
+        self._refresh_action_buttons()
         for combo in self._filter_combos.values():
             combo.setEnabled(not is_searching and not self._crop_busy)
 
@@ -1193,6 +1214,7 @@ class SearchView(QWidget):
         self._results_generation += 1
         self._populate_table(results)
         self._show_confidence_banner(results)
+        self._refresh_action_buttons()
         if results:
             self._empty_state_widget.setVisible(False)
             self._results_table.setVisible(True)
@@ -1480,30 +1502,15 @@ class SearchView(QWidget):
                 background-color: {p['hover_bg']};
                 color: {p['text_primary']};
             }}
+            #SearchActionColumn {{
+                max-width: 168px;
+                background: transparent;
+            }}
             #SearchButtonSeparator {{
                 border: none;
                 border-top: 1px solid {p['border_strong']};
                 margin: 6px 4px 2px 4px;
                 background: transparent;
-            }}
-            #ClearActionButton {{
-                background-color: {p['bg_panel']};
-                color: {p['text_muted']};
-                border: 1px dashed {p['border_strong']};
-                border-radius: 6px;
-                padding: 6px 14px;
-                font-size: 12px;
-                font-weight: 600;
-            }}
-            #ClearActionButton:hover:enabled {{
-                background-color: {p['button_hover']};
-                color: {p['text_primary']};
-                border-style: solid;
-                border-color: {p['accent_soft']};
-            }}
-            #ClearActionButton:disabled {{
-                color: {p['text_faint']};
-                border-color: {p['border']};
             }}
             QHeaderView::section {{
                 background-color: {p['row_alt']};
