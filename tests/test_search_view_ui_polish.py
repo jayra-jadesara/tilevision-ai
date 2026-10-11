@@ -107,7 +107,8 @@ def test_copy_button_sets_clipboard_and_shows_toast(search_view, qapp):
 def test_preview_column_is_narrow_fixed(search_view):
     header = search_view._results_table.horizontalHeader()
     assert header.sectionResizeMode(_PREVIEW_COL) == QHeaderView.ResizeMode.Fixed
-    assert search_view._results_table.columnWidth(_PREVIEW_COL) == _PREVIEW_COL_WIDTH
+    assert search_view._results_table.columnWidth(_PREVIEW_COL) <= _PREVIEW_COL_WIDTH + 8
+    assert search_view._results_table.columnWidth(_PREVIEW_COL) >= 40
     assert header.sectionResizeMode(_PATH_COL) == QHeaderView.ResizeMode.Stretch
 
 

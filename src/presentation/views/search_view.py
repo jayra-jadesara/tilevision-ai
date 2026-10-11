@@ -81,7 +81,7 @@ _TABLE_COLUMNS = [
 
 _PREVIEW_COL = 5
 _PATH_COL = 6
-_PREVIEW_COL_WIDTH = 64
+_PREVIEW_COL_WIDTH = 52
 
 
 class _PathCellWidget(QWidget):
@@ -824,10 +824,12 @@ class SearchView(QWidget):
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         # Preview is a short "View" link — keep it narrow (was Stretch by mistake).
+        header.setMinimumSectionSize(40)
         header.setSectionResizeMode(_PREVIEW_COL, QHeaderView.ResizeMode.Fixed)
         self._results_table.setColumnWidth(_PREVIEW_COL, _PREVIEW_COL_WIDTH)
         # Path + copy control takes the remaining width.
         header.setSectionResizeMode(_PATH_COL, QHeaderView.ResizeMode.Stretch)
+        header.setStretchLastSection(True)
 
         self._results_table.cellDoubleClicked.connect(self._on_row_double_clicked)
         self._results_table.cellClicked.connect(self._on_table_clicked)
@@ -1280,6 +1282,9 @@ class SearchView(QWidget):
                             font = item.font()
                             font.setBold(True)
                             item.setFont(font)
+
+        # Keep Preview pinned narrow after content-driven resizes.
+        self._results_table.setColumnWidth(_PREVIEW_COL, _PREVIEW_COL_WIDTH)
 
         # Defer pixmap I/O until after the table is visible.
         generation = self._results_generation
