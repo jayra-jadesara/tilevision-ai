@@ -165,14 +165,22 @@ LICENSE_PAYLOAD_VERSION = 2
 
 
 def _signing_message(payload: Dict[str, Any]) -> bytes:
-    """Build the signed message for v1 (legacy) or v2 (license_id) payloads."""
+    """Build the signed message for v1 (legacy) or v2 (license_id) payloads.
+
+    Optional ``activation_deadline_at`` is appended only when present so
+    keys issued before that field existed continue to verify.
+    """
     version = int(payload.get("version", 1))
     if version >= 2 and payload.get("license_id"):
-        return (
+        message = (
             f"{payload['license_id']}|{payload['customer_name']}|"
             f"{payload['expires_at']}|{payload['hardware_hash']}|"
             f"{payload.get('license_type', 'Custom')}"
-        ).encode("utf-8")
+        )
+        deadline = payload.get("activation_deadline_at")
+        if deadline:
+            message = f"{message}|{deadline}"
+        return message.encode("utf-8")
     return (
         f"{payload['customer_name']}|{payload['expires_at']}|{payload['hardware_hash']}"
     ).encode("utf-8")
@@ -346,13 +354,18 @@ class LicenseValidator:
             )
 
         logger.info(f"License validated successfully for: {customer_name} (expires: {expires_at_str})")
-        return {
+        result = {
             "customer_name": customer_name,
             "expires_at": expires_at_str,
             "hardware_hash": hardware_hash,
             "license_type": license_data.get("license_type", "Custom"),
             "license_id": license_id,
         }
+        # Pass through optional activation-window field (checked only at
+        # first activation — never by this method itself).
+        if license_data.get("activation_deadline_at"):
+            result["activation_deadline_at"] = license_data["activation_deadline_at"]
+        return result
 
 
 def compute_expiry_date(license_type: str, from_date: Optional[datetime] = None) -> str:
@@ -393,6 +406,7 @@ def generate_license_key(
     hardware_hash: str,
     license_type: str = "Custom",
     license_id: Optional[str] = None,
+    activation_deadline_at: Optional[str] = None,
 ) -> str:
     """
     Generate a signed base64 license key.
@@ -414,6 +428,9 @@ def generate_license_key(
             driven entirely by expires_at, not this label — mismatching
             the two (e.g. "Lifetime" with a 30-day expires_at) won't
             confer any extra access.
+        activation_deadline_at: Optional ISO-8601 datetime string. When set,
+            the customer app rejects *first activation* after this instant.
+            Already-installed keys are never re-checked against it.
 
     Returns:
         A base64-encoded license key string ready to paste into the activation dialog.
@@ -423,7 +440,7 @@ def generate_license_key(
     private_key = load_pem_private_key(private_key_pem, password=None)
     license_id = license_id or str(uuid.uuid4())
 
-    payload = {
+    payload: Dict[str, Any] = {
         "version": LICENSE_PAYLOAD_VERSION,
         "license_id": license_id,
         "customer_name": customer_name,
@@ -431,6 +448,8 @@ def generate_license_key(
         "hardware_hash": hardware_hash,
         "license_type": license_type,
     }
+    if activation_deadline_at:
+        payload["activation_deadline_at"] = activation_deadline_at
 
     data_to_sign = _signing_message(payload)
     signature = private_key.sign(data_to_sign, ec.ECDSA(hashes.SHA256()))

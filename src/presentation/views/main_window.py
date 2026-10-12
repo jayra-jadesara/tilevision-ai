@@ -28,7 +28,7 @@ from src.utils.platform_info import default_ui_font_family
 from src.version import APP_VERSION
 
 from PySide6.QtCore import Qt, Slot, QSize
-from PySide6.QtGui import QFont, QIcon, QAction, QCloseEvent, QPixmap
+from PySide6.QtGui import QFont, QIcon, QAction, QCloseEvent, QPixmap, QResizeEvent
 from PySide6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -44,6 +44,8 @@ from PySide6.QtWidgets import (
     QSpacerItem,
     QApplication,
 )
+
+from src.presentation.widgets.auto_index_toast import AutoIndexToast
 
 from src.presentation.views.indexing_view import IndexingView
 from src.presentation.viewmodels.indexing_viewmodel import IndexingViewModel, IndexingState
@@ -235,6 +237,12 @@ class MainWindow(QMainWindow):
         self._setup_status_bar()
         self._connect_signals()
         self.refresh_stale_feature_banner()
+
+        # Top-right toast for auto-index events (any page). Parent = central
+        # widget so coordinates match the content chrome, not the frame.
+        self._auto_index_toast = AutoIndexToast(
+            self.centralWidget(), theme=self._current_theme
+        )
 
         # Apply the app-level theme unconditionally
         self._on_theme_changed_request(self._current_theme)
@@ -651,6 +659,9 @@ class MainWindow(QMainWindow):
         else:
             message = f"Auto-index failed: {name}"
         self._update_status_bar(message)
+        toast = getattr(self, "_auto_index_toast", None)
+        if toast is not None:
+            toast.show_message(message)
         self._on_catalog_changed()
 
     def set_minimize_to_tray_on_close(self, enabled: bool) -> None:
@@ -853,6 +864,10 @@ class MainWindow(QMainWindow):
             if view is not None and hasattr(view, "set_theme"):
                 view.set_theme(theme)
 
+        toast = getattr(self, "_auto_index_toast", None)
+        if toast is not None:
+            toast.set_theme(theme)
+
         for btn in (
             self._nav_index_button,
             self._nav_search_button,
@@ -962,6 +977,9 @@ class MainWindow(QMainWindow):
             logger.info("Main window hidden to system tray (minimize_to_tray_on_close).")
             return
 
+        # Duplicates runs as a modal dialog (DuplicatesView.exec), so the
+        # main window cannot be closed while a scan is open — no extra guard.
+
         if vm.state in (IndexingState.RUNNING, IndexingState.PAUSED, IndexingState.CANCELLING):
             reply = message_box.question(
                 self,
@@ -978,8 +996,34 @@ class MainWindow(QMainWindow):
                 event.accept()
             else:
                 event.ignore()
-        else:
-            event.accept()
+            return
+
+        search_vm = getattr(self, "_search_viewmodel", None)
+        if search_vm is not None and bool(getattr(search_vm, "is_searching", False)):
+            reply = message_box.question(
+                self,
+                "Search in Progress",
+                "A search is currently running.\n\n"
+                "Closing now will interrupt it.\n\n"
+                "Are you sure you want to quit?",
+                message_box.StandardButton.Yes | message_box.StandardButton.No,
+                message_box.StandardButton.No,
+            )
+            if reply == message_box.StandardButton.Yes:
+                logger.warning("User force-closed the application during an active search.")
+                event.accept()
+            else:
+                event.ignore()
+            return
+
+        event.accept()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        """Keep the auto-index toast anchored to the top-right on resize."""
+        super().resizeEvent(event)
+        toast = getattr(self, "_auto_index_toast", None)
+        if toast is not None:
+            toast.reposition_if_visible()
 
     # ── Styling ───────────────────────────────────────────────────────────────
 

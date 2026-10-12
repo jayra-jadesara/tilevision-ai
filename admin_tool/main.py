@@ -8,7 +8,7 @@ import base64
 import json
 import shutil
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -511,6 +511,18 @@ class AdminLicenseWindow(QMainWindow):
         form.addRow("", self._expiry_hint)
         self._on_license_type_changed(self._license_type.currentText())
 
+        # Optional first-activation window (ISO datetime in the signed payload).
+        # Default "No limit" preserves existing admin workflows.
+        self._activation_window = QComboBox()
+        self._activation_window.addItem("No limit", None)
+        self._activation_window.addItem("30 minutes", timedelta(minutes=30))
+        self._activation_window.addItem("1 hour", timedelta(hours=1))
+        self._activation_window.addItem("4 hours", timedelta(hours=4))
+        self._activation_window.addItem("24 hours", timedelta(hours=24))
+        self._activation_window.addItem("7 days", timedelta(days=7))
+        self._prepare_form_field(self._activation_window)
+        form.addRow("Activation window:", self._activation_window)
+
         self._notes = QLineEdit()
         self._notes.setPlaceholderText("Invoice #, sales rep, etc.")
         self._prepare_form_field(self._notes)
@@ -858,6 +870,13 @@ class AdminLicenseWindow(QMainWindow):
             return LIFETIME_EXPIRY_SENTINEL
         return self._expiry.date().toString("yyyy-MM-dd")
 
+    def _selected_activation_deadline(self) -> Optional[str]:
+        """ISO-8601 datetime for first activation, or None when unlimited."""
+        duration = self._activation_window.currentData()
+        if duration is None:
+            return None
+        return (datetime.now() + duration).isoformat(timespec="seconds")
+
     def _save_settings(self, **updates: str) -> None:
         _SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
         data: dict = {}
@@ -1181,6 +1200,7 @@ class AdminLicenseWindow(QMainWindow):
                 return
 
         hardware_hash = "*" if use_wildcard else machine_id
+        activation_deadline_at = self._selected_activation_deadline()
         try:
             key = generate_license_key(
                 self._private_key_pem,
@@ -1188,6 +1208,7 @@ class AdminLicenseWindow(QMainWindow):
                 expires_at,
                 hardware_hash,
                 license_type,
+                activation_deadline_at=activation_deadline_at,
             )
             payload = json.loads(base64.b64decode(key + "==").decode("utf-8"))
             license_id = payload["license_id"]

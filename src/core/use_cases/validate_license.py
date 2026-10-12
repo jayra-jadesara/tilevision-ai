@@ -93,6 +93,7 @@ class ValidateLicenseUseCase:
         logger.info("Attempting to activate new license key...")
 
         license_details = self._validator.validate_license(license_string)
+        self._enforce_activation_deadline(license_details)
 
         license_entity = LicenseInfo(
             license_key=license_string,
@@ -109,6 +110,39 @@ class ValidateLicenseUseCase:
 
         logger.info("New license key successfully installed and activated.")
         return self._enrich_license_details(license_details)
+
+    @staticmethod
+    def _enforce_activation_deadline(license_details: Dict[str, Any]) -> None:
+        """
+        Reject a *fresh* activation when the vendor-set window has passed.
+
+        Only called from ``activate_new_license`` — never from
+        ``verify_existing_license`` — so an already-installed key is never
+        locked out after its original activation window expires.
+        """
+        raw = license_details.get("activation_deadline_at")
+        if not raw:
+            return
+        try:
+            deadline = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        except ValueError as exc:
+            logger.error("Invalid activation_deadline_at %r: %s", raw, exc)
+            raise LicenseValidationError(
+                "This license key has an invalid activation window. "
+                "Please request a new key."
+            ) from exc
+
+        now = datetime.now(deadline.tzinfo) if deadline.tzinfo else datetime.now()
+        if now > deadline:
+            logger.error(
+                "Activation rejected — deadline %s already passed (now=%s).",
+                deadline.isoformat(),
+                now.isoformat(),
+            )
+            raise LicenseValidationError(
+                "This license key's activation window has expired — "
+                "please request a new key."
+            )
 
     def get_hardware_fingerprint(self) -> str:
         """
