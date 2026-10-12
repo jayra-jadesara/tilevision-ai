@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Optional
+from typing import List, Optional, Sequence
 
 from PySide6.QtCore import QThread, Signal
 
@@ -47,10 +47,16 @@ class SearchWorker(QThread):
         top_k: int,
         filters: Optional[dict] = None,
         query_origin: Optional[str] = None,
+        query_image_paths: Optional[Sequence[str]] = None,
     ) -> None:
         super().__init__()
         self._use_case = use_case
         self._query_image_path = query_image_path
+        self._query_image_paths: List[str] = (
+            [str(p) for p in query_image_paths]
+            if query_image_paths and len(query_image_paths) > 1
+            else []
+        )
         self._top_k = top_k
         self._filters = filters or {}
         self._query_origin = query_origin
@@ -128,13 +134,21 @@ class SearchWorker(QThread):
                     self._emit_cancelled(f"before_attempt_{attempt}")
                     return
                 try:
-                    results = self._use_case.execute(
-                        self._query_image_path,
-                        top_k=self._top_k,
-                        filters=self._filters,
-                        on_stage=_on_stage,
-                        query_origin=self._query_origin,
-                    )
+                    if self._query_image_paths:
+                        results = self._use_case.execute_multi_photos(
+                            self._query_image_paths,
+                            top_k=self._top_k,
+                            filters=self._filters,
+                            on_stage=_on_stage,
+                        )
+                    else:
+                        results = self._use_case.execute(
+                            self._query_image_path,
+                            top_k=self._top_k,
+                            filters=self._filters,
+                            on_stage=_on_stage,
+                            query_origin=self._query_origin,
+                        )
                     last_error = None
                     break
                 except InferenceBusyError as exc:
