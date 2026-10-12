@@ -46,8 +46,10 @@ class TileImageEventHandler(FileSystemEventHandler):
         self,
         indexing_use_case: IndexImagesUseCase,
         on_file_indexed_callback: Optional[AutoIndexCallback] = None,
-        settle_delay_seconds: float = 2.0,
-        debounce_seconds: float = 1.0,
+        # Keep short: size-stability polling still waits for full writes, but
+        # already-stable drops should notify the UI within ~1s, not 3s+.
+        settle_delay_seconds: float = 1.0,
+        debounce_seconds: float = 0.4,
     ) -> None:
         self._use_case = indexing_use_case
         self._on_indexed = on_file_indexed_callback
@@ -153,19 +155,24 @@ class TileImageEventHandler(FileSystemEventHandler):
         logger.info("Detected filesystem activity for: %s", file_path.name)
 
         try:
-            last_size = -1
+            # Poll size stability: sample first, sleep between samples (not
+            # before the first check) so an already-written file settles fast.
             retries = 5
+            poll = max(0.05, self._settle_delay / retries)
+            last_size = -1
+            stabilized = False
             for _attempt in range(retries):
-                time.sleep(self._settle_delay / retries)
                 if not file_path.exists():
                     logger.warning("File vanished during stabilization: %s", file_path)
                     return
                 current_size = file_path.stat().st_size
-                if current_size == last_size and current_size > 0:
+                if current_size > 0 and current_size == last_size:
                     if validate_image(file_path):
+                        stabilized = True
                         break
                 last_size = current_size
-            else:
+                time.sleep(poll)
+            if not stabilized:
                 logger.warning("File did not stabilize or is invalid: %s", file_path)
                 self._notify(str(file_path), "failed", False, "File write timeout or invalid format.")
                 return

@@ -415,6 +415,12 @@ def get_admin_qss(theme: str) -> str:
         padding: 4px 8px;
         background: transparent;
     }}
+    #VersionLabel {{
+        color: {p['text_faint']};
+        font-size: 10px;
+        padding: 8px 8px 4px 8px;
+        background: transparent;
+    }}
     #AdminNavButton {{
         text-align: left;
         padding: 10px 14px;

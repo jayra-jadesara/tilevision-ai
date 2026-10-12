@@ -11,7 +11,12 @@ class AutoIndexNotifier(QObject):
     catalog_updated = Signal(str, str)  # file_path, action: indexed|removed|failed
 
     def notify(self, file_path: str, action: str, success: bool) -> None:
-        if not success or action in {"skipped"}:
+        """Thread-safe: emit so MainWindow slots run on the Qt main thread."""
+        if action == "skipped":
             return
-        if action in {"indexed", "removed", "failed"}:
+        # Failures arrive with success=False — still surface them in the UI.
+        if action == "failed":
+            self.catalog_updated.emit(file_path, action)
+            return
+        if success and action in {"indexed", "removed"}:
             self.catalog_updated.emit(file_path, action)

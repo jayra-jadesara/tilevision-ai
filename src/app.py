@@ -93,11 +93,11 @@ def _on_auto_indexed(
         _app_logger.debug("Auto-monitor skipped unchanged file: %s", file_path)
         return
 
-    # Marshal UI refresh onto the Qt main thread.
-    QTimer.singleShot(
-        0,
-        lambda: auto_index_notifier.notify(file_path, action, success),
-    )
+    # Emit from this watchdog thread; AutoIndexNotifier.catalog_updated uses a
+    # QueuedConnection to MainWindow so the toast/status update runs on the Qt
+    # main thread immediately (QTimer.singleShot from a non-Qt thread was
+    # delayed or dropped because that thread has no event loop).
+    auto_index_notifier.notify(file_path, action, success)
 
 
 def build_application() -> int:
