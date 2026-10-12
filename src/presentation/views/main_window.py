@@ -27,7 +27,7 @@ from src.ai.gpu_info import GpuRuntimeInfo
 from src.utils.platform_info import default_ui_font_family
 from src.version import APP_VERSION
 
-from PySide6.QtCore import Qt, Slot, QSize
+from PySide6.QtCore import Qt, Slot, QSize, QTimer
 from PySide6.QtGui import QFont, QIcon, QAction, QCloseEvent, QPixmap, QResizeEvent
 from PySide6.QtWidgets import (
     QMainWindow,
@@ -658,11 +658,13 @@ class MainWindow(QMainWindow):
             message = f"Removed from index: {name}"
         else:
             message = f"Auto-index failed: {name}"
+        # Paint toast/status first — catalog refresh can be heavier and must
+        # not delay the visible notification.
         self._update_status_bar(message)
         toast = getattr(self, "_auto_index_toast", None)
         if toast is not None:
             toast.show_message(message)
-        self._on_catalog_changed()
+        QTimer.singleShot(0, self._on_catalog_changed)
 
     def set_minimize_to_tray_on_close(self, enabled: bool) -> None:
         """Sync the opt-in tray-minimize flag (also updated from Settings)."""

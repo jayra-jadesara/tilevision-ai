@@ -80,6 +80,7 @@ from src.licensing.validator import (
 from src.utils.brand_assets import logo_pixmap
 from src.utils.platform_info import app_icon_path
 from src.theme.theme_manager import get_palette
+from src.version import APP_VERSION
 
 _VENDOR_DIR = Path.home() / ".tilevision_ai_vendor"
 _SETTINGS_PATH = _VENDOR_DIR / "admin_settings.json"
@@ -286,6 +287,19 @@ class AdminLicenseWindow(QMainWindow):
         layout.addWidget(self._nav_signing)
 
         layout.addStretch()
+
+        # Match customer app: version + company always visible in the sidebar.
+        version_credit = QLabel(f"v{APP_VERSION}\nAdesara Tech")
+        version_credit.setObjectName("VersionLabel")
+        version_credit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        version_credit.setWordWrap(True)
+        version_credit.setToolTip(
+            f"TileVision AI Vendor Admin v{APP_VERSION}\n"
+            f"Made by Adesara Tech\n"
+            f"© {datetime.now().year} Adesara Tech. All rights reserved."
+        )
+        layout.addWidget(version_credit)
+
         return sidebar
 
     def _navigate(self, index: int) -> None:
