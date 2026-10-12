@@ -702,6 +702,9 @@ class SearchView(QWidget):
         drop_col_layout.setSpacing(6)
 
         self._drop_zone = DropZone(
+            # Keep legacy single-path callback populated for headless QA /
+            # tools that still call DropZone._on_image_selected(path).
+            on_image_selected=self._on_image_chosen,
             on_images_selected=self._on_images_chosen,
             on_drop_rejected=self._on_drop_rejected,
         )
