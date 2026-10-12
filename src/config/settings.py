@@ -41,6 +41,8 @@ class AppSettings:
             "dinov2_model_id": "facebook/dinov2-large",
             "database_path": str(self._config_dir / "database" / "tiles.db"),
             "index_path": str(self._config_dir / "index" / "tiles.index"),
+            # Separate CLIP FAISS index for description / text search (512D).
+            "clip_index_path": str(self._config_dir / "index" / "tiles_clip.index"),
             "thumbnail_dir": str(self._config_dir / "thumbnails"),
             "watch_folders": [],
             # Opt-in: closing the main window hides to tray instead of quitting
@@ -177,6 +179,21 @@ class AppSettings:
     @index_path.setter
     def index_path(self, value: str) -> None:
         self._settings["index_path"] = value
+        self.save()
+
+    @property
+    def clip_index_path(self) -> str:
+        """FAISS index for CLIP description search (separate from DINOv2)."""
+        return str(
+            self._settings.get(
+                "clip_index_path",
+                str(self._config_dir / "index" / "tiles_clip.index"),
+            )
+        )
+
+    @clip_index_path.setter
+    def clip_index_path(self, value: str) -> None:
+        self._settings["clip_index_path"] = value
         self.save()
 
     @property

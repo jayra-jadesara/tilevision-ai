@@ -80,9 +80,11 @@ class SearchViewModel(QObject):
         activity_log_repository: Optional[IActivityLogRepository] = None,
         search_timeout_ms: Optional[int] = None,
         on_search_busy_changed: Optional[Callable[[bool], None]] = None,
+        description_use_case=None,
     ) -> None:
         super().__init__()
         self._use_case = use_case
+        self._description_use_case = description_use_case
         self._top_k = default_top_k
         self._state = SearchState.IDLE
         self._worker: Optional[SearchWorker] = None
@@ -354,6 +356,83 @@ class SearchViewModel(QObject):
         if pending and self._state != SearchState.SEARCHING:
             logger.info("[SEARCH] Starting queued query: %s", pending)
             self.search_by_image(pending, query_origin=pending_origin)
+
+    @Slot(str)
+    def search_by_description(self, query_text: str) -> None:
+        """Plain text search against the CLIP index (no hybrid image+text)."""
+        if self._description_use_case is None:
+            self._set_state(SearchState.ERROR)
+            self.search_error.emit(
+                "Description search is not available in this build."
+            )
+            return
+        text = (query_text or "").strip()
+        if not text:
+            self.search_error.emit("Enter a short description to search.")
+            return
+        if self._state == SearchState.SEARCHING:
+            self.status_message.emit("Search already in progress — wait for it to finish.")
+            return
+
+        self._claim_search_priority()
+        self._last_query_path = None
+        self._search_generation += 1
+        generation = self._search_generation
+        self._set_state(SearchState.SEARCHING)
+        self.status_message.emit(f"Searching by description: “{text[:60]}”…")
+        logger.info("[SEARCH] Description search: %r (generation=%s)", text, generation)
+
+        # Lightweight QThread worker via SearchWorker-compatible pattern.
+        from PySide6.QtCore import QThread, Signal as QtSignal
+
+        use_case = self._description_use_case
+        top_k = self._top_k
+        filters = dict(self._active_filters)
+
+        class _DescWorker(QThread):
+            search_completed = QtSignal(list)
+            search_failed = QtSignal(str)
+            search_timed = QtSignal(float)
+            search_progress = QtSignal(str)
+            search_heartbeat = QtSignal()
+
+            def run(self_inner) -> None:
+                import time as _time
+
+                t0 = _time.monotonic()
+                try:
+                    def _stage(msg: str) -> None:
+                        self_inner.search_progress.emit(msg)
+                        self_inner.search_heartbeat.emit()
+
+                    results = use_case.execute(
+                        text, top_k=top_k, filters=filters, on_stage=_stage
+                    )
+                    self_inner.search_timed.emit(_time.monotonic() - t0)
+                    self_inner.search_completed.emit(results)
+                except Exception as exc:
+                    self_inner.search_failed.emit(str(exc))
+
+        self._worker = _DescWorker()
+        self._worker.search_completed.connect(
+            lambda results, gen=generation: self._on_search_completed(results, gen)
+        )
+        self._worker.search_failed.connect(
+            lambda message, gen=generation: self._on_search_failed(message, gen)
+        )
+        self._worker.search_timed.connect(self._on_search_timed)
+        self._worker.search_progress.connect(self._on_search_progress)
+        self._worker.search_heartbeat.connect(
+            self._on_search_heartbeat,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        worker = self._worker
+        worker.finished.connect(worker.deleteLater)
+        if self._search_timeout_ms > 0:
+            self._timeout_timer.start(self._search_timeout_ms)
+        self._status_hint_timer.start(_SEARCH_STATUS_HINT_MS)
+        self._stall_timer.start(_SEARCH_STALL_MS)
+        self._worker.start()
 
     @Slot()
     def clear_results(self) -> None:
