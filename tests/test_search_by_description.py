@@ -29,9 +29,19 @@ class FakeClip:
         self._vec = self._vec / np.linalg.norm(self._vec)
         self.ensure_calls = 0
         self.embed_calls = []
+        self._loaded = False
+        self.progress_messages = []
 
-    def ensure_loaded(self) -> None:
+    @property
+    def is_loaded(self) -> bool:
+        return self._loaded
+
+    def ensure_loaded(self, on_progress=None) -> None:
         self.ensure_calls += 1
+        if on_progress is not None:
+            on_progress("Loading description-search model…")
+            self.progress_messages.append("Loading description-search model…")
+        self._loaded = True
 
     def embed_text(self, text: str) -> np.ndarray:
         self.embed_calls.append(text)
@@ -242,3 +252,203 @@ def test_clip_model_paths_constants():
     assert CLIP_EMBEDDING_DIM == 512
     assert DEFAULT_CLIP_MODEL_ID == "openai/clip-vit-base-patch32"
     assert "clip-vit-base-patch32" in str(bundled_clip_model_dir())
+
+
+def test_use_case_forwards_clip_load_progress(tmp_path, monkeypatch):
+    """ensure_loaded(on_progress=…) must surface progress to on_stage."""
+    tiles = [_tile(1, path=str(tmp_path / "a.jpg"))]
+    Path(tiles[0].file_path).write_bytes(b"x")
+    clip = FakeClip()
+
+    def _slow_ensure(on_progress=None):
+        clip.ensure_calls += 1
+        if on_progress is not None:
+            on_progress("Downloading description-search model… 12 / ~581 MB")
+        clip._loaded = True
+
+    clip.ensure_loaded = _slow_ensure  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        "src.ai.clip_model_paths.clip_model_available_locally",
+        lambda: False,
+    )
+    stages = []
+    uc = SearchByDescriptionUseCase(
+        image_repository=FakeRepo(tiles),
+        clip_embedder=clip,
+        clip_index=FakeClipIndex(ids=[1], scores=[0.9], total=1),
+        thumbnail_dir=str(tmp_path / "thumbs"),
+    )
+    uc.execute("gray tile", top_k=5, on_stage=stages.append)
+    assert any("Downloading description-search model" in s for s in stages)
+    assert any("12 / ~581 MB" in s for s in stages)
+
+
+def test_description_search_survives_slow_clip_load_with_heartbeats(qapp, monkeypatch):
+    """
+    Simulated first-use CLIP load longer than the stall window must NOT be
+    killed as long as heartbeats/progress keep flowing.
+    """
+    from PySide6.QtCore import QCoreApplication
+    from src.presentation.viewmodels import search_viewmodel as svm_mod
+    from src.presentation.viewmodels.search_viewmodel import SearchViewModel, SearchState
+
+    # Stall window much shorter than the simulated download — would have
+    # false-fired before heartbeats were wired during ensure_loaded.
+    monkeypatch.setattr(svm_mod, "_SEARCH_STALL_MS", 250)
+    monkeypatch.setattr(
+        "src.ai.clip_model_paths.clip_model_available_locally",
+        lambda: False,
+    )
+
+    class FakeImageUC:
+        def get_filter_options(self):
+            return {}
+
+        def get_index_health(self):
+            return SimpleNamespace(is_compatible=True, stale_count=0, indexed_count=1)
+
+        def get_searchable_count(self):
+            return 1
+
+    class SlowFirstUseDescUC:
+        def __init__(self):
+            self._clip = SimpleNamespace(is_loaded=False)
+
+        def execute(self, query_text, top_k=20, filters=None, on_stage=None):
+            # Simulate ~1s blocking download with progress every 80ms —
+            # well past the 250ms stall window if heartbeats were absent.
+            deadline = time.monotonic() + 1.0
+            n = 0
+            while time.monotonic() < deadline:
+                n += 1
+                if on_stage is not None:
+                    on_stage(
+                        f"Downloading description-search model… "
+                        f"{n * 40} / ~581 MB"
+                    )
+                time.sleep(0.08)
+            self._clip.is_loaded = True
+            tile = _tile(3, path="/tmp/slow.jpg")
+            return [
+                SearchResult(
+                    tile=tile, similarity_score=77.0, thumbnail_path="/tmp/slow.jpg"
+                )
+            ]
+
+    desc = SlowFirstUseDescUC()
+    vm = SearchViewModel(use_case=FakeImageUC(), description_use_case=desc)
+    errors = []
+    results_holder = []
+    statuses = []
+    vm.search_error.connect(errors.append)
+    vm.results_ready.connect(results_holder.append)
+    vm.status_message.connect(statuses.append)
+
+    vm.search_by_description("gray tile")
+    assert any("Downloading description-search model" in s for s in statuses)
+
+    deadline = time.monotonic() + 8.0
+    while time.monotonic() < deadline:
+        QCoreApplication.processEvents()
+        if results_holder or vm.state == SearchState.ERROR:
+            break
+        time.sleep(0.01)
+
+    assert results_holder, f"expected results; state={vm.state} errors={errors}"
+    assert vm.state == SearchState.RESULTS
+    assert not any("stopped responding" in (e or "").lower() for e in errors)
+    assert not any("description-search model is taking longer" in (e or "") for e in errors)
+
+    worker = getattr(vm, "_worker", None)
+    if worker is not None and worker.isRunning():
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and worker.isRunning():
+            QCoreApplication.processEvents()
+            time.sleep(0.01)
+    for _ in range(15):
+        QCoreApplication.processEvents()
+        time.sleep(0.01)
+
+
+def test_description_stall_message_differs_from_image_stall(qapp):
+    from src.presentation.viewmodels.search_viewmodel import SearchViewModel, SearchState
+
+    class FakeImageUC:
+        def get_filter_options(self):
+            return {}
+
+        def get_index_health(self):
+            return SimpleNamespace(is_compatible=True, stale_count=0, indexed_count=1)
+
+        def get_searchable_count(self):
+            return 1
+
+    vm = SearchViewModel(use_case=FakeImageUC(), description_use_case=object())
+
+    image_errors = []
+    vm.search_error.connect(image_errors.append)
+    vm._active_search_kind = "image"
+    vm._set_state(SearchState.SEARCHING)
+    vm._on_search_stall()
+    assert image_errors
+    assert "Auto Crop" in image_errors[0]
+    assert "Pause Indexing" in image_errors[0]
+    assert "description-search model" not in image_errors[0].lower()
+
+    desc_errors = []
+    vm.search_error.connect(desc_errors.append)
+    vm._active_search_kind = "description"
+    vm._set_state(SearchState.SEARCHING)
+    vm._on_search_stall()
+    assert desc_errors
+    assert "description-search model" in desc_errors[0].lower()
+    assert "internet connection" in desc_errors[0].lower()
+    assert "Auto Crop" not in desc_errors[0]
+    assert "Pause Indexing" not in desc_errors[0]
+
+
+def test_download_progress_ticker_emits_while_blocked(monkeypatch, tmp_path):
+    """Unit-level: ticker fires on_progress during a blocking download body."""
+    import threading
+
+    import huggingface_hub
+
+    from src.ai.clip_embedder import ClipEmbedder
+
+    out = tmp_path / "clip-vit-base-patch32"
+    out.mkdir()
+    monkeypatch.setattr(
+        "src.ai.clip_model_paths.bundled_clip_model_dir",
+        lambda: out,
+    )
+
+    messages: list[str] = []
+    started = threading.Event()
+    release = threading.Event()
+
+    def _fake_snapshot_download(**kwargs):
+        started.set()
+        # Block long enough for the 2s ticker to fire at least once.
+        assert release.wait(timeout=6.0)
+        (out / "config.json").write_text("{}", encoding="utf-8")
+        (out / "pytorch_model.bin").write_bytes(b"x" * 1024)
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", _fake_snapshot_download)
+
+    t = threading.Thread(
+        target=lambda: ClipEmbedder._download_to_bundled(
+            "openai/clip-vit-base-patch32", on_progress=messages.append
+        ),
+        daemon=True,
+    )
+    t.start()
+    assert started.wait(timeout=3.0)
+    # Wait for at least one ticker pulse (~2s) beyond the initial message.
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and len(messages) < 2:
+        time.sleep(0.05)
+    release.set()
+    t.join(timeout=5.0)
+    assert messages, "expected progress messages during blocked download"
+    assert any("Downloading description-search model" in m for m in messages)
+    assert len(messages) >= 2, f"ticker should pulse during block; got {messages!r}"
