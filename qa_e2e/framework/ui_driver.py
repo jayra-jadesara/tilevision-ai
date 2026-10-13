@@ -191,12 +191,19 @@ class UIDriver:
         """
         self.goto_search()
         zone = self.drop_zone()
-        # Prefer DropZone public callback if present
+        resolved = str(Path(image_path).resolve())
+        # Multi-photo DropZone prefers on_images_selected(list); legacy single
+        # path uses on_image_selected(str). Support both so headless open/crop
+        # scenarios keep working after the multi-photo cutover.
+        on_images = getattr(zone, "_on_images_selected", None)
         on_selected = getattr(zone, "_on_image_selected", None)
-        if callable(on_selected):
+        if callable(on_images) or callable(on_selected):
             self.human.wander(zone)
             self.human.think(0.2, 0.5)
-            on_selected(str(Path(image_path).resolve()))
+            if callable(on_images):
+                on_images([resolved])
+            else:
+                on_selected(resolved)
             QApplication.processEvents()
             return
         raise AssertionError("DropZone image callback missing")

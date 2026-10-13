@@ -114,6 +114,7 @@ class SearchViewModel(QObject):
         self._search_priority_held = False
         self._pending_query_path: Optional[str] = None
         self._pending_query_origin: Optional[str] = None
+        self._pending_query_paths: Optional[List[str]] = None
         self._filter_refresh_timer = QTimer(self)
         self._filter_refresh_timer.setSingleShot(True)
         self._filter_refresh_timer.timeout.connect(self._emit_filter_options)
@@ -346,7 +347,126 @@ class SearchViewModel(QObject):
         self._stall_timer.start(_SEARCH_STALL_MS)
         self._worker.start()
 
+    @Slot(list)
+    def search_by_images(self, image_paths: list) -> None:
+        """
+        Opt-in multi-photo search (2–3 images). One path falls back to
+        ``search_by_image`` so the default single-photo path stays unchanged.
+        """
+        paths = [str(p) for p in (image_paths or []) if str(p).strip()]
+        if not paths:
+            self._set_state(SearchState.ERROR)
+            self.search_error.emit("No images selected for multi-photo search.")
+            return
+        if len(paths) == 1:
+            self.search_by_image(paths[0], query_origin=None)
+            return
+
+        max_n = SearchTilesUseCase.MAX_MULTI_PHOTO_QUERIES
+        if len(paths) > max_n:
+            logger.info(
+                "[SEARCH] Multi-photo: truncating %d paths to %d",
+                len(paths),
+                max_n,
+            )
+            paths = paths[:max_n]
+
+        validated: List[str] = []
+        for image_path in paths:
+            path = Path(image_path)
+            if not path.exists() or not path.is_file():
+                self._set_state(SearchState.ERROR)
+                self.search_error.emit(f"Selected file does not exist: {image_path}")
+                self.status_message.emit("Search failed: file not found.")
+                return
+            if not validate_image(path):
+                self._set_state(SearchState.ERROR)
+                msg = f"Selected file is not a valid, readable image: {path.name}"
+                self.search_error.emit(msg)
+                self.status_message.emit(f"Search failed: {msg}")
+                return
+            validated.append(str(path))
+
+        if self._state == SearchState.SEARCHING:
+            self._pending_query_paths = list(validated)
+            self._pending_query_path = None
+            self._pending_query_origin = None
+            names = ", ".join(Path(p).name for p in validated)
+            self.status_message.emit(
+                f"Search in progress — will multi-photo search ({names}) next…"
+            )
+            return
+
+        self._claim_search_priority()
+        try:
+            health = self._use_case.get_index_health()
+            indexed = int(getattr(health, "indexed_count", 0) or 0)
+            if indexed <= 0:
+                self._release_search_priority()
+                self._set_state(SearchState.NO_RESULTS)
+                self.results_ready.emit([])
+                self.status_message.emit(
+                    "No tiles indexed yet. Open Index, add your tile folder, then search again."
+                )
+                return
+        except Exception as exc:
+            logger.warning(
+                "[SEARCH] Could not verify feature index health (continuing): %s",
+                exc,
+            )
+
+        primary = validated[0]
+        self._last_query_path = primary
+        self.query_image_selected.emit(primary)
+
+        self._search_generation += 1
+        generation = self._search_generation
+        self._set_state(SearchState.SEARCHING)
+        names = ", ".join(Path(p).name for p in validated)
+        self.status_message.emit(
+            f"Multi-photo search ({len(validated)} images): {names}…"
+        )
+        logger.info(
+            "[SEARCH] Starting multi-photo worker for %d images (generation=%s)",
+            len(validated),
+            generation,
+        )
+
+        self._worker = SearchWorker(
+            self._use_case,
+            primary,
+            self._top_k,
+            dict(self._active_filters),
+            query_origin="multi_photo",
+            query_image_paths=validated,
+        )
+        self._worker.search_completed.connect(
+            lambda results, gen=generation: self._on_search_completed(results, gen)
+        )
+        self._worker.search_failed.connect(
+            lambda message, gen=generation: self._on_search_failed(message, gen)
+        )
+        self._worker.search_timed.connect(self._on_search_timed)
+        self._worker.search_progress.connect(self._on_search_progress)
+        self._worker.search_heartbeat.connect(
+            self._on_search_heartbeat,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        worker = self._worker
+        worker.finished.connect(worker.deleteLater)
+        if self._search_timeout_ms > 0:
+            self._timeout_timer.start(self._search_timeout_ms)
+        self._status_hint_timer.start(_SEARCH_STATUS_HINT_MS)
+        self._stall_timer.start(_SEARCH_STALL_MS)
+        self._worker.start()
+
     def _start_pending_search_if_any(self) -> None:
+        pending_multi = self._pending_query_paths
+        self._pending_query_paths = None
+        if pending_multi and self._state != SearchState.SEARCHING:
+            logger.info("[SEARCH] Starting queued multi-photo query: %s", pending_multi)
+            self.search_by_images(pending_multi)
+            return
         pending = self._pending_query_path
         pending_origin = self._pending_query_origin
         self._pending_query_path = None
@@ -362,6 +482,7 @@ class SearchViewModel(QObject):
         self._stall_timer.stop()
         self._pending_query_path = None
         self._pending_query_origin = None
+        self._pending_query_paths = None
         self._search_generation += 1
         worker = self._worker
         self._worker = None

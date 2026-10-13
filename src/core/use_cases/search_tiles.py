@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Sequence
 
 import numpy as np
 
@@ -406,6 +406,69 @@ class SearchTilesUseCase:
             preloaded_image,
         )
 
+    # Opt-in multi-photo search: 2–3 separate query images fused as FAISS views.
+    MAX_MULTI_PHOTO_QUERIES = 3
+
+    def execute_multi_photos(
+        self,
+        query_image_paths: Sequence[str],
+        top_k: int = 20,
+        filters: Optional[Dict[str, str]] = None,
+        on_stage: Optional[Callable[[str], None]] = None,
+    ) -> List[SearchResult]:
+        """
+        Search using 2–3 separate photos as FAISS views (opt-in multi-photo).
+
+        Each photo is embedded with the same single-view query path used for
+        speed on CPU machines (``for_query=True``). Results are fused via the
+        existing ``merge_multi_view_faiss`` path — the default single-photo
+        ``execute()`` path is untouched.
+        """
+        paths = [Path(p) for p in query_image_paths]
+        if len(paths) < 2:
+            raise ValueError("Multi-photo search requires at least 2 images.")
+        if len(paths) > self.MAX_MULTI_PHOTO_QUERIES:
+            paths = paths[: self.MAX_MULTI_PHOTO_QUERIES]
+
+        for path in paths:
+            if not path.exists() or not path.is_file():
+                raise FileNotFoundError(f"Query image does not exist: {path}")
+
+        def stage(name: str, detail: str = "") -> None:
+            log_search_stage(logger, name, detail=detail, on_stage=on_stage)
+
+        if hasattr(self._feature_extractor, "load_model"):
+            self._feature_extractor.load_model()
+
+        embeddings: List[np.ndarray] = []
+        primary_features: Optional[TileFeatures] = None
+        for path in paths:
+            stage(STAGE_EMBEDDING_GENERATED, f"multi_photo:{path.name}")
+            features = self._feature_extractor.extract(str(path), for_query=True)
+            if features is None or features.embedding is None:
+                raise RuntimeError(
+                    f"DINOv2 embedding generation failed for query image: {path.name}"
+                )
+            embeddings.append(np.asarray(features.embedding, dtype=np.float32))
+            if primary_features is None:
+                primary_features = features
+
+        assert primary_features is not None
+        logger.info(
+            "Multi-photo search: %d photos → %d single-view embeddings (fused as FAISS views)",
+            len(paths),
+            len(embeddings),
+        )
+        return self.execute(
+            str(paths[0]),
+            top_k=top_k,
+            filters=filters,
+            on_stage=on_stage,
+            query_origin="multi_photo",
+            query_features_override=primary_features,
+            query_embeddings_override=embeddings,
+        )
+
     def execute(
         self,
         query_image_path: str,
@@ -413,6 +476,8 @@ class SearchTilesUseCase:
         filters: Optional[Dict[str, str]] = None,
         on_stage: Optional[Callable[[str], None]] = None,
         query_origin: str | None = None,
+        query_features_override: Optional[TileFeatures] = None,
+        query_embeddings_override: Optional[List[np.ndarray]] = None,
     ) -> List[SearchResult]:
         """
         Execute visual similarity search for a query tile image.
@@ -427,6 +492,9 @@ class SearchTilesUseCase:
                 (not treated as an error, since a UI might pass a superset
                 of possible filter widgets where some are left at "Any").
             on_stage: Optional callback(str) for UI progress breadcrumbs.
+            query_features_override / query_embeddings_override: Internal
+                hook used by ``execute_multi_photos``. Leave unset for the
+                default single-photo path (unchanged performance).
 
         Returns:
             A list of SearchResult objects sorted by similarity score descending.
@@ -484,19 +552,42 @@ class SearchTilesUseCase:
             timer = PipelineTimer("SEARCH TIMING")
 
             # ── 1. Resolve query features (memory cache → catalog → embed) ──
-            (
-                query_features,
-                query_embeddings,
-                cache_status,
-                query_sha256,
-                query_dhash,
-                preloaded_image,
-            ) = self.resolve_query_features(
-                query_path,
-                timer=timer,
-                on_stage=stage,
-                query_origin=query_origin,
-            )
+            # Multi-photo injects precomputed single-view embeddings; skip the
+            # adaptive multi-crop resolver so CPU single-photo stays unchanged.
+            preloaded_image = None
+            query_dhash = ""
+            if (
+                query_features_override is not None
+                and query_embeddings_override is not None
+            ):
+                query_features = query_features_override
+                query_embeddings = [
+                    np.asarray(e, dtype=np.float32) for e in query_embeddings_override
+                ]
+                cache_status = "multi_photo"
+                query_sha256 = compute_sha256(query_path)
+                try:
+                    query_dhash = compute_dhash(query_path)
+                except Exception:
+                    query_dhash = ""
+                stage(
+                    STAGE_EMBEDDING_GENERATED,
+                    f"multi_photo_views={len(query_embeddings)}",
+                )
+            else:
+                (
+                    query_features,
+                    query_embeddings,
+                    cache_status,
+                    query_sha256,
+                    query_dhash,
+                    preloaded_image,
+                ) = self.resolve_query_features(
+                    query_path,
+                    timer=timer,
+                    on_stage=stage,
+                    query_origin=query_origin,
+                )
 
             # Normalize sanity — FAISS search also L2-normalizes; log explicitly.
             emb0 = np.asarray(
