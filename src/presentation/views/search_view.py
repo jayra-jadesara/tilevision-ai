@@ -83,12 +83,13 @@ _TABLE_COLUMNS = [
 
 _PATH_COL = 5
 _ACTIONS_COL = 6
-_ACTIONS_COL_WIDTH = 108
+# Preview + Why + Copy + Reveal
+_ACTIONS_COL_WIDTH = 140
 
 
 class _ResultActionsWidget(QWidget):
     """
-    Compact icon actions: Preview, Copy path, Reveal in file manager.
+    Compact icon actions: Preview, Why this match, Copy path, Reveal.
 
     Copied feedback is a floating overlay (not in the layout) so it never
     squeezes the Image Path column or causes double-text overlap.
@@ -102,6 +103,8 @@ class _ResultActionsWidget(QWidget):
         on_preview,
         on_copy,
         on_reveal,
+        on_why=None,
+        why_enabled: bool = False,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -110,6 +113,7 @@ class _ResultActionsWidget(QWidget):
         self._on_preview = on_preview
         self._on_copy = on_copy
         self._on_reveal = on_reveal
+        self._on_why = on_why
         self._fade_anim: Optional[QPropertyAnimation] = None
         self._copied_toast: Optional[QLabel] = None
 
@@ -127,6 +131,15 @@ class _ResultActionsWidget(QWidget):
         )
         self._preview_btn.clicked.connect(lambda: self._on_preview(self._path))
 
+        self._why_btn = self._make_action_btn(
+            "?",
+            "Why this match" if why_enabled else "No ORB match data for this result",
+            "ResultWhyButton",
+        )
+        self._why_btn.setEnabled(bool(why_enabled and on_why is not None))
+        if why_enabled and on_why is not None:
+            self._why_btn.clicked.connect(lambda: self._on_why(self._path))
+
         self._copy_btn = self._make_action_btn(
             "⧉", "Copy path", "ResultCopyButton"
         )
@@ -138,6 +151,7 @@ class _ResultActionsWidget(QWidget):
         self._reveal_btn.clicked.connect(lambda: self._on_reveal(self._path))
 
         layout.addWidget(self._preview_btn)
+        layout.addWidget(self._why_btn)
         layout.addWidget(self._copy_btn)
         layout.addWidget(self._reveal_btn)
         self._apply_styles()
@@ -1434,12 +1448,15 @@ class SearchView(QWidget):
             actions_item = QTableWidgetItem("")
             actions_item.setFlags(actions_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self._results_table.setItem(row, _ACTIONS_COL, actions_item)
+            has_orb = bool(getattr(result, "orb_match_points", None))
             actions = _ResultActionsWidget(
                 tile.file_path,
                 theme=self._theme,
                 on_preview=lambda _p, r=row: self._preview_at_row(r),
                 on_copy=self._copy_path_text,
                 on_reveal=self._reveal_path_deferred,
+                on_why=lambda _p, r=row: self._why_at_row(r),
+                why_enabled=has_orb,
                 parent=self._results_table,
             )
             self._results_table.setCellWidget(row, _ACTIONS_COL, actions)
@@ -1494,6 +1511,40 @@ class SearchView(QWidget):
         if row < 0 or row >= len(self._current_results):
             return
         self._preview_panel.show_result(self._current_results[row])
+
+    def _why_at_row(self, row: int) -> None:
+        """Show ORB inlier overlay for a result that was verified during search."""
+        if row < 0 or row >= len(self._current_results):
+            return
+        result = self._current_results[row]
+        points = getattr(result, "orb_match_points", None) or []
+        if not points:
+            message_box.information(
+                self,
+                "Why this match",
+                "No ORB match data for this result.\n\n"
+                "Match highlights are only available when geometric "
+                "verification ran for a near-tie during search.",
+            )
+            return
+        query_path = self._current_query_image_path
+        if not query_path:
+            message_box.information(
+                self,
+                "Why this match",
+                "No query photo is available for this search.",
+            )
+            return
+        from src.presentation.views.why_match_dialog import WhyThisMatchDialog
+
+        dialog = WhyThisMatchDialog(
+            query_path,
+            result.tile.file_path,
+            points,
+            theme=self._theme,
+            parent=self,
+        )
+        dialog.exec()
 
     def _on_results_context_menu(self, position) -> None:
         row = self._results_table.rowAt(position.y())

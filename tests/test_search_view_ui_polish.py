@@ -78,12 +78,15 @@ def test_path_column_is_plain_text_no_cell_widget(search_view):
     assert item.text() == path
 
 
-def test_actions_column_has_preview_copy_reveal(search_view):
+def test_actions_column_has_preview_why_copy_reveal(search_view):
     cell = search_view._results_table.cellWidget(0, _ACTIONS_COL)
     assert isinstance(cell, _ResultActionsWidget)
     assert cell._preview_btn.toolTip() == "Preview tile"
     assert cell._copy_btn.toolTip() == "Copy path"
     assert cell._reveal_btn.toolTip()  # platform-specific reveal label
+    assert hasattr(cell, "_why_btn")
+    assert cell._why_btn.isEnabled() is False
+    assert "No ORB match data" in cell._why_btn.toolTip()
 
 
 def test_copy_shows_floating_toast_not_status_bar(search_view, qapp):

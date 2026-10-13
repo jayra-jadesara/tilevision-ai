@@ -92,6 +92,11 @@ class SearchResult:
     tile: TileImage
     similarity_score: float
     thumbnail_path: str
+    # Optional ORB inlier pairs ((qx, qy), (cx, cy)) when geometric
+    # verification ran for this result during search. Absent for most rows.
+    orb_match_points: Optional[
+        list[tuple[tuple[float, float], tuple[float, float]]]
+    ] = None
 
 
 @dataclass

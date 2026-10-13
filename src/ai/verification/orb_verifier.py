@@ -8,11 +8,31 @@ FAISS index or TileFeatures. Pure OpenCV, CPU-only, cross-platform.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 import cv2
 import numpy as np
 
 logger = logging.getLogger("tilevision.ai.verification.orb_verifier")
+
+
+@dataclass(frozen=True, slots=True)
+class OrbMatchDetail:
+    """Score plus inlier keypoint pairs from one ORB/RANSAC pass."""
+
+    score: float
+    # Parallel lists in original image pixel coordinates.
+    query_points: tuple[tuple[float, float], ...]
+    candidate_points: tuple[tuple[float, float], ...]
+
+    @property
+    def inlier_pairs(
+        self,
+    ) -> tuple[tuple[tuple[float, float], tuple[float, float]], ...]:
+        return tuple(zip(self.query_points, self.candidate_points))
+
+
+_EMPTY_DETAIL = OrbMatchDetail(score=0.0, query_points=(), candidate_points=())
 
 
 class OrbVerifier:
@@ -35,53 +55,86 @@ class OrbVerifier:
         Uses ORB descriptors, Lowe ratio test, and RANSAC homography inliers.
         Any OpenCV / shape failure returns 0.0 (never raises).
         """
+        return self.explain(query_gray, candidate_gray).score
+
+    def explain(
+        self, query_gray: np.ndarray, candidate_gray: np.ndarray
+    ) -> OrbMatchDetail:
+        """
+        Same ORB pass as ``score()``, also returning inlier point pairs for UI.
+
+        Call this during search when match visualization is needed — do not
+        call ``score()`` then ``explain()`` separately (that would double ORB).
+        """
         try:
-            q = self._as_gray_u8(query_gray)
-            c = self._as_gray_u8(candidate_gray)
-            if q is None or c is None:
-                return 0.0
-
-            orb = cv2.ORB_create(nfeatures=self.n_features)
-            kp_q, des_q = orb.detectAndCompute(q, None)
-            kp_c, des_c = orb.detectAndCompute(c, None)
-
-            if (
-                des_q is None
-                or des_c is None
-                or len(kp_q) == 0
-                or len(kp_c) == 0
-            ):
-                return 0.0
-
-            matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
-            raw_pairs = matcher.knnMatch(des_q, des_c, k=2)
-
-            good: list = []
-            for pair in raw_pairs:
-                if len(pair) < 2:
-                    continue
-                m, n = pair
-                if m.distance < self.ratio_thresh * n.distance:
-                    good.append(m)
-
-            if len(good) < 4:
-                return 0.0
-
-            src = np.float32([kp_q[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
-            dst = np.float32([kp_c[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
-            _H, mask = cv2.findHomography(src, dst, cv2.RANSAC, 5.0)
-            if mask is None:
-                return 0.0
-
-            inliers = int(mask.ravel().sum())
-            if inliers <= 0:
-                return 0.0
-
-            denom = max(self.min_inliers, min(len(kp_q), len(kp_c)))
-            return float(max(0.0, min(1.0, inliers / float(denom))))
+            return self._match_detail(query_gray, candidate_gray)
         except Exception as exc:
             logger.debug("ORB verification failed: %s", exc, exc_info=True)
-            return 0.0
+            return _EMPTY_DETAIL
+
+    def _match_detail(
+        self, query_gray: np.ndarray, candidate_gray: np.ndarray
+    ) -> OrbMatchDetail:
+        q = self._as_gray_u8(query_gray)
+        c = self._as_gray_u8(candidate_gray)
+        if q is None or c is None:
+            return _EMPTY_DETAIL
+
+        orb = cv2.ORB_create(nfeatures=self.n_features)
+        kp_q, des_q = orb.detectAndCompute(q, None)
+        kp_c, des_c = orb.detectAndCompute(c, None)
+
+        if (
+            des_q is None
+            or des_c is None
+            or len(kp_q) == 0
+            or len(kp_c) == 0
+        ):
+            return _EMPTY_DETAIL
+
+        matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+        raw_pairs = matcher.knnMatch(des_q, des_c, k=2)
+
+        good: list = []
+        for pair in raw_pairs:
+            if len(pair) < 2:
+                continue
+            m, n = pair
+            if m.distance < self.ratio_thresh * n.distance:
+                good.append(m)
+
+        if len(good) < 4:
+            return _EMPTY_DETAIL
+
+        src = np.float32([kp_q[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
+        dst = np.float32([kp_c[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+        _H, mask = cv2.findHomography(src, dst, cv2.RANSAC, 5.0)
+        if mask is None:
+            return _EMPTY_DETAIL
+
+        mask_flat = mask.ravel().astype(bool)
+        inliers = int(mask_flat.sum())
+        if inliers <= 0:
+            return _EMPTY_DETAIL
+
+        denom = max(self.min_inliers, min(len(kp_q), len(kp_c)))
+        score = float(max(0.0, min(1.0, inliers / float(denom))))
+
+        q_pts: list[tuple[float, float]] = []
+        c_pts: list[tuple[float, float]] = []
+        for m, keep in zip(good, mask_flat):
+            if not keep:
+                continue
+            qx, qy = kp_q[m.queryIdx].pt
+            cx, cy = kp_c[m.trainIdx].pt
+            q_pts.append((float(qx), float(qy)))
+            c_pts.append((float(cx), float(cy)))
+
+        return OrbMatchDetail(
+            score=score,
+            query_points=tuple(q_pts),
+            candidate_points=tuple(c_pts),
+        )
 
     @staticmethod
     def _as_gray_u8(image: np.ndarray) -> np.ndarray | None:

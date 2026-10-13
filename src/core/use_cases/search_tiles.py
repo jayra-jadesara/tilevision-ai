@@ -874,13 +874,14 @@ class SearchTilesUseCase:
                     "Rebuild FAISS Index or re-index the catalogue folder."
                 )
 
+            orb_points_by_tile: dict[int, list] = {}
             if self._enable_orb_verification and self._orb_verifier is not None:
                 with timer.measure("orb_verification"):
                     query_gray = self._resolve_query_gray(
                         query_path, preloaded_image
                     )
-                    reranked, orb_n = self._apply_orb_verification(
-                        reranked, query_gray
+                    reranked, orb_n, orb_points_by_tile = (
+                        self._apply_orb_verification(reranked, query_gray)
                     )
                 stage(STAGE_ORB_VERIFICATION, f"{orb_n} candidates")
 
@@ -901,11 +902,18 @@ class SearchTilesUseCase:
                         score,
                         exact_match=exact_match,
                     )
+                    tile_id = tile.id
+                    orb_pts = (
+                        orb_points_by_tile.get(tile_id)
+                        if tile_id is not None
+                        else None
+                    )
                     results.append(
                         SearchResult(
                             tile=tile,
                             similarity_score=similarity_percentage,
                             thumbnail_path=str(thumbnail_path),
+                            orb_match_points=orb_pts,
                         )
                     )
 
@@ -1023,20 +1031,31 @@ class SearchTilesUseCase:
         self,
         reranked: List[tuple[float, TileImage, bool]],
         query_gray: np.ndarray | None,
-    ) -> tuple[List[tuple[float, TileImage, bool]], int]:
+    ) -> tuple[
+        List[tuple[float, TileImage, bool]],
+        int,
+        dict[int, list[tuple[tuple[float, float], tuple[float, float]]]],
+    ]:
         """
         Nudge near-tie hybrid scores with ORB inlier ratios.
 
         Only candidates within ORB_VERIFICATION_BAND of #1 (capped at
         ORB_MAX_CANDIDATES) are verified. Exact matches and candidates
         outside the band are left unchanged.
+
+        Returns the (possibly reordered) list, applied count, and a map of
+        tile_id → inlier point pairs from the same ORB pass (for "Why this
+        match" visualization — not recomputed later).
         """
+        empty_map: dict[
+            int, list[tuple[tuple[float, float], tuple[float, float]]]
+        ] = {}
         if (
             not reranked
             or query_gray is None
             or self._orb_verifier is None
         ):
-            return reranked, 0
+            return reranked, 0, empty_map
 
         top_score = float(reranked[0][0])
         band_idxs: list[int] = []
@@ -1051,21 +1070,33 @@ class SearchTilesUseCase:
 
         if len(band_idxs) < 2:
             # Need at least two near-ties to make reordering meaningful.
-            return reranked, 0
+            return reranked, 0, empty_map
 
         updated = list(reranked)
         applied = 0
+        orb_points: dict[
+            int, list[tuple[tuple[float, float], tuple[float, float]]]
+        ] = {}
         for i in band_idxs:
             score, tile, exact_match = updated[i]
             cand_gray = self._load_candidate_gray(tile.file_path)
             if cand_gray is None:
                 continue
-            orb_score = float(self._orb_verifier.score(query_gray, cand_gray))
+            # One ORB pass: score for ranking + points for explain UI.
+            detail = self._orb_verifier.explain(query_gray, cand_gray)
+            orb_score = float(detail.score)
             if orb_score <= 0.0:
                 continue
             boosted = min(1.0, float(score) + ORB_BOOST_MAX * orb_score)
             updated[i] = (boosted, tile, exact_match)
             applied += 1
+            if tile.id is not None and detail.query_points:
+                orb_points[int(tile.id)] = [
+                    (qp, cp)
+                    for qp, cp in zip(
+                        detail.query_points, detail.candidate_points
+                    )
+                ]
             logger.debug(
                 "ORB boost | %s | hybrid=%.4f orb=%.3f → final=%.4f",
                 tile.file_name,
@@ -1075,11 +1106,11 @@ class SearchTilesUseCase:
             )
 
         if applied == 0:
-            return reranked, 0
+            return reranked, 0, empty_map
 
         # Re-sort only: exact matches keep their scores; band nudges may reorder.
         updated.sort(key=lambda item: item[0], reverse=True)
-        return updated, applied
+        return updated, applied, orb_points
 
     @staticmethod
     def _filter_weak_results(
