@@ -252,9 +252,11 @@ def test_orb_near_tie_band_reorders_with_inlier_support(tmp_path, monkeypatch):
     usecase._orb_verifier = OrbVerifier()
     usecase._enable_orb_verification = True
 
-    updated, applied = usecase._apply_orb_verification(reranked, query)
+    updated, applied, orb_pts = usecase._apply_orb_verification(reranked, query)
     assert applied >= 1
     assert updated[0][1].id == 1
+    assert 1 in orb_pts
+    assert len(orb_pts[1]) >= 1
 
 
 def test_orb_skips_when_hybrid_scores_well_separated():
@@ -278,8 +280,9 @@ def test_orb_skips_when_hybrid_scores_well_separated():
     usecase._enable_orb_verification = True
 
     query = np.full((64, 64), 128, dtype=np.uint8)
-    updated, applied = usecase._apply_orb_verification(reranked, query)
+    updated, applied, orb_pts = usecase._apply_orb_verification(reranked, query)
     assert applied == 0
+    assert orb_pts == {}
     assert updated is reranked or [t.id for _, t, _ in updated] == [1, 2, 3]
     assert [t.id for _, t, _ in updated] == [1, 2, 3]
 

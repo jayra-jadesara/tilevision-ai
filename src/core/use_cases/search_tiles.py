@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Sequence
 
 import numpy as np
 
@@ -406,6 +406,69 @@ class SearchTilesUseCase:
             preloaded_image,
         )
 
+    # Opt-in multi-photo search: 2–3 separate query images fused as FAISS views.
+    MAX_MULTI_PHOTO_QUERIES = 3
+
+    def execute_multi_photos(
+        self,
+        query_image_paths: Sequence[str],
+        top_k: int = 20,
+        filters: Optional[Dict[str, str]] = None,
+        on_stage: Optional[Callable[[str], None]] = None,
+    ) -> List[SearchResult]:
+        """
+        Search using 2–3 separate photos as FAISS views (opt-in multi-photo).
+
+        Each photo is embedded with the same single-view query path used for
+        speed on CPU machines (``for_query=True``). Results are fused via the
+        existing ``merge_multi_view_faiss`` path — the default single-photo
+        ``execute()`` path is untouched.
+        """
+        paths = [Path(p) for p in query_image_paths]
+        if len(paths) < 2:
+            raise ValueError("Multi-photo search requires at least 2 images.")
+        if len(paths) > self.MAX_MULTI_PHOTO_QUERIES:
+            paths = paths[: self.MAX_MULTI_PHOTO_QUERIES]
+
+        for path in paths:
+            if not path.exists() or not path.is_file():
+                raise FileNotFoundError(f"Query image does not exist: {path}")
+
+        def stage(name: str, detail: str = "") -> None:
+            log_search_stage(logger, name, detail=detail, on_stage=on_stage)
+
+        if hasattr(self._feature_extractor, "load_model"):
+            self._feature_extractor.load_model()
+
+        embeddings: List[np.ndarray] = []
+        primary_features: Optional[TileFeatures] = None
+        for path in paths:
+            stage(STAGE_EMBEDDING_GENERATED, f"multi_photo:{path.name}")
+            features = self._feature_extractor.extract(str(path), for_query=True)
+            if features is None or features.embedding is None:
+                raise RuntimeError(
+                    f"DINOv2 embedding generation failed for query image: {path.name}"
+                )
+            embeddings.append(np.asarray(features.embedding, dtype=np.float32))
+            if primary_features is None:
+                primary_features = features
+
+        assert primary_features is not None
+        logger.info(
+            "Multi-photo search: %d photos → %d single-view embeddings (fused as FAISS views)",
+            len(paths),
+            len(embeddings),
+        )
+        return self.execute(
+            str(paths[0]),
+            top_k=top_k,
+            filters=filters,
+            on_stage=on_stage,
+            query_origin="multi_photo",
+            query_features_override=primary_features,
+            query_embeddings_override=embeddings,
+        )
+
     def execute(
         self,
         query_image_path: str,
@@ -413,6 +476,8 @@ class SearchTilesUseCase:
         filters: Optional[Dict[str, str]] = None,
         on_stage: Optional[Callable[[str], None]] = None,
         query_origin: str | None = None,
+        query_features_override: Optional[TileFeatures] = None,
+        query_embeddings_override: Optional[List[np.ndarray]] = None,
     ) -> List[SearchResult]:
         """
         Execute visual similarity search for a query tile image.
@@ -427,6 +492,9 @@ class SearchTilesUseCase:
                 (not treated as an error, since a UI might pass a superset
                 of possible filter widgets where some are left at "Any").
             on_stage: Optional callback(str) for UI progress breadcrumbs.
+            query_features_override / query_embeddings_override: Internal
+                hook used by ``execute_multi_photos``. Leave unset for the
+                default single-photo path (unchanged performance).
 
         Returns:
             A list of SearchResult objects sorted by similarity score descending.
@@ -484,19 +552,42 @@ class SearchTilesUseCase:
             timer = PipelineTimer("SEARCH TIMING")
 
             # ── 1. Resolve query features (memory cache → catalog → embed) ──
-            (
-                query_features,
-                query_embeddings,
-                cache_status,
-                query_sha256,
-                query_dhash,
-                preloaded_image,
-            ) = self.resolve_query_features(
-                query_path,
-                timer=timer,
-                on_stage=stage,
-                query_origin=query_origin,
-            )
+            # Multi-photo injects precomputed single-view embeddings; skip the
+            # adaptive multi-crop resolver so CPU single-photo stays unchanged.
+            preloaded_image = None
+            query_dhash = ""
+            if (
+                query_features_override is not None
+                and query_embeddings_override is not None
+            ):
+                query_features = query_features_override
+                query_embeddings = [
+                    np.asarray(e, dtype=np.float32) for e in query_embeddings_override
+                ]
+                cache_status = "multi_photo"
+                query_sha256 = compute_sha256(query_path)
+                try:
+                    query_dhash = compute_dhash(query_path)
+                except Exception:
+                    query_dhash = ""
+                stage(
+                    STAGE_EMBEDDING_GENERATED,
+                    f"multi_photo_views={len(query_embeddings)}",
+                )
+            else:
+                (
+                    query_features,
+                    query_embeddings,
+                    cache_status,
+                    query_sha256,
+                    query_dhash,
+                    preloaded_image,
+                ) = self.resolve_query_features(
+                    query_path,
+                    timer=timer,
+                    on_stage=stage,
+                    query_origin=query_origin,
+                )
 
             # Normalize sanity — FAISS search also L2-normalizes; log explicitly.
             emb0 = np.asarray(
@@ -783,13 +874,14 @@ class SearchTilesUseCase:
                     "Rebuild FAISS Index or re-index the catalogue folder."
                 )
 
+            orb_points_by_tile: dict[int, list] = {}
             if self._enable_orb_verification and self._orb_verifier is not None:
                 with timer.measure("orb_verification"):
                     query_gray = self._resolve_query_gray(
                         query_path, preloaded_image
                     )
-                    reranked, orb_n = self._apply_orb_verification(
-                        reranked, query_gray
+                    reranked, orb_n, orb_points_by_tile = (
+                        self._apply_orb_verification(reranked, query_gray)
                     )
                 stage(STAGE_ORB_VERIFICATION, f"{orb_n} candidates")
 
@@ -810,11 +902,18 @@ class SearchTilesUseCase:
                         score,
                         exact_match=exact_match,
                     )
+                    tile_id = tile.id
+                    orb_pts = (
+                        orb_points_by_tile.get(tile_id)
+                        if tile_id is not None
+                        else None
+                    )
                     results.append(
                         SearchResult(
                             tile=tile,
                             similarity_score=similarity_percentage,
                             thumbnail_path=str(thumbnail_path),
+                            orb_match_points=orb_pts,
                         )
                     )
 
@@ -932,20 +1031,31 @@ class SearchTilesUseCase:
         self,
         reranked: List[tuple[float, TileImage, bool]],
         query_gray: np.ndarray | None,
-    ) -> tuple[List[tuple[float, TileImage, bool]], int]:
+    ) -> tuple[
+        List[tuple[float, TileImage, bool]],
+        int,
+        dict[int, list[tuple[tuple[float, float], tuple[float, float]]]],
+    ]:
         """
         Nudge near-tie hybrid scores with ORB inlier ratios.
 
         Only candidates within ORB_VERIFICATION_BAND of #1 (capped at
         ORB_MAX_CANDIDATES) are verified. Exact matches and candidates
         outside the band are left unchanged.
+
+        Returns the (possibly reordered) list, applied count, and a map of
+        tile_id → inlier point pairs from the same ORB pass (for "Why this
+        match" visualization — not recomputed later).
         """
+        empty_map: dict[
+            int, list[tuple[tuple[float, float], tuple[float, float]]]
+        ] = {}
         if (
             not reranked
             or query_gray is None
             or self._orb_verifier is None
         ):
-            return reranked, 0
+            return reranked, 0, empty_map
 
         top_score = float(reranked[0][0])
         band_idxs: list[int] = []
@@ -960,21 +1070,33 @@ class SearchTilesUseCase:
 
         if len(band_idxs) < 2:
             # Need at least two near-ties to make reordering meaningful.
-            return reranked, 0
+            return reranked, 0, empty_map
 
         updated = list(reranked)
         applied = 0
+        orb_points: dict[
+            int, list[tuple[tuple[float, float], tuple[float, float]]]
+        ] = {}
         for i in band_idxs:
             score, tile, exact_match = updated[i]
             cand_gray = self._load_candidate_gray(tile.file_path)
             if cand_gray is None:
                 continue
-            orb_score = float(self._orb_verifier.score(query_gray, cand_gray))
+            # One ORB pass: score for ranking + points for explain UI.
+            detail = self._orb_verifier.explain(query_gray, cand_gray)
+            orb_score = float(detail.score)
             if orb_score <= 0.0:
                 continue
             boosted = min(1.0, float(score) + ORB_BOOST_MAX * orb_score)
             updated[i] = (boosted, tile, exact_match)
             applied += 1
+            if tile.id is not None and detail.query_points:
+                orb_points[int(tile.id)] = [
+                    (qp, cp)
+                    for qp, cp in zip(
+                        detail.query_points, detail.candidate_points
+                    )
+                ]
             logger.debug(
                 "ORB boost | %s | hybrid=%.4f orb=%.3f → final=%.4f",
                 tile.file_name,
@@ -984,11 +1106,11 @@ class SearchTilesUseCase:
             )
 
         if applied == 0:
-            return reranked, 0
+            return reranked, 0, empty_map
 
         # Re-sort only: exact matches keep their scores; band nudges may reorder.
         updated.sort(key=lambda item: item[0], reverse=True)
-        return updated, applied
+        return updated, applied, orb_points
 
     @staticmethod
     def _filter_weak_results(

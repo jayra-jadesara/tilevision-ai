@@ -53,6 +53,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QApplication,
     QGraphicsOpacityEffect,
+    QCheckBox,
 )
 
 from src.core.models import SearchResult
@@ -83,12 +84,13 @@ _TABLE_COLUMNS = [
 
 _PATH_COL = 5
 _ACTIONS_COL = 6
-_ACTIONS_COL_WIDTH = 108
+# Preview + Why + Copy + Reveal
+_ACTIONS_COL_WIDTH = 140
 
 
 class _ResultActionsWidget(QWidget):
     """
-    Compact icon actions: Preview, Copy path, Reveal in file manager.
+    Compact icon actions: Preview, Why this match, Copy path, Reveal.
 
     Copied feedback is a floating overlay (not in the layout) so it never
     squeezes the Image Path column or causes double-text overlap.
@@ -102,6 +104,8 @@ class _ResultActionsWidget(QWidget):
         on_preview,
         on_copy,
         on_reveal,
+        on_why=None,
+        why_enabled: bool = False,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -110,6 +114,7 @@ class _ResultActionsWidget(QWidget):
         self._on_preview = on_preview
         self._on_copy = on_copy
         self._on_reveal = on_reveal
+        self._on_why = on_why
         self._fade_anim: Optional[QPropertyAnimation] = None
         self._copied_toast: Optional[QLabel] = None
 
@@ -127,6 +132,15 @@ class _ResultActionsWidget(QWidget):
         )
         self._preview_btn.clicked.connect(lambda: self._on_preview(self._path))
 
+        self._why_btn = self._make_action_btn(
+            "?",
+            "Why this match" if why_enabled else "No ORB match data for this result",
+            "ResultWhyButton",
+        )
+        self._why_btn.setEnabled(bool(why_enabled and on_why is not None))
+        if why_enabled and on_why is not None:
+            self._why_btn.clicked.connect(lambda: self._on_why(self._path))
+
         self._copy_btn = self._make_action_btn(
             "⧉", "Copy path", "ResultCopyButton"
         )
@@ -138,6 +152,7 @@ class _ResultActionsWidget(QWidget):
         self._reveal_btn.clicked.connect(lambda: self._on_reveal(self._path))
 
         layout.addWidget(self._preview_btn)
+        layout.addWidget(self._why_btn)
         layout.addWidget(self._copy_btn)
         layout.addWidget(self._reveal_btn)
         self._apply_styles()
@@ -254,27 +269,33 @@ class DropZone(QFrame):
     """
     A clickable, drag-and-drop capable frame for selecting a query image.
 
-    Emits image_selected(path) either when a valid image file is dropped
-    onto it, or when the user clicks it and picks one via a file dialog.
+    Emits via ``on_images_selected(paths)`` (1 path by default; up to 3 when
+    multi-photo mode is enabled). Default single-photo browse/drop is unchanged.
     """
+
+    _MAX_MULTI = 3
 
     def __init__(
         self,
-        on_image_selected,
+        on_image_selected=None,
         parent: Optional[QWidget] = None,
         on_drop_rejected: Optional[Callable[[str], None]] = None,
+        on_images_selected: Optional[Callable[[list], None]] = None,
     ) -> None:
         """
         Args:
-            on_image_selected: Callable[[str], None] invoked with the
-                absolute path of the chosen image.
+            on_image_selected: Legacy Callable[[str], None] for a single path.
             parent: Optional Qt parent widget.
             on_drop_rejected: Optional Callable[[str], None] with a
                 user-visible reason when a drop is ignored.
+            on_images_selected: Callable[[list[str]], None] preferred for
+                multi-photo; falls back to wrapping ``on_image_selected``.
         """
         super().__init__(parent)
         self._on_image_selected = on_image_selected
+        self._on_images_selected = on_images_selected
         self._on_drop_rejected = on_drop_rejected
+        self._multi_photo_enabled = False
         self.setObjectName("DropZone")
         self.setAcceptDrops(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -305,11 +326,21 @@ class DropZone(QFrame):
         self._subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._subtitle_label)
 
+    def set_multi_photo_enabled(self, enabled: bool) -> None:
+        """Opt-in: accept 2–3 photos. Default off keeps the fast single-photo path."""
+        self._multi_photo_enabled = bool(enabled)
+        if self._multi_photo_enabled:
+            self._title_label.setText("Drag 2–3 tile photos here")
+            self._subtitle_label.setText("or click to browse for multiple images")
+        else:
+            self._title_label.setText("Drag a tile photo here")
+            self._subtitle_label.setText("or click to browse for an image")
+
     def set_busy(self, busy: bool) -> None:
         """Disable interaction while a search is in progress."""
         self.setEnabled(not busy)
 
-    def show_preview(self, image_path: str) -> None:
+    def show_preview(self, image_path: str, *, extra_count: int = 0) -> None:
         """Display a small preview thumbnail of the selected query image."""
         pixmap = QPixmap(image_path)
         if not pixmap.isNull():
@@ -319,16 +350,40 @@ class DropZone(QFrame):
             self._preview_label.setPixmap(scaled)
             self._preview_label.setVisible(True)
             self._icon_label.setVisible(False)
-        self._title_label.setText(Path(image_path).name)
-        self._subtitle_label.setText("Click to search a different image")
+        name = Path(image_path).name
+        if extra_count > 0:
+            self._title_label.setText(f"{name} (+{extra_count} more)")
+            self._subtitle_label.setText("Multi-photo search — click to choose different images")
+        else:
+            self._title_label.setText(name)
+            self._subtitle_label.setText("Click to search a different image")
 
     def reset(self) -> None:
         """Reset the drop zone back to its empty prompt state."""
         self._preview_label.clear()
         self._preview_label.setVisible(False)
         self._icon_label.setVisible(True)
-        self._title_label.setText("Drag a tile photo here")
-        self._subtitle_label.setText("or click to browse for an image")
+        self.set_multi_photo_enabled(self._multi_photo_enabled)
+
+    def _emit_paths(self, paths: list) -> None:
+        if self._on_images_selected is not None:
+            self._on_images_selected(list(paths))
+        elif self._on_image_selected is not None and paths:
+            self._on_image_selected(paths[0])
+
+    def _validate_path(self, path: Path) -> Optional[str]:
+        """Return a rejection reason, or None if the path is usable."""
+        suffix = path.suffix.lower()
+        if suffix not in _QUERY_IMAGE_EXTENSIONS:
+            return (
+                f"Unsupported image type '{suffix or '(none)'}'. "
+                "Use JPG, JPEG, PNG, WEBP, BMP, or TIFF."
+            )
+        if not path.is_file():
+            return f"Dropped path is not a readable file: {path.name}"
+        if not validate_image(path):
+            return f"Selected file is not a valid, readable image: {path.name}"
+        return None
 
     # ── Drag & Drop ──────────────────────────────────────────────────────
 
@@ -362,49 +417,54 @@ class DropZone(QFrame):
             event.ignore()
             return
 
+        accepted: list[str] = []
         for url in event.mimeData().urls():
             local = url.toLocalFile()
             if not local:
                 continue
             path = Path(local)
-            suffix = path.suffix.lower()
-            if suffix not in _QUERY_IMAGE_EXTENSIONS:
-                reason = (
-                    f"Unsupported image type '{suffix or '(none)'}'. "
-                    "Use JPG, JPEG, PNG, WEBP, BMP, or TIFF."
-                )
-                logger.warning("[SEARCH] Drop rejected: %s (%s)", reason, path)
-                if self._on_drop_rejected is not None:
-                    self._on_drop_rejected(reason)
-                event.ignore()
-                return
-            if not path.is_file():
-                reason = f"Dropped path is not a readable file: {path.name}"
-                logger.warning("[SEARCH] %s", reason)
-                if self._on_drop_rejected is not None:
-                    self._on_drop_rejected(reason)
-                event.ignore()
-                return
-            if not validate_image(path):
-                reason = f"Selected file is not a valid, readable image: {path.name}"
-                logger.warning("[SEARCH] Drop rejected: %s", reason)
-                if self._on_drop_rejected is not None:
-                    self._on_drop_rejected(reason)
-                event.ignore()
-                return
-            logger.info("[SEARCH] Drop accepted: %s", path)
-            self._on_image_selected(str(path))
-            event.acceptProposedAction()
+            reason = self._validate_path(path)
+            if reason is not None:
+                if not self._multi_photo_enabled:
+                    logger.warning("[SEARCH] Drop rejected: %s (%s)", reason, path)
+                    if self._on_drop_rejected is not None:
+                        self._on_drop_rejected(reason)
+                    event.ignore()
+                    return
+                # In multi mode, skip bad files and keep collecting.
+                logger.warning("[SEARCH] Skipping invalid drop: %s", reason)
+                continue
+            accepted.append(str(path))
+            if not self._multi_photo_enabled:
+                break
+            if len(accepted) >= self._MAX_MULTI:
+                break
+
+        if not accepted:
+            reason = (
+                "Drop ignored — could not read a local image file. "
+                "If this came from a browser or cloud app, save it to disk first."
+            )
+            logger.warning("[SEARCH] %s", reason)
+            if self._on_drop_rejected is not None:
+                self._on_drop_rejected(reason)
+            event.ignore()
             return
 
-        reason = (
-            "Drop ignored — could not read a local image file. "
-            "If this came from a browser or cloud app, save it to disk first."
-        )
-        logger.warning("[SEARCH] %s", reason)
-        if self._on_drop_rejected is not None:
-            self._on_drop_rejected(reason)
-        event.ignore()
+        if self._multi_photo_enabled and len(accepted) < 2:
+            reason = (
+                "Multi-photo search needs 2–3 images. "
+                "Drop at least two tile photos, or turn multi-photo off."
+            )
+            logger.warning("[SEARCH] %s", reason)
+            if self._on_drop_rejected is not None:
+                self._on_drop_rejected(reason)
+            event.ignore()
+            return
+
+        logger.info("[SEARCH] Drop accepted (%d): %s", len(accepted), accepted)
+        self._emit_paths(accepted)
+        event.acceptProposedAction()
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton and self.isEnabled():
@@ -413,11 +473,31 @@ class DropZone(QFrame):
 
     def _browse(self) -> None:
         extensions = " ".join(f"*{ext}" for ext in sorted(_QUERY_IMAGE_EXTENSIONS))
+        filter_str = f"Image Files ({extensions})"
+        if self._multi_photo_enabled:
+            file_paths, _ = QFileDialog.getOpenFileNames(
+                self,
+                "Select 2–3 tile photos to search",
+                "",
+                filter_str,
+            )
+            if not file_paths:
+                return
+            paths = list(file_paths)[: self._MAX_MULTI]
+            if len(paths) < 2:
+                if self._on_drop_rejected is not None:
+                    self._on_drop_rejected(
+                        "Multi-photo search needs 2–3 images. Select at least two."
+                    )
+                return
+            self._emit_paths(paths)
+            return
+
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Select a tile photo to search", "", f"Image Files ({extensions})"
+            self, "Select a tile photo to search", "", filter_str
         )
         if file_path:
-            self._on_image_selected(file_path)
+            self._emit_paths([file_path])
 
 
 class _ResultPreviewPanel(QWidget):
@@ -574,6 +654,7 @@ class SearchView(QWidget):
         self._current_results: List[SearchResult] = []
         self._results_generation = 0
         self._current_query_image_path: Optional[str] = None
+        self._current_query_paths: list[str] = []
         self._crop_worker: Optional[TileCropWorker] = None
         self._crop_busy = False
         self._preview_panel = _ResultPreviewPanel(self, theme=theme)
@@ -634,11 +715,32 @@ class SearchView(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
+        drop_column = QWidget()
+        drop_col_layout = QVBoxLayout(drop_column)
+        drop_col_layout.setContentsMargins(0, 0, 0, 0)
+        drop_col_layout.setSpacing(6)
+
         self._drop_zone = DropZone(
+            # Keep legacy single-path callback populated for headless QA /
+            # tools that still call DropZone._on_image_selected(path).
             on_image_selected=self._on_image_chosen,
+            on_images_selected=self._on_images_chosen,
             on_drop_rejected=self._on_drop_rejected,
         )
-        layout.addWidget(self._drop_zone, stretch=1)
+        drop_col_layout.addWidget(self._drop_zone, stretch=1)
+
+        # Opt-in only — default off preserves the fast single-photo CPU path.
+        self._multi_photo_checkbox = QCheckBox("Search with multiple photos (2–3)")
+        self._multi_photo_checkbox.setObjectName("MultiPhotoCheckbox")
+        self._multi_photo_checkbox.setChecked(False)
+        self._multi_photo_checkbox.setToolTip(
+            "Optional: fuse 2–3 separate photos into one search. "
+            "Leave unchecked for the fastest single-photo match."
+        )
+        self._multi_photo_checkbox.toggled.connect(self._on_multi_photo_toggled)
+        drop_col_layout.addWidget(self._multi_photo_checkbox)
+
+        layout.addWidget(drop_column, stretch=1)
 
         # Keep the action stack compact — do not let it expand to half the row.
         button_panel = QWidget()
@@ -1009,11 +1111,41 @@ class SearchView(QWidget):
     def _on_query_image_selected(self, image_path: str) -> None:
         """Keep drop-zone preview and action buttons aligned with the ViewModel query."""
         self._current_query_image_path = image_path
-        self._drop_zone.show_preview(image_path)
+        extra = max(0, len(getattr(self, "_current_query_paths", []) or []) - 1)
+        self._drop_zone.show_preview(image_path, extra_count=extra)
         self._refresh_action_buttons()
+
+    def _on_multi_photo_toggled(self, checked: bool) -> None:
+        self._drop_zone.set_multi_photo_enabled(checked)
+        if checked:
+            self._status_label.setText(
+                "Multi-photo mode on — drop or browse 2–3 tile photos."
+            )
+        else:
+            self._status_label.setText("Ready — drop a tile photo to search.")
+
+    def _on_images_chosen(self, image_paths: list) -> None:
+        paths = [str(p) for p in (image_paths or []) if str(p).strip()]
+        if not paths:
+            return
+        if len(paths) == 1:
+            self._on_image_chosen(paths[0])
+            return
+
+        logger.info("Multi-photo query selected: %s", paths)
+        self._current_query_paths = list(paths)
+        self._current_query_image_path = paths[0]
+        self._confidence_banner.setVisible(False)
+        self._drop_zone.show_preview(paths[0], extra_count=len(paths) - 1)
+        self._refresh_action_buttons()
+        self._status_label.setText(
+            f"Multi-photo search with {len(paths)} images…"
+        )
+        self._viewmodel.search_by_images(paths)
 
     def _on_image_chosen(self, image_path: str) -> None:
         logger.info(f"Query image selected: {image_path}")
+        self._current_query_paths = [image_path]
         self._current_query_image_path = image_path
         self._confidence_banner.setVisible(False)
         # Enable Clear / crop immediately (SEARCHING can lag one event-loop tick).
@@ -1184,6 +1316,7 @@ class SearchView(QWidget):
         self._drop_zone.reset()
         self._current_query_image_path = None
         self._description_input.clear()
+        self._current_query_paths = []
         self._current_results = []
         self._confidence_banner.setVisible(False)
         self._progress_bar.setVisible(False)
@@ -1375,12 +1508,15 @@ class SearchView(QWidget):
             actions_item = QTableWidgetItem("")
             actions_item.setFlags(actions_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self._results_table.setItem(row, _ACTIONS_COL, actions_item)
+            has_orb = bool(getattr(result, "orb_match_points", None))
             actions = _ResultActionsWidget(
                 tile.file_path,
                 theme=self._theme,
                 on_preview=lambda _p, r=row: self._preview_at_row(r),
                 on_copy=self._copy_path_text,
                 on_reveal=self._reveal_path_deferred,
+                on_why=lambda _p, r=row: self._why_at_row(r),
+                why_enabled=has_orb,
                 parent=self._results_table,
             )
             self._results_table.setCellWidget(row, _ACTIONS_COL, actions)
@@ -1435,6 +1571,40 @@ class SearchView(QWidget):
         if row < 0 or row >= len(self._current_results):
             return
         self._preview_panel.show_result(self._current_results[row])
+
+    def _why_at_row(self, row: int) -> None:
+        """Show ORB inlier overlay for a result that was verified during search."""
+        if row < 0 or row >= len(self._current_results):
+            return
+        result = self._current_results[row]
+        points = getattr(result, "orb_match_points", None) or []
+        if not points:
+            message_box.information(
+                self,
+                "Why this match",
+                "No ORB match data for this result.\n\n"
+                "Match highlights are only available when geometric "
+                "verification ran for a near-tie during search.",
+            )
+            return
+        query_path = self._current_query_image_path
+        if not query_path:
+            message_box.information(
+                self,
+                "Why this match",
+                "No query photo is available for this search.",
+            )
+            return
+        from src.presentation.views.why_match_dialog import WhyThisMatchDialog
+
+        dialog = WhyThisMatchDialog(
+            query_path,
+            result.tile.file_path,
+            points,
+            theme=self._theme,
+            parent=self,
+        )
+        dialog.exec()
 
     def _on_results_context_menu(self, position) -> None:
         row = self._results_table.rowAt(position.y())
@@ -1569,6 +1739,12 @@ class SearchView(QWidget):
             #DropZoneIcon {{ font-size: 36px; }}
             #DropZoneTitle {{ font-size: 14px; font-weight: 600; color: {p['text_primary']}; }}
             #DropZoneSubtitle {{ font-size: 11px; color: {p['text_muted']}; }}
+            #MultiPhotoCheckbox {{
+                color: {p['text_secondary']};
+                font-size: 12px;
+                spacing: 8px;
+                background: transparent;
+            }}
 
             #ResultsTable {{
                 background-color: {p['bg_panel_alt']};
