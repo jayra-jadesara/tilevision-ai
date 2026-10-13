@@ -181,6 +181,8 @@ class IndexImagesUseCase:
         thumbnail_dir: str,
         folder_repository: Optional[IIndexedFolderRepository] = None,
         performance: Optional[IndexingPerformanceConfig] = None,
+        clip_embedder=None,
+        clip_index: Optional[FaissIndexManager] = None,
     ) -> None:
         """
         Initialize the indexing use case.
@@ -196,6 +198,8 @@ class IndexImagesUseCase:
                 works but won't persist folder state across restarts —
                 kept optional so existing callers/tests that construct
                 this use case without it keep working unchanged.
+            clip_embedder / clip_index: Optional CLIP dual-index writers
+                for description search. When omitted, indexing is DINOv2-only.
         """
         self._repo = image_repository
         self._feature_extractor = feature_extractor
@@ -204,9 +208,41 @@ class IndexImagesUseCase:
         self._supported_extensions = set(SUPPORTED_IMAGE_EXTENSIONS)
         self._folder_repo = folder_repository
         self._perf = performance or IndexingPerformanceConfig()
+        self._clip_embedder = clip_embedder
+        self._clip_index = clip_index
 
         # Ensure thumbnail directory exists
         self._thumbnail_dir.mkdir(parents=True, exist_ok=True)
+
+    def _index_clip_vector(self, db_id: int, image_path: Path, *, persist: bool) -> None:
+        """Best-effort second embedding for description search (never fails DINOv2)."""
+        if self._clip_embedder is None or self._clip_index is None:
+            return
+        # Skip quietly when CLIP is not on disk yet and has never been loaded —
+        # customers who never use description search must not pay a Hub download
+        # during every catalogue index.
+        try:
+            from src.ai.clip_model_paths import clip_model_available_locally
+
+            ready = bool(getattr(self._clip_embedder, "is_loaded", False)) or (
+                clip_model_available_locally()
+            )
+        except Exception:
+            ready = bool(getattr(self._clip_embedder, "is_loaded", False))
+        if not ready:
+            return
+        try:
+            if getattr(self._clip_index, "_index", None) is None:
+                self._clip_index.load_index()
+            vec = self._clip_embedder.embed_image(image_path)
+            self._clip_index.update_vectors([db_id], [vec], persist=persist)
+        except Exception as exc:
+            logger.warning(
+                "CLIP index write skipped for id=%s (%s): %s",
+                db_id,
+                image_path.name,
+                exc,
+            )
 
     def _pending_batch_limit(self, items: List[_PendingIndexItem]) -> int:
         if not items:
@@ -326,6 +362,10 @@ class IndexImagesUseCase:
                     faiss_vectors,
                     persist=persist,
                 )
+
+            # Optional CLIP dual-index (description search) — same db_id.
+            with timer.measure("clip"):
+                self._index_clip_vector(db_id, resolved_path, persist=persist)
 
             # 4. Mark tile as successfully indexed
             tile.is_indexed = True
@@ -502,6 +542,10 @@ class IndexImagesUseCase:
 
         with timer.measure("faiss"):
             self._index.update_vectors(faiss_ids, faiss_vectors, persist=persist)
+
+        with timer.measure("clip"):
+            for db_id, item in zip(db_ids, items):
+                self._index_clip_vector(db_id, item.path, persist=persist)
 
         with timer.measure("database"):
             for tile in tiles:
@@ -717,6 +761,11 @@ class IndexImagesUseCase:
         # errors along the way — partial progress must never be lost.
         if (new_count + modified_count) > 0 or deleted_count > 0:
             self._index.save_index()
+            if self._clip_index is not None:
+                try:
+                    self._clip_index.save_index()
+                except Exception as exc:
+                    logger.warning("CLIP index save skipped: %s", exc)
             logger.info(
                 f"Index directory complete. New: {new_count}, Modified: {modified_count}, "
                 f"Deleted: {deleted_count}, Skipped: {skipped_count}, Failed: {failed_count}"

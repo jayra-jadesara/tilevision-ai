@@ -50,6 +50,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QProgressBar,
     QComboBox,
+    QLineEdit,
     QApplication,
     QGraphicsOpacityEffect,
     QCheckBox,
@@ -678,6 +679,7 @@ class SearchView(QWidget):
 
         root_layout.addWidget(self._build_header())
         root_layout.addWidget(self._build_query_panel())
+        root_layout.addWidget(self._build_description_search_bar())
         root_layout.addWidget(self._build_filter_bar())
         root_layout.addWidget(self._build_progress_bar())
         self._confidence_banner = QLabel("")
@@ -698,7 +700,10 @@ class SearchView(QWidget):
         title.setObjectName("PageTitle")
         layout.addWidget(title)
 
-        subtitle = QLabel("Drag a tile photo in, or browse for one, to find visually similar tiles.")
+        subtitle = QLabel(
+            "Drag a tile photo in, browse for one, or type a short description "
+            "to find matching tiles."
+        )
         subtitle.setObjectName("PageSubtitle")
         layout.addWidget(subtitle)
 
@@ -816,6 +821,55 @@ class SearchView(QWidget):
         layout.addWidget(button_panel, stretch=0)
 
         return panel
+
+    def _build_description_search_bar(self) -> QWidget:
+        """Text / description search — alongside image drop, does not replace it."""
+        bar = QWidget()
+        bar.setObjectName("DescriptionSearchBar")
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        label = QLabel("Or describe a tile:")
+        label.setObjectName("DescriptionSearchLabel")
+        layout.addWidget(label)
+
+        self._description_input = QLineEdit()
+        self._description_input.setObjectName("DescriptionSearchInput")
+        self._description_input.setPlaceholderText(
+            "e.g. matte white subway tile with soft grey veins"
+        )
+        self._description_input.setClearButtonEnabled(True)
+        self._description_input.returnPressed.connect(self._on_description_search_clicked)
+        self._description_input.textChanged.connect(
+            lambda _t: self._refresh_action_buttons()
+        )
+        layout.addWidget(self._description_input, stretch=1)
+
+        self._description_search_button = QPushButton("Search by description")
+        self._description_search_button.setObjectName("PrimaryButton")
+        self._description_search_button.setToolTip(
+            "Search the catalogue with a short text description "
+            "(uses a separate CLIP index — not hybrid with image search)."
+        )
+        self._description_search_button.clicked.connect(self._on_description_search_clicked)
+        layout.addWidget(self._description_search_button)
+
+        return bar
+
+    def _on_description_search_clicked(self) -> None:
+        text = self._description_input.text().strip()
+        if not text:
+            message_box.information(
+                self,
+                "Description Search",
+                "Enter a short description of the tile you are looking for.",
+            )
+            return
+        # Clear image-query chrome so results are clearly from text search.
+        self._current_query_image_path = None
+        self._drop_zone.reset()
+        self._viewmodel.search_by_description(text)
 
     @staticmethod
     def _make_button_separator() -> QFrame:
@@ -1237,13 +1291,18 @@ class SearchView(QWidget):
     def _refresh_action_buttons(self) -> None:
         """Sync Export / Clear / crop enablement from query + results state."""
         has_query = bool(self._current_query_image_path)
+        has_description = bool(self._description_input.text().strip())
         searching = self._viewmodel.is_searching
         has_results = bool(self._current_results)
         # Export needs results (and implies a query was run).
         self._export_button.setEnabled(
             has_results and not searching and not self._crop_busy
         )
-        self._clear_button.setEnabled(has_query and not self._crop_busy)
+        self._clear_button.setEnabled(
+            (has_query or has_description or has_results) and not self._crop_busy
+        )
+        self._description_search_button.setEnabled(not searching and not self._crop_busy)
+        self._description_input.setEnabled(not searching and not self._crop_busy)
         self._refresh_crop_controls()
 
     def _on_clear_clicked(self) -> None:
@@ -1256,6 +1315,7 @@ class SearchView(QWidget):
         self._crop_worker = None
         self._drop_zone.reset()
         self._current_query_image_path = None
+        self._description_input.clear()
         self._current_query_paths = []
         self._current_results = []
         self._confidence_banner.setVisible(False)
@@ -1645,6 +1705,27 @@ class SearchView(QWidget):
                 font-size: 12px;
             }}
             #FilterCombo:hover {{ border-color: {p['accent_hover']}; }}
+
+            #DescriptionSearchLabel {{
+                color: {p['text_muted']};
+                font-size: 12px;
+                font-weight: 600;
+            }}
+            #DescriptionSearchInput {{
+                background-color: {p['bg_input']};
+                color: {p['text_primary']};
+                border: 1px solid {p['border_strong']};
+                border-radius: 6px;
+                padding: 8px 10px;
+                font-size: 13px;
+                min-height: 20px;
+            }}
+            #DescriptionSearchInput:focus {{
+                border-color: {p['accent_hover']};
+            }}
+            #DescriptionSearchBar {{
+                background: transparent;
+            }}
 
             #DropZone {{
                 background-color: {p['bg_panel']};

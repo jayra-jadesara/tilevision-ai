@@ -279,6 +279,19 @@ def build_application() -> int:
         backend_params=backend_params,
     )
 
+    # CLIP description-search index (512D) — lazy model; separate FAISS file.
+    from src.ai.clip_embedder import ClipEmbedder
+    from src.ai.clip_model_paths import CLIP_EMBEDDING_DIM
+    from src.core.use_cases.search_by_description import SearchByDescriptionUseCase
+
+    clip_embedder = ClipEmbedder()
+    clip_index = FaissIndexManager(
+        index_path=settings.clip_index_path,
+        dimension=CLIP_EMBEDDING_DIM,
+    )
+    # Always wire CLIP into indexing; writers no-op until weights are local
+    # or already loaded (never force a Hub download during catalogue scan).
+
     # ── 8. Construct Use Cases ────────────────────────────────────────────────
     logger.info("Initializing use cases...")
     index_images_use_case = IndexImagesUseCase(
@@ -288,6 +301,8 @@ def build_application() -> int:
         thumbnail_dir=settings.thumbnail_dir,
         folder_repository=indexed_folder_repository,
         performance=indexing_perf,
+        clip_embedder=clip_embedder,
+        clip_index=clip_index,
     )
     search_tiles_use_case = SearchTilesUseCase(
         image_repository=image_repository,
@@ -297,6 +312,12 @@ def build_application() -> int:
         enable_orb_verification=settings.enable_orb_verification,
         multi_crop_fusion=settings.multi_crop_fusion,
         multi_crop_rrf_k=settings.multi_crop_rrf_k,
+    )
+    search_by_description_use_case = SearchByDescriptionUseCase(
+        image_repository=image_repository,
+        clip_embedder=clip_embedder,
+        clip_index=clip_index,
+        thumbnail_dir=settings.thumbnail_dir,
     )
     find_duplicates_use_case = FindDuplicatesUseCase(image_repository=image_repository, vector_index=vector_index)
 
@@ -487,6 +508,7 @@ def build_application() -> int:
         search_history_repository=search_history_repository,
         activity_log_repository=activity_log_repository,
         on_search_busy_changed=_on_search_busy_changed,
+        description_use_case=search_by_description_use_case,
     )
 
     # ── 10. Launch Main Window ────────────────────────────────────────────────
