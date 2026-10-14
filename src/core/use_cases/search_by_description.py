@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from src.ai.clip_embedder import ClipEmbedder
-from src.ai.similarity_score import calibrate_display_percent
+from src.ai.similarity_score import calibrate_clip_display_percent
 from src.ai.vector_index import FaissIndexManager
 from src.core.models import SearchResult
 from src.data.repository_interface import IImageRepository
@@ -129,10 +129,10 @@ class SearchByDescriptionUseCase:
                 ):
                     continue
             thumb = get_thumbnail_path(Path(tile.file_path), self._thumbnail_dir)
-            # CLIP IP scores are already cosine-like after L2 norm.
-            display = calibrate_display_percent(
+            # CLIP IP scores are cosine after L2 norm — use CLIP calibration,
+            # not the DINOv2 hybrid curve (which maps ~0.27 → ~18%).
+            display = calibrate_clip_display_percent(
                 max(0.0, min(1.0, best[tid])),
-                exact_match=False,
             )
             results.append(
                 SearchResult(
