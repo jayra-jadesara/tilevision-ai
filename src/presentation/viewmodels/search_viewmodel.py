@@ -117,6 +117,8 @@ class SearchViewModel(QObject):
         self._pending_query_path: Optional[str] = None
         self._pending_query_origin: Optional[str] = None
         self._pending_query_paths: Optional[List[str]] = None
+        # "image" | "description" — drives stall / status-hint copy.
+        self._active_search_kind: str = "image"
         self._filter_refresh_timer = QTimer(self)
         self._filter_refresh_timer.setSingleShot(True)
         self._filter_refresh_timer.timeout.connect(self._emit_filter_options)
@@ -313,6 +315,7 @@ class SearchViewModel(QObject):
             )
 
         self._last_query_path = str(path)
+        self._active_search_kind = "image"
         self.query_image_selected.emit(str(path))
 
         self._search_generation += 1
@@ -419,6 +422,7 @@ class SearchViewModel(QObject):
 
         primary = validated[0]
         self._last_query_path = primary
+        self._active_search_kind = "image"
         self.query_image_selected.emit(primary)
 
         self._search_generation += 1
@@ -496,18 +500,44 @@ class SearchViewModel(QObject):
 
         self._claim_search_priority()
         self._last_query_path = None
+        self._active_search_kind = "description"
         self._search_generation += 1
         generation = self._search_generation
         self._set_state(SearchState.SEARCHING)
-        self.status_message.emit(f"Searching by description: “{text[:60]}”…")
+
+        # First-use CLIP download is a different wait than "AI thinking" —
+        # say so up front when weights are not on disk yet (Task 3).
+        needs_clip_download = False
+        try:
+            from src.ai.clip_model_paths import clip_model_available_locally
+
+            clip = getattr(self._description_use_case, "_clip", None)
+            already_loaded = bool(
+                clip is not None and getattr(clip, "is_loaded", False)
+            )
+            needs_clip_download = (not already_loaded) and (
+                not clip_model_available_locally()
+            )
+        except Exception:
+            needs_clip_download = False
+        if needs_clip_download:
+            self.status_message.emit(
+                "Downloading description-search model (one-time, ~580 MB)…"
+            )
+        else:
+            self.status_message.emit(f"Searching by description: “{text[:60]}”…")
         logger.info("[SEARCH] Description search: %r (generation=%s)", text, generation)
 
         # Lightweight QThread worker via SearchWorker-compatible pattern.
         from PySide6.QtCore import QThread, Signal as QtSignal
+        import threading as _threading
 
         use_case = self._description_use_case
         top_k = self._top_k
         filters = dict(self._active_filters)
+        # Same interval as SearchWorker — keep stall watchdog honest during
+        # long first-use CLIP download / model load.
+        _DESC_HEARTBEAT_INTERVAL_S = 5.0
 
         class _DescWorker(QThread):
             search_completed = QtSignal(list)
@@ -520,6 +550,24 @@ class SearchViewModel(QObject):
                 import time as _time
 
                 t0 = _time.monotonic()
+                stop_heartbeat = _threading.Event()
+                worker_ref = self_inner
+
+                def _heartbeat_loop() -> None:
+                    while not stop_heartbeat.wait(_DESC_HEARTBEAT_INTERVAL_S):
+                        if worker_ref.isInterruptionRequested():
+                            return
+                        try:
+                            worker_ref.search_heartbeat.emit()
+                        except RuntimeError:
+                            return
+
+                heartbeat_thread = _threading.Thread(
+                    target=_heartbeat_loop,
+                    name="desc-search-heartbeat",
+                    daemon=True,
+                )
+                heartbeat_thread.start()
                 try:
                     def _stage(msg: str) -> None:
                         self_inner.search_progress.emit(msg)
@@ -532,6 +580,9 @@ class SearchViewModel(QObject):
                     self_inner.search_completed.emit(results)
                 except Exception as exc:
                     self_inner.search_failed.emit(str(exc))
+                finally:
+                    stop_heartbeat.set()
+                    heartbeat_thread.join(timeout=1.0)
 
         self._worker = _DescWorker()
         self._worker.search_completed.connect(
@@ -701,6 +752,12 @@ class SearchViewModel(QObject):
         """Reassure the user — do not abort. Mac CPU can take a minute."""
         if self._state != SearchState.SEARCHING:
             return
+        if self._active_search_kind == "description":
+            self.status_message.emit(
+                "Still working on description search… "
+                "First use may download the model (~580 MB). Please wait."
+            )
+            return
         self.status_message.emit(
             "Still searching… AI matching can take up to a minute on this computer. "
             "Please wait — results will appear here."
@@ -712,12 +769,15 @@ class SearchViewModel(QObject):
         Abort only when heartbeats stop (worker appears wedged).
 
         A slow but heartbeating DINOv2 forward on Mac Intel must finish.
+        Description-search first-use download also heartbeats; if we still
+        stall here, the worker truly stopped pulsing.
         """
         if self._state != SearchState.SEARCHING:
             return
         logger.error(
-            "Search stalled (no heartbeat for %ss) for %s",
+            "Search stalled (no heartbeat for %ss) kind=%s query=%s",
             _SEARCH_STALL_MS / 1000.0,
+            self._active_search_kind,
             self._last_query_path,
         )
         self._timeout_timer.stop()
@@ -732,12 +792,24 @@ class SearchViewModel(QObject):
                 pass
         self._release_search_priority()
         self._set_state(SearchState.ERROR)
-        message = (
-            "Search stopped because the AI worker stopped responding.\n\n"
-            "Pause Indexing, restart the app, then try again.\n\n"
-            "Also try Auto Crop & Search on a smaller crop of the tile."
-        )
-        self.status_message.emit("Search stopped — worker unresponsive.")
+        if self._active_search_kind == "description":
+            message = (
+                "Downloading the description-search model is taking longer "
+                "than expected, or the search stalled.\n\n"
+                "Check your internet connection and try again.\n\n"
+                "If the download already finished, restart the app and "
+                "search by description again."
+            )
+            self.status_message.emit(
+                "Description search stopped — download or search stalled."
+            )
+        else:
+            message = (
+                "Search stopped because the AI worker stopped responding.\n\n"
+                "Pause Indexing, restart the app, then try again.\n\n"
+                "Also try Auto Crop & Search on a smaller crop of the tile."
+            )
+            self.status_message.emit("Search stopped — worker unresponsive.")
         self.search_error.emit(message)
 
     @Slot()

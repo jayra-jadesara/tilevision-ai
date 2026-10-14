@@ -53,7 +53,33 @@ class SearchByDescriptionUseCase:
             log_search_stage(logger, name, detail=detail, on_stage=on_stage)
 
         stage("text_search_start", text[:80])
-        self._clip.ensure_loaded()
+
+        # First-use CLIP download can take minutes on a normal connection —
+        # report progress so the UI stall watchdog keeps seeing heartbeats
+        # (via SearchViewModel._on_search_progress / search_heartbeat).
+        needs_download = False
+        try:
+            from src.ai.clip_model_paths import clip_model_available_locally
+
+            needs_download = (not self._clip.is_loaded) and (
+                not clip_model_available_locally()
+            )
+        except Exception:
+            needs_download = not self._clip.is_loaded
+        if needs_download:
+            stage(
+                "Downloading description-search model",
+                "one-time, ~580 MB",
+            )
+
+        def _clip_progress(message: str) -> None:
+            if on_stage is not None:
+                try:
+                    on_stage(message)
+                except Exception:
+                    pass
+
+        self._clip.ensure_loaded(on_progress=_clip_progress)
         if getattr(self._index, "_index", None) is None:
             self._index.load_index()
 
