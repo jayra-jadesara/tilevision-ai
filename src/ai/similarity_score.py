@@ -62,8 +62,12 @@ _CLIP_DISPLAY_ANCHORS: Sequence[tuple[float, float]] = (
     (0.25, 72.0),
     (0.28, 84.0),
     (0.32, 92.0),
-    (0.38, 97.0),
-    (0.50, 99.0),
+    (0.38, 96.0),
+    # Keep headroom above the typical CLIP band so rare high cosines
+    # (and test fakes) stay strictly monotonic instead of collapsing to 99.
+    (0.50, 98.0),
+    (0.70, 99.0),
+    (1.00, 99.5),
 )
 
 
