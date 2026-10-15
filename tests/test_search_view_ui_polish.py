@@ -184,22 +184,29 @@ def test_preview_panel_reveal_failure_shows_inline_status(qapp, tmp_path, monkey
     panel.close()
 
 
-def test_action_buttons_are_grouped_with_separators(search_view):
+def test_action_buttons_use_grid_without_separators(search_view):
+    # 2-column grid replaces the old tall separator stack.
     separators = search_view.findChildren(QFrame, "SearchButtonSeparator")
-    assert len(separators) == 3
+    assert len(separators) == 0
 
     clear = search_view._clear_button
     assert clear.objectName() == "SecondaryButton"
+    assert clear.minimumHeight() >= 32
     assert search_view._export_button.objectName() == "SecondaryButton"
     assert search_view._crop_button.objectName() == "SecondaryButton"
+    assert search_view._auto_crop_button.text() == "Auto Crop Search"
+    assert search_view._precise_crop_button.text() == "Precise Crop Search"
     assert search_view._history_button.objectName() == "SecondaryButton"
 
 
-def test_action_column_is_compact(search_view):
+def test_action_column_is_two_column_grid(search_view):
     col = search_view.findChild(QWidget, "SearchActionColumn")
     assert col is not None
-    assert col.width() <= 168
-    assert col.maximumWidth() <= 168
+    assert col.maximumWidth() <= 360
+    assert col.minimumWidth() >= 320
+    from PySide6.QtWidgets import QGridLayout
+
+    assert isinstance(col.layout(), QGridLayout)
 
 
 def test_export_disabled_without_query_or_results(search_view):
