@@ -11,6 +11,7 @@ to re-run the embedding model against every known file.
 """
 
 import logging
+import threading
 from typing import List
 
 from PySide6.QtCore import QThread, Signal
@@ -41,6 +42,12 @@ class RebuildIndexWorker(QThread):
         super().__init__()
         self._use_case = use_case
         self._folder_paths = folder_paths
+        self._cancel_event = threading.Event()
+
+    def request_cancel(self) -> None:
+        """Ask the scan loop to stop at the next cooperative cancel check."""
+        logger.warning("Rebuild cancel requested by user")
+        self._cancel_event.set()
 
     def run(self) -> None:
         total_reembedded = 0
@@ -48,6 +55,8 @@ class RebuildIndexWorker(QThread):
 
         try:
             for folder_path in self._folder_paths:
+                if self._cancel_event.is_set():
+                    break
 
                 def on_progress(
                     processed: int,
@@ -66,14 +75,25 @@ class RebuildIndexWorker(QThread):
                     folder_path,
                     force=True,
                     progress_callback=on_progress,
+                    cancel_event=self._cancel_event,
                 )
                 total_reembedded += result.indexed_count
                 total_failed += result.failed_count
 
-            logger.info(
-                f"FAISS rebuild complete: {total_reembedded} file(s) re-embedded, "
-                f"{total_failed} failed, across {len(self._folder_paths)} folder(s)."
-            )
+            if self._cancel_event.is_set():
+                logger.warning(
+                    "FAISS rebuild cancelled: %s file(s) re-embedded, %s failed.",
+                    total_reembedded,
+                    total_failed,
+                )
+            else:
+                logger.info(
+                    "FAISS rebuild complete: %s file(s) re-embedded, "
+                    "%s failed, across %s folder(s).",
+                    total_reembedded,
+                    total_failed,
+                    len(self._folder_paths),
+                )
             self.rebuild_finished.emit(total_reembedded, total_failed)
         except Exception as e:
             logger.error(f"FAISS rebuild failed: {e}")
