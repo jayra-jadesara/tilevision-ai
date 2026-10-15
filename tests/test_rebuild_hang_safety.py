@@ -139,8 +139,11 @@ def test_normal_flush_uses_single_batched_call(tmp_path, monkeypatch):
     result = uc.scan_and_index_directory(images, force=True)
     assert result.indexed_count == 5
     assert result.is_completed is True
-    # One flush of all 5 — not five 1-file flushes.
-    assert calls == [(5, True)], f"expected one batched flush, got {calls}"
+    # First batch is capped at 4 so the first timing sample arrives sooner;
+    # remainder flushes as a second batch. Still batched — not five 1-file flushes.
+    assert calls == [(4, True), (1, True)], (
+        f"expected first_batch_max=4 then remainder, got {calls}"
+    )
 
 
 def test_rebuild_worker_cancel_stops_scan(tmp_path, monkeypatch):
