@@ -18,7 +18,7 @@ import shutil
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QWidget,
@@ -126,6 +126,18 @@ class SettingsView(QWidget):
         self._activity_recorder = activity_recorder
         self._rebuild_worker: Optional[RebuildIndexWorker] = None
         self._rebuild_progress_dialog: Optional[QProgressDialog] = None
+        self._rebuild_last_progress_mono: float = 0.0
+        self._rebuild_current_name: str = ""
+        self._rebuild_processed: int = 0
+        self._rebuild_total: int = 0
+        self._rebuild_eta_seconds: float = 0.0
+        self._rebuild_eta_issued_mono: float = 0.0
+        self._rebuild_stall_seconds: int = 0
+        # If no progress for this long, stop showing a stale "~Ns remaining".
+        self._rebuild_stall_warn_s: float = 45.0
+        self._rebuild_stall_timer = QTimer(self)
+        self._rebuild_stall_timer.setInterval(1000)
+        self._rebuild_stall_timer.timeout.connect(self._on_rebuild_stall_tick)
         self._setup_ui()
         self._apply_styles()
         self.refresh_feature_status()
@@ -989,16 +1001,26 @@ class SettingsView(QWidget):
 
         self._rebuild_progress_prefix = progress_prefix
         self._rebuild_button.setEnabled(False)
+        import time as _time
+
+        self._rebuild_last_progress_mono = _time.monotonic()
+        self._rebuild_current_name = ""
+        self._rebuild_processed = 0
+        self._rebuild_total = 0
+        self._rebuild_eta_seconds = 0.0
+        self._rebuild_eta_issued_mono = self._rebuild_last_progress_mono
+        self._rebuild_stall_seconds = 0
+
         self._rebuild_progress_dialog = QProgressDialog(
-            preparing_text, None, 0, 1, self
+            preparing_text, "Cancel", 0, 1, self
         )
         self._rebuild_progress_dialog.setWindowTitle(window_title)
         self._rebuild_progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
         self._rebuild_progress_dialog.setMinimumDuration(0)
-        self._rebuild_progress_dialog.setCancelButton(None)
         self._rebuild_progress_dialog.setAutoClose(False)
         self._rebuild_progress_dialog.setAutoReset(False)
         self._rebuild_progress_dialog.setMinimumWidth(420)
+        self._rebuild_progress_dialog.setCancelButtonText("Cancel")
         self._style_rebuild_progress_dialog(self._rebuild_progress_dialog)
         self._rebuild_progress_dialog.show()
         self._center_rebuild_progress_dialog(self._rebuild_progress_dialog)
@@ -1008,7 +1030,65 @@ class SettingsView(QWidget):
         self._rebuild_worker.rebuild_finished.connect(self._on_rebuild_finished)
         self._rebuild_worker.rebuild_failed.connect(self._on_rebuild_failed)
         self._rebuild_worker.finished.connect(self._rebuild_worker.deleteLater)
+        self._rebuild_progress_dialog.canceled.connect(self._on_rebuild_cancel_clicked)
+        self._rebuild_stall_timer.start()
         self._rebuild_worker.start()
+
+    def _on_rebuild_cancel_clicked(self) -> None:
+        worker = self._rebuild_worker
+        dialog = self._rebuild_progress_dialog
+        if worker is not None:
+            worker.request_cancel()
+        if dialog is not None:
+            dialog.setLabelText(
+                "Cancelling rebuild… waiting for the current file to finish or time out."
+            )
+            dialog.setCancelButton(None)
+
+    def _on_rebuild_stall_tick(self) -> None:
+        """Refresh label when ETA goes stale or a file takes unusually long."""
+        dialog = self._rebuild_progress_dialog
+        if dialog is None or self._rebuild_worker is None:
+            return
+        import time as _time
+
+        now = _time.monotonic()
+        stalled_for = now - self._rebuild_last_progress_mono
+        self._rebuild_stall_seconds = int(stalled_for)
+        if stalled_for < self._rebuild_stall_warn_s:
+            # Still within the warn window, but never keep an ETA that has
+            # already expired relative to when it was issued.
+            if (
+                self._rebuild_eta_seconds > 1
+                and (now - self._rebuild_eta_issued_mono) > self._rebuild_eta_seconds
+            ):
+                self._apply_rebuild_label(stale_eta=True, stalled_for=stalled_for)
+            return
+        self._apply_rebuild_label(stale_eta=True, stalled_for=stalled_for)
+
+    def _apply_rebuild_label(
+        self, *, stale_eta: bool = False, stalled_for: float = 0.0
+    ) -> None:
+        dialog = self._rebuild_progress_dialog
+        if dialog is None:
+            return
+        prefix = getattr(self, "_rebuild_progress_prefix", "Rebuilding Search Index")
+        name = self._rebuild_current_name or "…"
+        processed = self._rebuild_processed
+        total = self._rebuild_total
+        if stale_eta or stalled_for >= self._rebuild_stall_warn_s:
+            dialog.setLabelText(
+                f"{prefix}: Still working on {name} "
+                f"({processed}/{total}, {int(stalled_for)}s)… "
+                f"this file is taking unusually long. You can Cancel."
+            )
+            return
+        eta_text = (
+            f" — ~{int(self._rebuild_eta_seconds)}s remaining"
+            if self._rebuild_eta_seconds > 1
+            else ""
+        )
+        dialog.setLabelText(f"{prefix}: {name} ({processed}/{total}){eta_text}")
 
     def _on_rebuild_progress(
         self,
@@ -1021,30 +1101,51 @@ class SettingsView(QWidget):
         if dialog is None:
             return
 
+        import time as _time
+
+        self._rebuild_last_progress_mono = _time.monotonic()
+        self._rebuild_current_name = current_name
+        self._rebuild_processed = processed
+        self._rebuild_total = total
+        self._rebuild_eta_seconds = float(eta_seconds or 0.0)
+        self._rebuild_eta_issued_mono = self._rebuild_last_progress_mono
+        self._rebuild_stall_seconds = 0
+
         if total > 0 and dialog.maximum() != total:
             dialog.setMaximum(total)
 
         dialog.setValue(min(processed, max(total, 1)))
-        eta_text = f" — ~{int(eta_seconds)}s remaining" if eta_seconds > 1 else ""
-        prefix = getattr(self, "_rebuild_progress_prefix", "Rebuilding Search Index")
-        dialog.setLabelText(
-            f"{prefix}: {current_name} ({processed}/{total}){eta_text}"
-        )
+        self._apply_rebuild_label(stale_eta=False, stalled_for=0.0)
 
-    def _on_rebuild_finished(self, total_reembedded: int, total_failed: int) -> None:
+    def _stop_rebuild_ui(self) -> None:
+        self._rebuild_stall_timer.stop()
         self._rebuild_button.setEnabled(True)
         if self._rebuild_progress_dialog is not None:
-            self._rebuild_progress_dialog.setValue(
-                self._rebuild_progress_dialog.maximum()
-            )
             self._rebuild_progress_dialog.close()
             self._rebuild_progress_dialog = None
         self._rebuild_worker = None
+
+    def _on_rebuild_finished(self, total_reembedded: int, total_failed: int) -> None:
+        was_cancelled = bool(
+            self._rebuild_worker is not None
+            and self._rebuild_worker._cancel_event.is_set()
+        )
+        self._stop_rebuild_ui()
 
         if self._on_catalog_changed is not None:
             self._on_catalog_changed()
         self.refresh_feature_status()
         self.refresh_search_engine_status()
+
+        if was_cancelled:
+            message = (
+                f"Rebuild cancelled. {total_reembedded} image(s) re-indexed before stop."
+            )
+            if total_failed:
+                message += f" {total_failed} failed."
+            message_box.information(self, "Rebuild Cancelled", message)
+            self._record_activity("maintenance", message)
+            return
 
         message = f"Rebuild complete. {total_reembedded} image(s) re-indexed."
         if total_failed:
@@ -1053,11 +1154,7 @@ class SettingsView(QWidget):
         self._record_activity("maintenance", message)
 
     def _on_rebuild_failed(self, error_message: str) -> None:
-        self._rebuild_button.setEnabled(True)
-        if self._rebuild_progress_dialog is not None:
-            self._rebuild_progress_dialog.close()
-            self._rebuild_progress_dialog = None
-        self._rebuild_worker = None
+        self._stop_rebuild_ui()
         message_box.critical(self, "Rebuild Failed", error_message)
         self._record_activity(
             "maintenance", f"Search index rebuild failed: {error_message}"

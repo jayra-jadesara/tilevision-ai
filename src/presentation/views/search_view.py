@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
+    QGridLayout,
     QLabel,
     QPushButton,
     QToolButton,
@@ -299,8 +300,8 @@ class DropZone(QFrame):
         self.setObjectName("DropZone")
         self.setAcceptDrops(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMinimumHeight(140)
-        self.setMaximumHeight(220)
+        self.setMinimumHeight(110)
+        self.setMaximumHeight(150)
 
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -747,16 +748,18 @@ class SearchView(QWidget):
         self.setObjectName("SearchView")
 
         root_layout = QVBoxLayout(self)
-        root_layout.setContentsMargins(24, 20, 24, 20)
-        root_layout.setSpacing(16)
+        # Tight chrome so ≥5 result rows fit at 1366×768 inside a real window.
+        root_layout.setContentsMargins(16, 10, 16, 10)
+        root_layout.setSpacing(8)
 
         root_layout.addWidget(self._build_header())
         query_panel = self._build_query_panel()
-        # Cap query chrome so results dominate on laptop screens.
-        query_panel.setMaximumHeight(260)
+        # Tall enough for the 2-col grid (incl. Recent) without clipping;
+        # keep ≤~220 so ≥5 result rows remain at 1366×768.
+        query_panel.setMaximumHeight(220)
         root_layout.addWidget(query_panel, stretch=0)
-        root_layout.addWidget(self._build_description_search_bar(), stretch=0)
-        root_layout.addWidget(self._build_filter_bar(), stretch=0)
+        # Description + filters share one row (was two stacked bars).
+        root_layout.addWidget(self._build_description_and_filters_row(), stretch=0)
         root_layout.addWidget(self._build_progress_bar(), stretch=0)
         self._confidence_banner = QLabel("")
         self._confidence_banner.setObjectName("ConfidenceBanner")
@@ -818,46 +821,51 @@ class SearchView(QWidget):
 
         layout.addWidget(drop_column, stretch=1)
 
-        # Keep the action stack compact — do not let it expand to half the row.
+        # 2-column action grid — shorter than a tall single column, no clipped text.
         button_panel = QWidget()
         button_panel.setObjectName("SearchActionColumn")
-        button_panel.setFixedWidth(168)
+        button_panel.setMinimumWidth(320)
+        button_panel.setMaximumWidth(360)
         button_panel.setSizePolicy(
-            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
         )
-        button_col = QVBoxLayout(button_panel)
-        button_col.setContentsMargins(0, 0, 0, 0)
-        button_col.setSpacing(8)
-        button_col.addStretch()
+        grid = QGridLayout(button_panel)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(6)
 
-        # ── Export
-        self._export_button = QPushButton("Export Catalogue")
-        self._export_button.setObjectName("SecondaryButton")
+        def _action_btn(text: str) -> QPushButton:
+            # Dedicated object name so shared #SecondaryButton padding
+            # (6px 14px) cannot inflate min-height past max-height.
+            btn = QPushButton(text)
+            btn.setObjectName("SearchActionButton")
+            btn.setMinimumHeight(28)
+            btn.setMaximumHeight(32)
+            btn.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+            )
+            return btn
+
+        self._export_button = _action_btn("Export Catalogue")
         self._export_button.clicked.connect(self._on_export_clicked)
         self._export_button.setEnabled(False)
-        button_col.addWidget(self._export_button)
+        grid.addWidget(self._export_button, 0, 0, 1, 2)
 
-        button_col.addWidget(self._make_button_separator())
-
-        # ── Crop & Search
-        self._crop_button = QPushButton("Crop and Search")
-        self._crop_button.setObjectName("SecondaryButton")
+        self._crop_button = _action_btn("Crop and Search")
         self._crop_button.clicked.connect(self._on_crop_clicked)
         self._crop_button.setEnabled(False)
-        button_col.addWidget(self._crop_button)
+        grid.addWidget(self._crop_button, 1, 0)
 
-        self._auto_crop_button = QPushButton("Auto Crop & Search")
-        self._auto_crop_button.setObjectName("SecondaryButton")
+        self._auto_crop_button = _action_btn("Auto Crop Search")
         self._auto_crop_button.setToolTip(
             "Fast tile-region crop for room photos (OpenCV, no SAM). "
             "Use Crop and Search for a manual selection."
         )
         self._auto_crop_button.clicked.connect(self._on_auto_crop_clicked)
         self._auto_crop_button.setEnabled(False)
-        button_col.addWidget(self._auto_crop_button)
+        grid.addWidget(self._auto_crop_button, 1, 1)
 
-        self._precise_crop_button = QPushButton("Precise Crop & Search")
-        self._precise_crop_button.setObjectName("SecondaryButton")
+        self._precise_crop_button = _action_btn("Precise Crop Search")
         self._precise_crop_button.setToolTip(
             "Precise tile crop for Windows, Mac Intel, and Mac Apple Silicon. "
             "Uses SAM 2 when enabled in Settings → Experimental (or TILEVISION_ENABLE_SAM2=1); "
@@ -865,48 +873,38 @@ class SearchView(QWidget):
         )
         self._precise_crop_button.clicked.connect(self._on_precise_crop_clicked)
         self._precise_crop_button.setEnabled(False)
-        button_col.addWidget(self._precise_crop_button)
+        grid.addWidget(self._precise_crop_button, 2, 0)
 
-        button_col.addWidget(self._make_button_separator())
-
-        # ── Reset (same SecondaryButton look as the rest — not a dashed "off" style)
-        self._clear_button = QPushButton("Clear")
-        self._clear_button.setObjectName("SecondaryButton")
+        self._clear_button = _action_btn("Clear")
         self._clear_button.clicked.connect(self._on_clear_clicked)
         self._clear_button.setEnabled(False)
-        button_col.addWidget(self._clear_button)
+        grid.addWidget(self._clear_button, 2, 1)
 
-        button_col.addWidget(self._make_button_separator())
-
-        # ── History
-        self._history_button = QPushButton("Recent Searches")
-        self._history_button.setObjectName("SecondaryButton")
+        self._history_button = _action_btn("Recent Searches")
         self._history_button.clicked.connect(self._on_history_clicked)
         # Only open the popup when the user clicks Recent Searches.
         # Search completion also refreshes history via the same signal — that
         # must NOT pop a blocking QMenu (it freezes offscreen/CI and surprises customers).
         self._history_menu_pending = False
-        button_col.addWidget(self._history_button)
+        grid.addWidget(self._history_button, 3, 0)
 
-        self._view_all_history_button = QPushButton("View full history")
-        self._view_all_history_button.setObjectName("SecondaryButton")
+        self._view_all_history_button = _action_btn("View full history")
         self._view_all_history_button.setVisible(False)
-        button_col.addWidget(self._view_all_history_button)
+        grid.addWidget(self._view_all_history_button, 3, 1)
 
-        button_col.addStretch()
         layout.addWidget(button_panel, stretch=0)
 
         return panel
 
-    def _build_description_search_bar(self) -> QWidget:
-        """Text / description search — alongside image drop, does not replace it."""
-        bar = QWidget()
-        bar.setObjectName("DescriptionSearchBar")
-        layout = QHBoxLayout(bar)
+    def _build_description_and_filters_row(self) -> QWidget:
+        """Description search + filters on one compact row."""
+        row = QWidget()
+        row.setObjectName("DescriptionFilterRow")
+        layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
 
-        label = QLabel("Or describe a tile:")
+        label = QLabel("Describe:")
         label.setObjectName("DescriptionSearchLabel")
         layout.addWidget(label)
 
@@ -916,14 +914,16 @@ class SearchView(QWidget):
             "e.g. matte white subway tile with soft grey veins"
         )
         self._description_input.setClearButtonEnabled(True)
+        self._description_input.setMinimumHeight(30)
         self._description_input.returnPressed.connect(self._on_description_search_clicked)
         self._description_input.textChanged.connect(
             lambda _t: self._refresh_action_buttons()
         )
-        layout.addWidget(self._description_input, stretch=1)
+        layout.addWidget(self._description_input, stretch=2)
 
-        self._description_search_button = QPushButton("Search by description")
+        self._description_search_button = QPushButton("Search")
         self._description_search_button.setObjectName("PrimaryButton")
+        self._description_search_button.setMinimumHeight(32)
         self._description_search_button.setToolTip(
             "Search the catalogue with a short text description "
             "(uses a separate CLIP index — not hybrid with image search)."
@@ -931,7 +931,28 @@ class SearchView(QWidget):
         self._description_search_button.clicked.connect(self._on_description_search_clicked)
         layout.addWidget(self._description_search_button)
 
-        return bar
+        filter_label = QLabel("Filters:")
+        filter_label.setObjectName("FilterLabel")
+        layout.addWidget(filter_label)
+
+        self._filter_combos: dict = {}
+        for field, display_name in [
+            ("brand", "Brand"),
+            ("category", "Category"),
+            ("color", "Color"),
+            ("size", "Size"),
+        ]:
+            combo = QComboBox()
+            combo.setObjectName("FilterCombo")
+            combo.setMinimumHeight(30)
+            combo.addItem(f"Any {display_name}")
+            combo.currentTextChanged.connect(
+                lambda value, f=field: self._on_filter_changed(f, value)
+            )
+            self._filter_combos[field] = combo
+            layout.addWidget(combo)
+
+        return row
 
     def _on_description_search_clicked(self) -> None:
         text = self._description_input.text().strip()
@@ -949,38 +970,12 @@ class SearchView(QWidget):
 
     @staticmethod
     def _make_button_separator() -> QFrame:
-        """Horizontal rule between action-button groups (matches sidebar idiom)."""
+        """Horizontal rule between action-button groups (legacy helper)."""
         separator = QFrame()
         separator.setFrameShape(QFrame.Shape.HLine)
         separator.setObjectName("SearchButtonSeparator")
         separator.setFixedHeight(8)
         return separator
-
-    def _build_filter_bar(self) -> QWidget:
-        bar = QWidget()
-        layout = QHBoxLayout(bar)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
-
-        filter_label = QLabel("Filters:")
-        filter_label.setObjectName("FilterLabel")
-        layout.addWidget(filter_label)
-
-        self._filter_combos: dict = {}
-        for field, display_name in [
-            ("brand", "Brand"), ("category", "Category"), ("color", "Color"), ("size", "Size")
-        ]:
-            combo = QComboBox()
-            combo.setObjectName("FilterCombo")
-            combo.addItem(f"Any {display_name}")
-            combo.currentTextChanged.connect(
-                lambda value, f=field: self._on_filter_changed(f, value)
-            )
-            self._filter_combos[field] = combo
-            layout.addWidget(combo)
-
-        layout.addStretch()
-        return bar
 
     def _on_filter_changed(self, field: str, value: str) -> None:
         # Ignore the placeholder "Any X" item text as a real filter value.
@@ -1846,8 +1841,28 @@ class SearchView(QWidget):
                 color: {p['text_primary']};
             }}
             #SearchActionColumn {{
-                max-width: 168px;
+                max-width: 360px;
                 background: transparent;
+            }}
+            #SearchActionButton {{
+                background-color: {p['button_bg']};
+                color: {p['text_secondary']};
+                border: 1px solid {p['border_strong']};
+                border-radius: 6px;
+                min-height: 28px;
+                max-height: 32px;
+                padding: 4px 8px;
+                font-size: 11px;
+                font-weight: 600;
+            }}
+            #SearchActionButton:hover:enabled {{
+                background-color: {p['button_hover']};
+                color: {p['text_primary']};
+                border-color: {p['accent_soft']};
+            }}
+            #SearchActionButton:disabled {{
+                color: {p['text_faint']};
+                border-color: {p['border']};
             }}
             #SearchButtonSeparator {{
                 border: none;
