@@ -299,11 +299,13 @@ class DropZone(QFrame):
         self.setObjectName("DropZone")
         self.setAcceptDrops(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMinimumHeight(180)
+        self.setMinimumHeight(140)
+        self.setMaximumHeight(220)
 
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.setSpacing(8)
+        layout.setSpacing(6)
+        layout.setContentsMargins(8, 8, 8, 8)
 
         self._icon_label = QLabel("Tile Image")
         self._icon_label.setObjectName("DropZoneIcon")
@@ -315,6 +317,25 @@ class DropZone(QFrame):
         self._preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._preview_label.setVisible(False)
         layout.addWidget(self._preview_label)
+
+        # Multi-photo: row of small thumbnails (hidden in single-photo mode).
+        self._multi_preview_row = QWidget()
+        self._multi_preview_row.setObjectName("DropZoneMultiPreviewRow")
+        self._multi_preview_row.setVisible(False)
+        multi_layout = QHBoxLayout(self._multi_preview_row)
+        multi_layout.setContentsMargins(0, 0, 0, 0)
+        multi_layout.setSpacing(6)
+        multi_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._multi_preview_labels: list[QLabel] = []
+        for _ in range(self._MAX_MULTI):
+            lbl = QLabel()
+            lbl.setObjectName("DropZoneMultiPreview")
+            lbl.setFixedSize(72, 72)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setVisible(False)
+            multi_layout.addWidget(lbl)
+            self._multi_preview_labels.append(lbl)
+        layout.addWidget(self._multi_preview_row)
 
         self._title_label = QLabel("Drag a tile photo here")
         self._title_label.setObjectName("DropZoneTitle")
@@ -340,28 +361,80 @@ class DropZone(QFrame):
         """Disable interaction while a search is in progress."""
         self.setEnabled(not busy)
 
-    def show_preview(self, image_path: str, *, extra_count: int = 0) -> None:
-        """Display a small preview thumbnail of the selected query image."""
-        pixmap = QPixmap(image_path)
-        if not pixmap.isNull():
-            scaled = pixmap.scaled(
-                96, 96, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
-            )
-            self._preview_label.setPixmap(scaled)
-            self._preview_label.setVisible(True)
-            self._icon_label.setVisible(False)
-        name = Path(image_path).name
-        if extra_count > 0:
-            self._title_label.setText(f"{name} (+{extra_count} more)")
-            self._subtitle_label.setText("Multi-photo search — click to choose different images")
-        else:
+    def show_preview(
+        self,
+        image_path: str,
+        *,
+        extra_count: int = 0,
+        image_paths: Optional[list] = None,
+    ) -> None:
+        """
+        Display preview thumbnail(s) of the selected query image(s).
+
+        Single-photo: one 96×96 thumbnail (unchanged look).
+        Multi-photo: pass ``image_paths`` (2–3) to show a thumbnail for each.
+        """
+        paths = [str(p) for p in (image_paths or []) if str(p).strip()]
+        if not paths:
+            paths = [image_path]
+            if extra_count > 0:
+                # Legacy call sites that only pass extra_count — still show one.
+                pass
+
+        self._icon_label.setVisible(False)
+        if len(paths) <= 1:
+            self._multi_preview_row.setVisible(False)
+            for lbl in self._multi_preview_labels:
+                lbl.clear()
+                lbl.setVisible(False)
+            pixmap = QPixmap(paths[0])
+            if not pixmap.isNull():
+                scaled = pixmap.scaled(
+                    96,
+                    96,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                self._preview_label.setPixmap(scaled)
+                self._preview_label.setVisible(True)
+            name = Path(paths[0]).name
             self._title_label.setText(name)
             self._subtitle_label.setText("Click to search a different image")
+            return
+
+        # Multi-photo: hide the single large preview; show a row of thumbs.
+        self._preview_label.clear()
+        self._preview_label.setVisible(False)
+        self._multi_preview_row.setVisible(True)
+        for i, lbl in enumerate(self._multi_preview_labels):
+            if i < len(paths):
+                pix = QPixmap(paths[i])
+                if not pix.isNull():
+                    scaled = pix.scaled(
+                        72,
+                        72,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    lbl.setPixmap(scaled)
+                lbl.setVisible(True)
+            else:
+                lbl.clear()
+                lbl.setVisible(False)
+        names = ", ".join(Path(p).name for p in paths[:3])
+        self._title_label.setText(f"{len(paths)} photos selected")
+        self._subtitle_label.setText(
+            f"{names} — click to choose different images"
+        )
 
     def reset(self) -> None:
         """Reset the drop zone back to its empty prompt state."""
         self._preview_label.clear()
         self._preview_label.setVisible(False)
+        self._multi_preview_row.setVisible(False)
+        for lbl in self._multi_preview_labels:
+            lbl.clear()
+            lbl.setVisible(False)
         self._icon_label.setVisible(True)
         self.set_multi_photo_enabled(self._multi_photo_enabled)
 
@@ -678,17 +751,20 @@ class SearchView(QWidget):
         root_layout.setSpacing(16)
 
         root_layout.addWidget(self._build_header())
-        root_layout.addWidget(self._build_query_panel())
-        root_layout.addWidget(self._build_description_search_bar())
-        root_layout.addWidget(self._build_filter_bar())
-        root_layout.addWidget(self._build_progress_bar())
+        query_panel = self._build_query_panel()
+        # Cap query chrome so results dominate on laptop screens.
+        query_panel.setMaximumHeight(260)
+        root_layout.addWidget(query_panel, stretch=0)
+        root_layout.addWidget(self._build_description_search_bar(), stretch=0)
+        root_layout.addWidget(self._build_filter_bar(), stretch=0)
+        root_layout.addWidget(self._build_progress_bar(), stretch=0)
         self._confidence_banner = QLabel("")
         self._confidence_banner.setObjectName("ConfidenceBanner")
         self._confidence_banner.setWordWrap(True)
         self._confidence_banner.setVisible(False)
-        root_layout.addWidget(self._confidence_banner)
+        root_layout.addWidget(self._confidence_banner, stretch=0)
         root_layout.addWidget(self._build_results_table(), stretch=1)
-        root_layout.addWidget(self._build_status_line())
+        root_layout.addWidget(self._build_status_line(), stretch=0)
 
     def _build_header(self) -> QWidget:
         header = QWidget()
@@ -727,7 +803,7 @@ class SearchView(QWidget):
             on_images_selected=self._on_images_chosen,
             on_drop_rejected=self._on_drop_rejected,
         )
-        drop_col_layout.addWidget(self._drop_zone, stretch=1)
+        drop_col_layout.addWidget(self._drop_zone, stretch=0)
 
         # Opt-in only — default off preserves the fast single-photo CPU path.
         self._multi_photo_checkbox = QCheckBox("Search with multiple photos (2–3)")
@@ -1009,8 +1085,8 @@ class SearchView(QWidget):
         self._results_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._results_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._results_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self._results_table.setIconSize(QSize(72, 72))
-        self._results_table.verticalHeader().setDefaultSectionSize(80)
+        self._results_table.setIconSize(QSize(64, 64))
+        self._results_table.verticalHeader().setDefaultSectionSize(68)
         self._results_table.setAlternatingRowColors(True)
         self._results_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
 
@@ -1111,8 +1187,11 @@ class SearchView(QWidget):
     def _on_query_image_selected(self, image_path: str) -> None:
         """Keep drop-zone preview and action buttons aligned with the ViewModel query."""
         self._current_query_image_path = image_path
-        extra = max(0, len(getattr(self, "_current_query_paths", []) or []) - 1)
-        self._drop_zone.show_preview(image_path, extra_count=extra)
+        paths = list(getattr(self, "_current_query_paths", []) or [])
+        if len(paths) > 1:
+            self._drop_zone.show_preview(image_path, image_paths=paths)
+        else:
+            self._drop_zone.show_preview(image_path)
         self._refresh_action_buttons()
 
     def _on_multi_photo_toggled(self, checked: bool) -> None:
@@ -1136,7 +1215,7 @@ class SearchView(QWidget):
         self._current_query_paths = list(paths)
         self._current_query_image_path = paths[0]
         self._confidence_banner.setVisible(False)
-        self._drop_zone.show_preview(paths[0], extra_count=len(paths) - 1)
+        self._drop_zone.show_preview(paths[0], image_paths=paths)
         self._refresh_action_buttons()
         self._status_label.setText(
             f"Multi-photo search with {len(paths)} images…"
@@ -1424,7 +1503,9 @@ class SearchView(QWidget):
         if self._viewmodel.state == SearchState.IDLE:
             self._confidence_banner.setVisible(False)
             return
-        message = confidence_message(results)
+        # Kind-aware copy: description search must never suggest Crop & Search.
+        search_kind = getattr(self._viewmodel, "_active_search_kind", "image") or "image"
+        message = confidence_message(results, search_kind=search_kind)
         if message:
             self._confidence_banner.setText(f"Warning: {message}")
             self._confidence_banner.setVisible(True)
@@ -1736,9 +1817,14 @@ class SearchView(QWidget):
                 border: 2px dashed {p['accent_hover']};
                 background-color: {p['row_alt']};
             }}
-            #DropZoneIcon {{ font-size: 36px; }}
-            #DropZoneTitle {{ font-size: 14px; font-weight: 600; color: {p['text_primary']}; }}
+            #DropZoneIcon {{ font-size: 28px; }}
+            #DropZoneTitle {{ font-size: 13px; font-weight: 600; color: {p['text_primary']}; }}
             #DropZoneSubtitle {{ font-size: 11px; color: {p['text_muted']}; }}
+            #DropZoneMultiPreview {{
+                background-color: {p['bg_panel_alt']};
+                border: 1px solid {p['border_strong']};
+                border-radius: 6px;
+            }}
             #MultiPhotoCheckbox {{
                 color: {p['text_secondary']};
                 font-size: 12px;

@@ -71,3 +71,25 @@ def test_moderate_confidence_band():
     message = confidence_message(results)
     assert message is not None
     assert "Moderate match" in message
+
+
+def test_description_search_does_not_suggest_crop():
+    results = [_result(30.0, "weak.png")]
+    message = confidence_message(results, search_kind="description")
+    assert message is not None
+    assert "Low confidence" in message
+    assert "Crop" not in message
+    assert "phrase" in message.lower() or "Export" in message
+
+
+def test_description_mid_score_not_low_confidence():
+    # After CLIP calibration, ~55–70% is a reasonable mid hit — not "low".
+    results = [_result(58.0)]
+    assert classify_confidence(results, search_kind="description") == ConfidenceLevel.MODERATE
+    assert classify_confidence(results, search_kind="image") == ConfidenceLevel.HIGH
+
+
+def test_description_strong_score_is_high():
+    results = [_result(80.0)]
+    assert classify_confidence(results, search_kind="description") == ConfidenceLevel.HIGH
+    assert confidence_message(results, search_kind="description") is None

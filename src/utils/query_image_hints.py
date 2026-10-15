@@ -16,9 +16,14 @@ from PIL import Image
 
 from src.core.models import SearchResult
 
-# Display % below which a non-self match is considered weak.
+# Display % below which a non-self match is considered weak (image / DINOv2).
 LOW_CONFIDENCE_THRESHOLD = 35.0
 MODERATE_CONFIDENCE_THRESHOLD = 55.0
+
+# Description / CLIP display % thresholds (after calibrate_clip_display_percent).
+# Slightly higher floor so a mid CLIP match (~55–70%) is not "low".
+DESC_LOW_CONFIDENCE_THRESHOLD = 45.0
+DESC_MODERATE_CONFIDENCE_THRESHOLD = 65.0
 
 # Treat near-100% rows as the query tile itself (self-match).
 _EXACT_MATCH_THRESHOLD = 99.5
@@ -107,7 +112,18 @@ def best_non_self_score(results: Sequence[SearchResult]) -> Optional[float]:
     return None
 
 
-def classify_confidence(results: Sequence[SearchResult]) -> ConfidenceLevel:
+def classify_confidence(
+    results: Sequence[SearchResult],
+    *,
+    search_kind: str = "image",
+) -> ConfidenceLevel:
+    """
+    Classify result strength.
+
+    ``search_kind`` is ``\"image\"`` (DINOv2 visual search) or
+    ``\"description\"`` (CLIP text search) — thresholds differ because the
+    display % curves are calibrated separately.
+    """
     if not results:
         return ConfidenceLevel.NONE
 
@@ -115,30 +131,53 @@ def classify_confidence(results: Sequence[SearchResult]) -> ConfidenceLevel:
     if best is None:
         return ConfidenceLevel.HIGH
 
-    if best < LOW_CONFIDENCE_THRESHOLD:
+    if search_kind == "description":
+        low, moderate = DESC_LOW_CONFIDENCE_THRESHOLD, DESC_MODERATE_CONFIDENCE_THRESHOLD
+    else:
+        low, moderate = LOW_CONFIDENCE_THRESHOLD, MODERATE_CONFIDENCE_THRESHOLD
+
+    if best < low:
         return ConfidenceLevel.LOW
-    if best < MODERATE_CONFIDENCE_THRESHOLD:
+    if best < moderate:
         return ConfidenceLevel.MODERATE
     return ConfidenceLevel.HIGH
 
 
-def confidence_message(results: Sequence[SearchResult]) -> Optional[str]:
+def confidence_message(
+    results: Sequence[SearchResult],
+    *,
+    search_kind: str = "image",
+) -> Optional[str]:
     """
     User-facing guidance based on result strength.
+
+    Description-search copy must never suggest Crop & Search (image-only).
     """
     if not results:
+        if search_kind == "description":
+            return (
+                "No matching tiles for that description. Try a different phrase, "
+                "or confirm the catalogue was rebuilt so CLIP embeddings exist."
+            )
         return (
             "No similar tiles found. Add product photos of this tile to your "
             "indexed folder and scan again."
         )
 
-    level = classify_confidence(results)
+    level = classify_confidence(results, search_kind=search_kind)
     best = best_non_self_score(results)
 
     if level == ConfidenceLevel.HIGH and best is None:
         return None
 
     if level == ConfidenceLevel.LOW:
+        if search_kind == "description":
+            return (
+                "Low confidence — no strong description match in your catalog "
+                f"(best alternative: {best:.0f}%). "
+                "Try a different phrase (color, finish, style), or browse via "
+                "Export Catalogue."
+            )
         return (
             "Low confidence — no strong visual match in your catalog "
             f"(best alternative: {best:.0f}%). "
@@ -147,6 +186,12 @@ def confidence_message(results: Sequence[SearchResult]) -> Optional[str]:
         )
 
     if level == ConfidenceLevel.MODERATE:
+        if search_kind == "description":
+            return (
+                f"Moderate description match (best: {best:.0f}%). "
+                "Scores are relative match ratings for text search — "
+                "verify results visually."
+            )
         return (
             f"Moderate match (best alternative: {best:.0f}%). "
             "Scores are visual match ratings, not literal accuracy — "

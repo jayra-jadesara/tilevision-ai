@@ -627,10 +627,44 @@ class IndexImagesUseCase:
         paths_seen_on_disk: set = set()
         pending_batch: List[_PendingIndexItem] = []
 
-        # Rolling wall-clock samples for files that actually re-embed (not skips),
-        # so ETA during a full rebuild reflects real per-image cost.
-        work_samples: List[float] = []
-        work_sample_window = 20
+        # Per-batch wall-clock (seconds per image) for files that re-embed.
+        # First flush often includes one-time model warmup (DINOv2/CLIP load).
+        # Old mean-of-expanded-samples let that warmup (or a slow early streak)
+        # project ~5× too high an ETA (reproduced: ~315s remaining at 60% when
+        # true remaining was ~1 min). Use median of recent post-warmup batches.
+        batch_timings_log: List[float] = []
+        warmup_batches_skip = 1
+        recent_batch_window = 4
+
+        def _typical_work_seconds() -> float:
+            """Median seconds/image from recent post-warmup batches."""
+            if not batch_timings_log:
+                return 0.0
+            steady = (
+                batch_timings_log[warmup_batches_skip:]
+                if len(batch_timings_log) > warmup_batches_skip
+                else list(batch_timings_log)
+            )
+            if not steady:
+                return 0.0
+            recent = steady[-recent_batch_window:]
+            ordered = sorted(recent)
+            mid = len(ordered) // 2
+            median = (
+                ordered[mid]
+                if len(ordered) % 2
+                else 0.5 * (ordered[mid - 1] + ordered[mid])
+            )
+            # Drop extreme outliers still sitting in the short window.
+            capped = [s for s in ordered if s <= max(median * 3.0, median + 1.5)]
+            if not capped:
+                capped = ordered
+            mid = len(capped) // 2
+            return (
+                capped[mid]
+                if len(capped) % 2
+                else 0.5 * (capped[mid - 1] + capped[mid])
+            )
 
         def _flush_pending_batch() -> None:
             nonlocal new_count, modified_count, failed_count
@@ -649,10 +683,20 @@ class IndexImagesUseCase:
                     else:
                         new_count += 1
                 per_image = (time.perf_counter() - flush_t0) / max(1, batch_size)
-                for _ in range(batch_size):
-                    work_samples.append(max(per_image, 1e-6))
-                if len(work_samples) > work_sample_window:
-                    del work_samples[: len(work_samples) - work_sample_window]
+                per_image = max(per_image, 1e-6)
+                batch_timings_log.append(per_image)
+                if len(batch_timings_log) > 32:
+                    del batch_timings_log[: len(batch_timings_log) - 32]
+                typical = _typical_work_seconds()
+                logger.info(
+                    "INDEX TIMING per-file: batch_n=%d per_image=%.3fs "
+                    "batch_index=%d typical_steady=%.3fs batch_times=%s",
+                    batch_size,
+                    per_image,
+                    len(batch_timings_log),
+                    typical,
+                    ",".join(f"{s:.3f}" for s in batch_timings_log[-8:]),
+                )
             except Exception as e:
                 failed_count += batch_size
                 logger.error(
@@ -667,8 +711,8 @@ class IndexImagesUseCase:
             remaining_files = total_files - processed
             if remaining_files <= 0:
                 return 0.0
-            if work_samples:
-                avg_work = sum(work_samples) / len(work_samples)
+            typical = _typical_work_seconds()
+            if typical > 0.0:
                 # Estimate how many of the remaining files still need embeds
                 # using the skip rate observed so far in this run.
                 decided = skipped_count + new_count + modified_count + failed_count
@@ -676,7 +720,7 @@ class IndexImagesUseCase:
                     work_rate = 1.0 - (skipped_count / decided)
                 else:
                     work_rate = 1.0
-                return avg_work * remaining_files * max(0.0, min(1.0, work_rate))
+                return typical * remaining_files * max(0.0, min(1.0, work_rate))
             if processed > 0:
                 elapsed = time.perf_counter() - start_time
                 return max(elapsed, 1e-6) / processed * remaining_files

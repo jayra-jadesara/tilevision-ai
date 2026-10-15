@@ -50,7 +50,11 @@ from src.licensing.hardware import get_machine_fingerprint
 from src.presentation.workers.rebuild_index_worker import RebuildIndexWorker
 from src.utils.logger import get_log_file_path
 from src.presentation.views.catalogue_profiles_panel import CatalogueProfilesPanel
-from src.theme.theme_manager import get_shared_view_qss, get_settings_view_qss
+from src.theme.theme_manager import (
+    get_palette,
+    get_shared_view_qss,
+    get_settings_view_qss,
+)
 from src.presentation.dialogs import message_box
 
 logger = logging.getLogger("tilevision.presentation.views.settings_view")
@@ -994,7 +998,10 @@ class SettingsView(QWidget):
         self._rebuild_progress_dialog.setCancelButton(None)
         self._rebuild_progress_dialog.setAutoClose(False)
         self._rebuild_progress_dialog.setAutoReset(False)
+        self._rebuild_progress_dialog.setMinimumWidth(420)
+        self._style_rebuild_progress_dialog(self._rebuild_progress_dialog)
         self._rebuild_progress_dialog.show()
+        self._center_rebuild_progress_dialog(self._rebuild_progress_dialog)
 
         self._rebuild_worker = RebuildIndexWorker(self._indexing_use_case, folders)
         self._rebuild_worker.progress_updated.connect(self._on_rebuild_progress)
@@ -1061,7 +1068,58 @@ class SettingsView(QWidget):
         self._theme = theme
         if hasattr(self, "_export_profiles_panel"):
             self._export_profiles_panel.set_theme(theme)
+        if self._rebuild_progress_dialog is not None:
+            self._style_rebuild_progress_dialog(self._rebuild_progress_dialog)
         self._apply_styles()
+
+    def _style_rebuild_progress_dialog(self, dialog: QProgressDialog) -> None:
+        """Theme QProgressDialog so it matches light/dark (not OS defaults)."""
+        p = get_palette(self._theme)
+        dialog.setStyleSheet(
+            f"""
+            QProgressDialog {{
+                background-color: {p['bg_panel']};
+                color: {p['text_primary']};
+            }}
+            QLabel {{
+                color: {p['text_secondary']};
+                font-size: 12px;
+            }}
+            QProgressBar {{
+                background-color: {p['bg_input']};
+                border: 1px solid {p['border_strong']};
+                border-radius: 4px;
+                text-align: center;
+                color: {p['text_primary']};
+                min-height: 16px;
+            }}
+            QProgressBar::chunk {{
+                background-color: {p['accent_soft']};
+                border-radius: 3px;
+            }}
+            """
+        )
+
+    def _center_rebuild_progress_dialog(self, dialog: QProgressDialog) -> None:
+        """Center the modal over the main window (parent), not a screen corner."""
+        parent = dialog.parentWidget() or self.window()
+        dialog.adjustSize()
+        if parent is not None:
+            parent_geo = parent.frameGeometry()
+            dialog_geo = dialog.frameGeometry()
+            dialog.move(
+                parent_geo.center().x() - dialog_geo.width() // 2,
+                parent_geo.center().y() - dialog_geo.height() // 2,
+            )
+            return
+        screen = QGuiApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            dialog_geo = dialog.frameGeometry()
+            dialog.move(
+                avail.center().x() - dialog_geo.width() // 2,
+                avail.center().y() - dialog_geo.height() // 2,
+            )
 
     def _apply_styles(self) -> None:
         self.setStyleSheet(get_shared_view_qss(self._theme) + get_settings_view_qss(self._theme))
