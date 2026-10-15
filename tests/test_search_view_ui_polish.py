@@ -191,7 +191,7 @@ def test_action_buttons_use_grid_without_separators(search_view):
 
     clear = search_view._clear_button
     assert clear.objectName() == "SecondaryButton"
-    assert clear.minimumHeight() >= 32
+    assert clear.minimumHeight() >= 36
     assert search_view._export_button.objectName() == "SecondaryButton"
     assert search_view._crop_button.objectName() == "SecondaryButton"
     assert search_view._auto_crop_button.text() == "Auto Crop Search"

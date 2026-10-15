@@ -835,7 +835,8 @@ class SearchView(QWidget):
         def _action_btn(text: str) -> QPushButton:
             btn = QPushButton(text)
             btn.setObjectName("SecondaryButton")
-            btn.setMinimumHeight(32)
+            # Tall enough for descenders at 100–150% Windows scaling.
+            btn.setMinimumHeight(36)
             btn.setSizePolicy(
                 QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
             )
@@ -1840,8 +1841,8 @@ class SearchView(QWidget):
                 background: transparent;
             }}
             #SearchActionColumn #SecondaryButton {{
-                min-height: 32px;
-                padding: 6px 10px;
+                min-height: 36px;
+                padding: 8px 10px;
                 font-size: 12px;
             }}
             #SearchButtonSeparator {{
