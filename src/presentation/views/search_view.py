@@ -300,8 +300,8 @@ class DropZone(QFrame):
         self.setObjectName("DropZone")
         self.setAcceptDrops(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMinimumHeight(120)
-        self.setMaximumHeight(160)
+        self.setMinimumHeight(110)
+        self.setMaximumHeight(150)
 
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -754,7 +754,9 @@ class SearchView(QWidget):
 
         root_layout.addWidget(self._build_header())
         query_panel = self._build_query_panel()
-        query_panel.setMaximumHeight(200)
+        # Tall enough for the 2-col grid (incl. Recent) without clipping;
+        # keep ≤~220 so ≥5 result rows remain at 1366×768.
+        query_panel.setMaximumHeight(220)
         root_layout.addWidget(query_panel, stretch=0)
         # Description + filters share one row (was two stacked bars).
         root_layout.addWidget(self._build_description_and_filters_row(), stretch=0)
@@ -833,10 +835,12 @@ class SearchView(QWidget):
         grid.setVerticalSpacing(6)
 
         def _action_btn(text: str) -> QPushButton:
+            # Dedicated object name so shared #SecondaryButton padding
+            # (6px 14px) cannot inflate min-height past max-height.
             btn = QPushButton(text)
-            btn.setObjectName("SecondaryButton")
-            # Tall enough for descenders at 100–150% Windows scaling.
-            btn.setMinimumHeight(36)
+            btn.setObjectName("SearchActionButton")
+            btn.setMinimumHeight(28)
+            btn.setMaximumHeight(32)
             btn.setSizePolicy(
                 QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
             )
@@ -1840,10 +1844,25 @@ class SearchView(QWidget):
                 max-width: 360px;
                 background: transparent;
             }}
-            #SearchActionColumn #SecondaryButton {{
-                min-height: 36px;
-                padding: 8px 10px;
-                font-size: 12px;
+            #SearchActionButton {{
+                background-color: {p['button_bg']};
+                color: {p['text_secondary']};
+                border: 1px solid {p['border_strong']};
+                border-radius: 6px;
+                min-height: 28px;
+                max-height: 32px;
+                padding: 4px 8px;
+                font-size: 11px;
+                font-weight: 600;
+            }}
+            #SearchActionButton:hover:enabled {{
+                background-color: {p['button_hover']};
+                color: {p['text_primary']};
+                border-color: {p['accent_soft']};
+            }}
+            #SearchActionButton:disabled {{
+                color: {p['text_faint']};
+                border-color: {p['border']};
             }}
             #SearchButtonSeparator {{
                 border: none;

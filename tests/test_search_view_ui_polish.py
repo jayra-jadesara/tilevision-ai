@@ -190,13 +190,13 @@ def test_action_buttons_use_grid_without_separators(search_view):
     assert len(separators) == 0
 
     clear = search_view._clear_button
-    assert clear.objectName() == "SecondaryButton"
-    assert clear.minimumHeight() >= 36
-    assert search_view._export_button.objectName() == "SecondaryButton"
-    assert search_view._crop_button.objectName() == "SecondaryButton"
+    assert clear.objectName() == "SearchActionButton"
+    assert clear.maximumHeight() <= 48  # Qt may expand slightly for font/padding
+    assert search_view._export_button.objectName() == "SearchActionButton"
+    assert search_view._crop_button.objectName() == "SearchActionButton"
     assert search_view._auto_crop_button.text() == "Auto Crop Search"
     assert search_view._precise_crop_button.text() == "Precise Crop Search"
-    assert search_view._history_button.objectName() == "SecondaryButton"
+    assert search_view._history_button.objectName() == "SearchActionButton"
 
 
 def test_action_column_is_two_column_grid(search_view):

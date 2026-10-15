@@ -18,8 +18,11 @@ from src.config.indexing_performance import IndexingPerformanceConfig
 from src.core.models import TileImage, ScanResult, IndexedFolderState
 from src.core.use_cases.index_timeout import (
     IndexFileTimeoutError,
+    IndexStallAbort,
     file_index_timeout_s,
+    inference_lock_is_held,
     run_with_timeout,
+    stall_abort_message,
 )
 from src.data.repository_interface import IImageRepository, IIndexedFolderRepository
 from src.ai.feature_extractor import FeatureExtractor
@@ -671,8 +674,15 @@ class IndexImagesUseCase:
                 else 0.5 * (capped[mid - 1] + capped[mid])
             )
 
+        def _record_success(item: _PendingIndexItem) -> None:
+            nonlocal new_count, modified_count
+            if item.was_previously_indexed:
+                modified_count += 1
+            else:
+                new_count += 1
+
         def _index_one_with_timeout(item: _PendingIndexItem) -> None:
-            """Embed one file with a hard wall-clock timeout (skip on hang)."""
+            """Embed one file with a hard wall-clock timeout."""
             label = item.path.name
             timeout_s = file_index_timeout_s()
             t0 = time.perf_counter()
@@ -708,52 +718,107 @@ class IndexImagesUseCase:
                 )
                 raise
 
+        def _flush_per_file(items: List[_PendingIndexItem]) -> Tuple[int, int]:
+            """
+            Isolate a bad file after a batch failure.
+
+            On per-file timeout we abort the whole scan: the hung worker still
+            holds ``_INFERENCE_LOCK``, so continuing would only time out again.
+            """
+            nonlocal failed_count
+            timed_out = 0
+            other_failed = 0
+            for item in items:
+                if cancel_event and cancel_event.is_set():
+                    break
+                try:
+                    _index_one_with_timeout(item)
+                    _record_success(item)
+                except IndexFileTimeoutError:
+                    timed_out += 1
+                    failed_count += 1
+                    raise IndexStallAbort(
+                        stall_abort_message(item.path.name, file_index_timeout_s())
+                    )
+                except Exception as e:
+                    other_failed += 1
+                    failed_count += 1
+                    logger.error(
+                        "Per-file indexing failed for %s: %s",
+                        item.path.name,
+                        e,
+                    )
+            return timed_out, other_failed
+
         def _flush_pending_batch() -> None:
-            nonlocal new_count, modified_count, failed_count
+            nonlocal new_count, modified_count, failed_count, is_completed
             if not pending_batch:
                 return
 
-            batch_size = len(pending_batch)
+            items = list(pending_batch)
+            pending_batch.clear()
+            batch_size = len(items)
             flush_t0 = time.perf_counter()
-            names = ",".join(item.path.name for item in pending_batch[:6])
+            names = ",".join(item.path.name for item in items[:6])
             if batch_size > 6:
                 names += f",…(+{batch_size - 6})"
+            per_file_timeout = file_index_timeout_s()
+            # Whole-batch budget scales with size so normal batched embeds
+            # are not cut short; hung forwards still return at this wall clock.
+            batch_timeout = per_file_timeout * max(1, batch_size)
             logger.info(
-                "INDEX BATCH START: n=%d files=[%s]",
+                "INDEX BATCH START: n=%d timeout=%.0fs files=[%s]",
                 batch_size,
+                batch_timeout,
                 names,
             )
-            # Index one file at a time with a per-file timeout so a single hung
-            # PNG/forward cannot freeze the whole rebuild (UI stays at N/M with
-            # a stale ETA otherwise — see rebuild hang reports).
             timed_out = 0
             other_failed = 0
-            succeeded: List[_PendingIndexItem] = []
+            used_fallback = False
             try:
-                # Finish every queued item in this flush (with per-file timeout).
-                # Cancel is honored between scan-loop files and after this flush
-                # returns — aborting mid-flush would drop already-queued work and
-                # break crash-safe resume (skipped-on-retry) for rebuilt tiles.
-                for item in list(pending_batch):
-                    try:
-                        _index_one_with_timeout(item)
-                        succeeded.append(item)
-                        if item.was_previously_indexed:
-                            modified_count += 1
-                        else:
-                            new_count += 1
-                    except IndexFileTimeoutError:
-                        timed_out += 1
-                        failed_count += 1
-                    except Exception as e:
-                        other_failed += 1
-                        failed_count += 1
-                        logger.error(
-                            "Batch item indexing failed for %s: %s",
-                            item.path.name,
-                            e,
+                try:
+                    run_with_timeout(
+                        lambda: self._index_file_batch(items, persist=True),
+                        timeout_s=batch_timeout,
+                        label=f"batch[{batch_size}:{names}]",
+                    )
+                    for item in items:
+                        _record_success(item)
+                except IndexFileTimeoutError:
+                    # Timed-out batch worker usually still holds the inference
+                    # RLock — continuing (even per-file) would hang again.
+                    lock_held = inference_lock_is_held()
+                    if lock_held is not False:
+                        failed_count += batch_size
+                        timed_out = batch_size
+                        raise IndexStallAbort(
+                            stall_abort_message(
+                                items[0].path.name if items else "batch",
+                                batch_timeout,
+                            )
                         )
-                done = len(succeeded)
+                    logger.warning(
+                        "INDEX BATCH TIMEOUT but inference lock free — "
+                        "falling back to per-file isolation"
+                    )
+                    used_fallback = True
+                    timed_out, other_failed = _flush_per_file(items)
+                except IndexStallAbort:
+                    raise
+                except Exception as e:
+                    # Non-timeout batch failure: isolate the bad file(s).
+                    logger.warning(
+                        "INDEX BATCH failed (%s); falling back to per-file",
+                        e,
+                    )
+                    used_fallback = True
+                    timed_out, other_failed = _flush_per_file(items)
+
+                done = batch_size - timed_out - other_failed
+                # When we fell back, successes were already counted in
+                # _record_success / failures in failed_count.
+                if used_fallback:
+                    done = max(0, batch_size - timed_out - other_failed)
                 per_image = (time.perf_counter() - flush_t0) / max(1, done or batch_size)
                 per_image = max(per_image, 1e-6)
                 if done > 0:
@@ -763,27 +828,32 @@ class IndexImagesUseCase:
                 typical = _typical_work_seconds()
                 logger.info(
                     "INDEX BATCH END: n=%d ok=%d timeout=%d failed=%d "
-                    "per_image=%.3fs typical_steady=%.3fs batch_times=%s",
+                    "fallback=%s per_image=%.3fs typical_steady=%.3fs "
+                    "batch_times=%s",
                     batch_size,
                     done,
                     timed_out,
                     other_failed,
+                    used_fallback,
                     per_image,
                     typical,
                     ",".join(f"{s:.3f}" for s in batch_timings_log[-8:]),
                 )
-                # Keep legacy timing line for ETA tooling / hang forensics.
                 logger.info(
                     "INDEX TIMING per-file: batch_n=%d per_image=%.3fs "
                     "batch_index=%d typical_steady=%.3fs batch_times=%s",
-                    max(1, done),
+                    max(1, done or batch_size),
                     per_image,
                     len(batch_timings_log),
                     typical,
                     ",".join(f"{s:.3f}" for s in batch_timings_log[-8:]),
                 )
-            finally:
-                pending_batch.clear()
+            except IndexStallAbort:
+                is_completed = False
+                if cancel_event is not None:
+                    cancel_event.set()
+                logger.error("INDEX STALL ABORT — stopping scan")
+                raise
 
         def _eta_seconds(processed: int) -> float:
             remaining_files = total_files - processed
@@ -869,11 +939,18 @@ class IndexImagesUseCase:
                 if len(pending_batch) >= self._pending_batch_limit(pending_batch):
                     _flush_pending_batch()
 
+            except IndexStallAbort:
+                is_completed = False
+                raise
             except Exception as e:
                 failed_count += 1
                 logger.error(f"Error indexing file during folder scan: {resolved_path}. Error: {e}")
 
-        _flush_pending_batch()
+        try:
+            _flush_pending_batch()
+        except IndexStallAbort:
+            is_completed = False
+            raise
 
         # 4. Deletion detection (Task 2): any tile previously indexed under
         #    this folder that we did NOT see on disk during this scan was
