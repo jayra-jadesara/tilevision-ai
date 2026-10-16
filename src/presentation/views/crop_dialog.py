@@ -182,7 +182,14 @@ class CropDialog(QDialog):
             cropped_path = dialog.cropped_image_path  # feed this into search
     """
 
-    def __init__(self, image_path: str, parent=None, theme: str = "dark") -> None:
+    def __init__(
+        self,
+        image_path: str,
+        parent=None,
+        theme: str = "dark",
+        *,
+        window_title: str | None = None,
+    ) -> None:
         super().__init__(parent)
         self._source_path = Path(image_path)
         self._cropped_image_path: Optional[str] = None
@@ -190,7 +197,7 @@ class CropDialog(QDialog):
         self._image_size = (0, 0)
         self._default_method = "none"
 
-        self.setWindowTitle("Crop & Search — Select a Region")
+        self.setWindowTitle(window_title or "Crop & Search — Select a Region")
         self._setup_ui()
         self._apply_styles()
 
