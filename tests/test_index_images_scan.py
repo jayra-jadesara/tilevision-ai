@@ -323,7 +323,9 @@ def test_folder_not_recorded_when_scan_is_cancelled(tmp_path):
     cancel_event = threading.Event()
 
     def progress_cb(processed, total, filename, eta):
-        if processed == 1:
+        # Progress reports completed files (not queued). First flush is
+        # typically 4 — cancel as soon as any work has finished.
+        if processed > 0:
             cancel_event.set()
 
     use_case.scan_and_index_directory(
@@ -511,6 +513,11 @@ def test_progress_eta_uses_embed_work_not_skip_dilution(env):
         d, progress_callback=progress_cb, force=True
     )
     assert result.modified_count == 14
-    # Callbacks after the first flush (batch_size=12) must show remaining ETA.
+    # After the first flush completes we have a real timing sample → ETA > 0
+    # for remaining work. Early callbacks (scanning / first-batch message)
+    # correctly use eta=-1 and must not be required to be positive.
     positive = [e for e in etas if e > 0]
     assert positive, f"expected positive ETA samples during rebuild, got {etas}"
+    assert any(e < 0 for e in etas), (
+        f"expected indeterminate ETA before first batch sample, got {etas}"
+    )

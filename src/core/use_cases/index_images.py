@@ -583,7 +583,11 @@ class IndexImagesUseCase:
 
         Args:
             directory_path: Root folder path to scan.
-            progress_callback: Optional callback receiving (processed_count, total_count, current_filename, eta_seconds).
+            progress_callback: Optional callback receiving
+                (completed_count, total_count, status_name, eta_seconds).
+                ``completed_count`` is files finished (not merely queued).
+                ``eta_seconds`` is -1 until a real batch timing sample exists
+                (UI must not invent a seconds estimate from queue time).
             cancel_event: Threading event to stop the scan loop.
             pause_event: Threading event to temporarily pause the scan loop.
             force: If True, re-embed every file regardless of whether its
@@ -627,7 +631,10 @@ class IndexImagesUseCase:
         # perf_counter: Windows time.time() can round sub-15ms scans to 0 and
         # zero-out ETA during fast FakeEmbedder / tiny-folder tests.
         start_time = time.perf_counter()
-        processed_count = 0
+        # Files finished (skipped / embedded / failed) — NOT files merely queued.
+        # Emitting progress on queue made the UI jump to ~11/38 in <1s then sit
+        # idle for minutes while batch 1 embedded (real Windows log evidence).
+        completed_count = 0
 
         # Track every path we actually see on disk this scan, so we can
         # detect deletions afterward (any previously-indexed tile under
@@ -643,6 +650,9 @@ class IndexImagesUseCase:
         batch_timings_log: List[float] = []
         warmup_batches_skip = 1
         recent_batch_window = 4
+        # First batch is smaller so the first real timing sample arrives sooner
+        # (~30–40s on CPU) instead of waiting on a full batch of 12 (~3 min).
+        first_batch_max = 4
 
         def _typical_work_seconds() -> float:
             """Median seconds/image from recent post-warmup batches."""
@@ -673,6 +683,39 @@ class IndexImagesUseCase:
                 if len(capped) % 2
                 else 0.5 * (capped[mid - 1] + capped[mid])
             )
+
+        def _flush_threshold(items: List[_PendingIndexItem]) -> int:
+            base = self._pending_batch_limit(items)
+            if not batch_timings_log:
+                return max(1, min(first_batch_max, base))
+            return base
+
+        def _eta_seconds(completed: int) -> float:
+            """
+            Seconds remaining, or -1.0 when no real timing sample exists yet.
+
+            Never invent ETA from queue-scan elapsed/processed — that produced
+            the false "~10s remaining" while the first batch still had minutes left.
+            """
+            remaining_files = total_files - completed
+            if remaining_files <= 0:
+                return 0.0
+            typical = _typical_work_seconds()
+            if typical <= 0.0:
+                return -1.0
+            decided = skipped_count + new_count + modified_count + failed_count
+            if decided > 0:
+                work_rate = 1.0 - (skipped_count / decided)
+            else:
+                work_rate = 1.0
+            return typical * remaining_files * max(0.0, min(1.0, work_rate))
+
+        def _emit_progress(name: str, *, eta: Optional[float] = None) -> None:
+            if not progress_callback:
+                return
+            if eta is None:
+                eta = _eta_seconds(completed_count)
+            progress_callback(completed_count, total_files, name, float(eta))
 
         def _record_success(item: _PendingIndexItem) -> None:
             nonlocal new_count, modified_count
@@ -751,7 +794,7 @@ class IndexImagesUseCase:
             return timed_out, other_failed
 
         def _flush_pending_batch() -> None:
-            nonlocal new_count, modified_count, failed_count, is_completed
+            nonlocal new_count, modified_count, failed_count, is_completed, completed_count
             if not pending_batch:
                 return
 
@@ -766,6 +809,14 @@ class IndexImagesUseCase:
             # Whole-batch budget scales with size so normal batched embeds
             # are not cut short; hung forwards still return at this wall clock.
             batch_timeout = per_file_timeout * max(1, batch_size)
+            is_first_batch = not batch_timings_log
+            if is_first_batch:
+                _emit_progress(
+                    f"Embedding first batch of {batch_size} images…",
+                    eta=-1.0,
+                )
+            else:
+                _emit_progress(f"Embedding {batch_size} images…")
             logger.info(
                 "INDEX BATCH START: n=%d timeout=%.0fs files=[%s]",
                 batch_size,
@@ -819,6 +870,8 @@ class IndexImagesUseCase:
                 # _record_success / failures in failed_count.
                 if used_fallback:
                     done = max(0, batch_size - timed_out - other_failed)
+                finished_this_flush = done + timed_out + other_failed
+                completed_count += finished_this_flush
                 per_image = (time.perf_counter() - flush_t0) / max(1, done or batch_size)
                 per_image = max(per_image, 1e-6)
                 if done > 0:
@@ -848,6 +901,15 @@ class IndexImagesUseCase:
                     typical,
                     ",".join(f"{s:.3f}" for s in batch_timings_log[-8:]),
                 )
+                last_name = items[-1].path.name if items else "batch"
+                typical_note = ""
+                if typical > 0:
+                    remaining = max(0, total_files - completed_count)
+                    typical_note = f" (~{typical:.0f}s/image"
+                    if remaining:
+                        typical_note += f", ~{int(typical * remaining)}s left"
+                    typical_note += ")"
+                _emit_progress(f"{last_name}{typical_note}")
             except IndexStallAbort:
                 is_completed = False
                 if cancel_event is not None:
@@ -855,24 +917,13 @@ class IndexImagesUseCase:
                 logger.error("INDEX STALL ABORT — stopping scan")
                 raise
 
-        def _eta_seconds(processed: int) -> float:
-            remaining_files = total_files - processed
-            if remaining_files <= 0:
-                return 0.0
-            typical = _typical_work_seconds()
-            if typical > 0.0:
-                # Estimate how many of the remaining files still need embeds
-                # using the skip rate observed so far in this run.
-                decided = skipped_count + new_count + modified_count + failed_count
-                if decided > 0:
-                    work_rate = 1.0 - (skipped_count / decided)
-                else:
-                    work_rate = 1.0
-                return typical * remaining_files * max(0.0, min(1.0, work_rate))
-            if processed > 0:
-                elapsed = time.perf_counter() - start_time
-                return max(elapsed, 1e-6) / processed * remaining_files
-            return 0.0
+        if progress_callback:
+            progress_callback(
+                0,
+                total_files,
+                "Scanning catalogue…",
+                -1.0,
+            )
 
         for file_path in all_files:
             # 0. Yield to drop-image Search so results can return.
@@ -898,20 +949,7 @@ class IndexImagesUseCase:
             file_name = resolved_path.name
             paths_seen_on_disk.add(str(resolved_path))
 
-            eta = _eta_seconds(processed_count)
-
-            # Emit progress update before processing
-            if progress_callback:
-                progress_callback(processed_count, total_files, file_name, eta)
-
-            processed_count += 1
-            logger.info(
-                "INDEX SCAN FILE: %s (%d/%d) eta=%.1fs",
-                file_name,
-                processed_count,
-                total_files,
-                eta,
-            )
+            logger.debug("INDEX SCAN FILE: %s", file_name)
 
             try:
                 # 3. Incremental Index Check: distinguish unchanged (skip),
@@ -927,6 +965,8 @@ class IndexImagesUseCase:
                 ):
                     logger.debug(f"Skipping unchanged tile: {file_name}")
                     skipped_count += 1
+                    completed_count += 1
+                    _emit_progress(file_name)
                     continue
 
                 pending_batch.append(
@@ -936,7 +976,7 @@ class IndexImagesUseCase:
                     )
                 )
 
-                if len(pending_batch) >= self._pending_batch_limit(pending_batch):
+                if len(pending_batch) >= _flush_threshold(pending_batch):
                     _flush_pending_batch()
 
             except IndexStallAbort:
@@ -944,7 +984,9 @@ class IndexImagesUseCase:
                 raise
             except Exception as e:
                 failed_count += 1
+                completed_count += 1
                 logger.error(f"Error indexing file during folder scan: {resolved_path}. Error: {e}")
+                _emit_progress(file_name)
 
         try:
             _flush_pending_batch()

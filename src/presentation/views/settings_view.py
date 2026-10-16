@@ -1007,9 +1007,11 @@ class SettingsView(QWidget):
         self._rebuild_current_name = ""
         self._rebuild_processed = 0
         self._rebuild_total = 0
-        self._rebuild_eta_seconds = 0.0
+        self._rebuild_eta_seconds = -1.0
         self._rebuild_eta_issued_mono = self._rebuild_last_progress_mono
         self._rebuild_stall_seconds = 0
+        # Closing the dialog on success emits canceled — ignore that path.
+        self._rebuild_closing_cleanly = False
 
         self._rebuild_progress_dialog = QProgressDialog(
             preparing_text, "Cancel", 0, 1, self
@@ -1035,6 +1037,8 @@ class SettingsView(QWidget):
         self._rebuild_worker.start()
 
     def _on_rebuild_cancel_clicked(self) -> None:
+        if getattr(self, "_rebuild_closing_cleanly", False):
+            return
         worker = self._rebuild_worker
         dialog = self._rebuild_progress_dialog
         if worker is not None:
@@ -1046,15 +1050,22 @@ class SettingsView(QWidget):
             dialog.setCancelButton(None)
 
     def _on_rebuild_stall_tick(self) -> None:
-        """Refresh label when ETA goes stale or a file takes unusually long."""
+        """Refresh label when ETA goes stale or a batch takes unusually long."""
         dialog = self._rebuild_progress_dialog
         if dialog is None or self._rebuild_worker is None:
+            return
+        if getattr(self, "_rebuild_closing_cleanly", False):
             return
         import time as _time
 
         now = _time.monotonic()
         stalled_for = now - self._rebuild_last_progress_mono
         self._rebuild_stall_seconds = int(stalled_for)
+        # No numeric ETA yet (first batch): just show elapsed while embedding.
+        if self._rebuild_eta_seconds < 0:
+            if stalled_for >= 15.0:
+                self._apply_rebuild_label(stale_eta=True, stalled_for=stalled_for)
+            return
         if stalled_for < self._rebuild_stall_warn_s:
             # Still within the warn window, but never keep an ETA that has
             # already expired relative to when it was issued.
@@ -1076,11 +1087,17 @@ class SettingsView(QWidget):
         name = self._rebuild_current_name or "…"
         processed = self._rebuild_processed
         total = self._rebuild_total
+        if self._rebuild_eta_seconds < 0 and not stale_eta:
+            dialog.setLabelText(
+                f"{prefix}: {name} ({processed}/{total}). "
+                f"First batch can take a few minutes on CPU — no ETA until it finishes."
+            )
+            return
         if stale_eta or stalled_for >= self._rebuild_stall_warn_s:
             dialog.setLabelText(
                 f"{prefix}: Still working on {name} "
                 f"({processed}/{total}, {int(stalled_for)}s)… "
-                f"this file is taking unusually long. You can Cancel."
+                f"this is taking unusually long. You can Cancel."
             )
             return
         eta_text = (
@@ -1107,7 +1124,7 @@ class SettingsView(QWidget):
         self._rebuild_current_name = current_name
         self._rebuild_processed = processed
         self._rebuild_total = total
-        self._rebuild_eta_seconds = float(eta_seconds or 0.0)
+        self._rebuild_eta_seconds = float(eta_seconds)
         self._rebuild_eta_issued_mono = self._rebuild_last_progress_mono
         self._rebuild_stall_seconds = 0
 
@@ -1120,8 +1137,14 @@ class SettingsView(QWidget):
     def _stop_rebuild_ui(self) -> None:
         self._rebuild_stall_timer.stop()
         self._rebuild_button.setEnabled(True)
+        self._rebuild_closing_cleanly = True
         if self._rebuild_progress_dialog is not None:
-            self._rebuild_progress_dialog.close()
+            dialog = self._rebuild_progress_dialog
+            try:
+                dialog.canceled.disconnect(self._on_rebuild_cancel_clicked)
+            except (TypeError, RuntimeError):
+                pass
+            dialog.close()
             self._rebuild_progress_dialog = None
         self._rebuild_worker = None
 
