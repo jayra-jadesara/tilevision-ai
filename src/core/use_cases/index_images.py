@@ -26,6 +26,7 @@ from src.core.use_cases.index_timeout import (
     run_with_timeout,
     stall_abort_message,
 )
+from src.ai.tile_color_detect import resolve_index_color
 from src.core.use_cases.index_work_classify import IndexWorkKind, classify_index_work
 from src.data.repository_interface import IImageRepository, IIndexedFolderRepository
 from src.ai.feature_extractor import FeatureExtractor
@@ -278,7 +279,10 @@ class IndexImagesUseCase:
                 pass
 
         # Parse naming metadata
-        brand, category, color, size, product_code = parse_filename_metadata(resolved_path.stem)
+        brand, category, color, size, product_code = parse_filename_metadata(
+            resolved_path.stem
+        )
+        color, color_source = resolve_index_color(color, resolved_path)
 
         logger.info("Extracting AI features...")
         features, aux_vectors = self._feature_extractor.extract_index_vectors(
@@ -300,6 +304,7 @@ class IndexImagesUseCase:
             brand=brand,
             category=category,
             color=color,
+            color_source=color_source,
             size=size,
             product_code=product_code,
             width=width,
@@ -307,7 +312,7 @@ class IndexImagesUseCase:
             sha256_hash=sha256_hash,
             perceptual_hash=perceptual_hash,
             is_indexed=False,
-            features=features
+            features=features,
         )
         
         # Save record to get the database auto-increment ID
@@ -455,6 +460,7 @@ class IndexImagesUseCase:
                 brand, category, color, size, product_code = parse_filename_metadata(
                     resolved_path.stem
                 )
+                color, color_source = resolve_index_color(color, resolved_path)
 
                 tiles.append(
                     TileImage(
@@ -466,6 +472,7 @@ class IndexImagesUseCase:
                         brand=brand,
                         category=category,
                         color=color,
+                        color_source=color_source,
                         size=size,
                         product_code=product_code,
                         width=width,
@@ -583,6 +590,39 @@ class IndexImagesUseCase:
                 logger.warning("CLIP backfill save skipped: %s", exc)
         return done
 
+    def _metadata_color_backfill_batch(
+        self,
+        items: List[_PendingIndexItem],
+    ) -> int:
+        """Detect colour from pixels for tiles that still have Unknown colour."""
+        if not items:
+            return 0
+        done = 0
+        for item in items:
+            existing = None
+            if item.db_id is not None:
+                existing = next(
+                    (t for t in self._repo.get_by_ids([int(item.db_id)]) if t.id),
+                    None,
+                )
+            if existing is None:
+                existing = self._repo.get_by_path(str(item.path.resolve()))
+            if existing is None or existing.id is None:
+                continue
+            if (getattr(existing, "color_source", "") or "").lower() == "filename":
+                continue
+            _brand, _cat, parsed_color, _size, _code = parse_filename_metadata(
+                item.path.stem
+            )
+            color, source = resolve_index_color(parsed_color, item.path)
+            if color == "Unknown":
+                continue
+            existing.color = color
+            existing.color_source = source
+            self._repo.add(existing)
+            done += 1
+        return done
+
     def scan_and_index_directory(
         self,
         directory_path: Path,
@@ -646,6 +686,7 @@ class IndexImagesUseCase:
         skipped_count = 0
         failed_count = 0
         clip_backfill_count = 0
+        color_backfill_count = 0
         is_completed = True
         cross_run_seen: set = processed_paths if processed_paths is not None else set()
 
@@ -675,6 +716,7 @@ class IndexImagesUseCase:
         paths_seen_on_disk: set = set()
         pending_batch: List[_PendingIndexItem] = []
         pending_clip_batch: List[_PendingIndexItem] = []
+        pending_metadata_batch: List[_PendingIndexItem] = []
 
         # Per-batch wall-clock (seconds per image) for files that re-embed.
         # First flush often includes one-time model warmup (DINOv2/CLIP load).
@@ -937,6 +979,29 @@ class IndexImagesUseCase:
                 logger.error("INDEX STALL ABORT — stopping scan")
                 raise
 
+        def _flush_metadata_batch() -> None:
+            nonlocal color_backfill_count, completed_count, failed_count
+            if not pending_metadata_batch:
+                return
+            items = list(pending_metadata_batch)
+            pending_metadata_batch.clear()
+            _emit_progress(
+                f"Detecting colours for {len(items)} images…",
+                eta=_eta_seconds(completed_count),
+            )
+            try:
+                done = self._metadata_color_backfill_batch(items)
+                color_backfill_count += done
+                completed_count += len(items)
+                for item in items:
+                    cross_run_seen.add(str(item.path.resolve()))
+                last_name = items[-1].path.name if items else "colour"
+                _emit_progress(f"{last_name} (colour metadata)")
+            except Exception as exc:
+                failed_count += len(items)
+                completed_count += len(items)
+                logger.error("Colour metadata batch failed: %s", exc)
+
         def _flush_clip_batch() -> None:
             nonlocal clip_backfill_count, completed_count, failed_count
             if not pending_clip_batch:
@@ -989,6 +1054,7 @@ class IndexImagesUseCase:
                 logger.warning("Indexing worker canceled by user request. Stopping...")
                 _flush_pending_batch()
                 _flush_clip_batch()
+                _flush_metadata_batch()
                 is_completed = False
                 break
 
@@ -1043,6 +1109,21 @@ class IndexImagesUseCase:
                         _flush_clip_batch()
                     continue
 
+                if work is IndexWorkKind.METADATA_ONLY:
+                    pending_metadata_batch.append(
+                        _PendingIndexItem(
+                            path=resolved_path,
+                            was_previously_indexed=was_previously_indexed,
+                            work=IndexWorkKind.METADATA_ONLY.value,
+                            db_id=existing_record.id if existing_record else None,
+                        )
+                    )
+                    if len(pending_metadata_batch) >= _flush_threshold(
+                        pending_metadata_batch
+                    ):
+                        _flush_metadata_batch()
+                    continue
+
                 pending_batch.append(
                     _PendingIndexItem(
                         path=resolved_path,
@@ -1067,6 +1148,7 @@ class IndexImagesUseCase:
         try:
             _flush_pending_batch()
             _flush_clip_batch()
+            _flush_metadata_batch()
         except IndexStallAbort:
             is_completed = False
             raise
@@ -1084,7 +1166,11 @@ class IndexImagesUseCase:
         # Always flush any pending vector additions/removals before
         # returning, whether the scan completed, was cancelled, or hit
         # errors along the way — partial progress must never be lost.
-        if (new_count + modified_count + clip_backfill_count) > 0 or deleted_count > 0:
+        if (
+            (new_count + modified_count + clip_backfill_count + color_backfill_count)
+            > 0
+            or deleted_count > 0
+        ):
             self._index.save_index()
             if self._clip_index is not None:
                 try:
@@ -1093,10 +1179,12 @@ class IndexImagesUseCase:
                     logger.warning("CLIP index save skipped: %s", exc)
             logger.info(
                 "Index directory complete. New: %s, Modified: %s, "
-                "CLIP backfill: %s, Deleted: %s, Skipped: %s, Failed: %s",
+                "CLIP backfill: %s, colours detected: %s, Deleted: %s, "
+                "Skipped: %s, Failed: %s",
                 new_count,
                 modified_count,
                 clip_backfill_count,
+                color_backfill_count,
                 deleted_count,
                 skipped_count,
                 failed_count,
@@ -1134,6 +1222,7 @@ class IndexImagesUseCase:
             skipped_count=skipped_count,
             failed_count=failed_count,
             clip_backfill_count=clip_backfill_count,
+            color_backfill_count=color_backfill_count,
             total_files_scanned=total_files,
             is_completed=is_completed,
             elapsed_seconds=elapsed_total,

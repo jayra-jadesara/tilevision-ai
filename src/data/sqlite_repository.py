@@ -209,6 +209,11 @@ class SQLiteImageRepository(IImageRepository):
             brand=row["brand"],
             category=row["category"],
             color=row["color"],
+            color_source=(
+                row["color_source"]
+                if "color_source" in keys
+                else "unknown"
+            ),
             size=row["size"],
             product_code=row["product_code"],
             width=row["width"],
@@ -254,6 +259,7 @@ class SQLiteImageRepository(IImageRepository):
             brand,
             category,
             color,
+            color_source,
             size,
             product_code,
 
@@ -288,7 +294,7 @@ class SQLiteImageRepository(IImageRepository):
         VALUES (
             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?, ?, ?,
             CURRENT_TIMESTAMP
         )
         ON CONFLICT(file_path) DO UPDATE SET
@@ -299,6 +305,7 @@ class SQLiteImageRepository(IImageRepository):
             brand=excluded.brand,
             category=excluded.category,
             color=excluded.color,
+            color_source=excluded.color_source,
             size=excluded.size,
             product_code=excluded.product_code,
             width=excluded.width,
@@ -393,6 +400,7 @@ class SQLiteImageRepository(IImageRepository):
                         tile.brand,
                         tile.category,
                         tile.color,
+                        getattr(tile, "color_source", None) or "unknown",
                         tile.size,
                         tile.product_code,
 

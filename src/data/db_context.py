@@ -210,6 +210,7 @@ class DatabaseContext:
             "feature_version": "INTEGER DEFAULT 0",
             "pattern_feature_version": "INTEGER DEFAULT 0",
             "file_mtime": "REAL DEFAULT 0",
+            "color_source": "TEXT DEFAULT 'unknown'",
         }
 
         for column, definition in migrations.items():
