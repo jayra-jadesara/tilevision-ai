@@ -1,48 +1,81 @@
 """
-Rebuild index worker module for TileVision AI (Task D: Settings — Rebuild
-FAISS Index).
+Update / rebuild search index worker for TileVision AI.
 
-Runs a forced full re-embed of every previously-indexed folder on a
-background QThread. This is the practical meaning of "rebuild" in this
-architecture: since raw embedding vectors aren't persisted anywhere except
-inside the FAISS index file itself, the only way to truly rebuild it (e.g.
-after the index file was lost/corrupted while SQLite metadata survived) is
-to re-run the embedding model against every known file.
+Default mode is incremental ("Update Search Index"): only stale DINOv2
+features, new/changed files, and missing CLIP description-search vectors
+are processed. Full rebuild (force=True) re-embeds everything.
 """
+
+from __future__ import annotations
 
 import logging
 import threading
-from typing import List
+from dataclasses import dataclass
+from typing import List, Optional
 
 from PySide6.QtCore import QThread, Signal
 
+from src.core.use_cases.index_folder_dedupe import drop_nested_indexed_folders
 from src.core.use_cases.index_images import IndexImagesUseCase
 
 logger = logging.getLogger("tilevision.presentation.workers.rebuild_index_worker")
 
 
+@dataclass(slots=True)
+class RebuildSummary:
+    """Aggregate outcome across all folders in one update/rebuild run."""
+
+    reindexed: int = 0
+    clip_backfill: int = 0
+    skipped: int = 0
+    failed: int = 0
+    folders: int = 0
+    cancelled: bool = False
+    force: bool = False
+
+    def format_message(self) -> str:
+        parts = [
+            f"{self.reindexed} re-indexed",
+            f"{self.clip_backfill} description-search vectors added",
+            f"{self.skipped} already up to date",
+        ]
+        if self.failed:
+            parts.append(f"{self.failed} failed")
+        return ", ".join(parts)
+
+
 class RebuildIndexWorker(QThread):
-    """Background worker that force-reindexes every known folder."""
+    """Background worker that updates or force-rebuilds every known folder."""
 
     # (processed_files, total_files, current_filename, eta_seconds)
     progress_updated = Signal(int, int, str, float)
 
-    # (total_files_reembedded, total_failed)
-    rebuild_finished = Signal(int, int)
+    # RebuildSummary
+    rebuild_finished = Signal(object)
 
     rebuild_failed = Signal(str)
 
-    def __init__(self, use_case: IndexImagesUseCase, folder_paths: List[str]) -> None:
+    def __init__(
+        self,
+        use_case: IndexImagesUseCase,
+        folder_paths: List[str],
+        *,
+        force: bool = False,
+    ) -> None:
         """
         Args:
             use_case: Fully configured IndexImagesUseCase.
-            folder_paths: Every folder to force-reindex (typically every
-                row from IIndexedFolderRepository.get_all_folders()).
+            folder_paths: Every folder listed in IIndexedFolderRepository.
+            force: When True, full re-embed (legacy Rebuild). When False,
+                incremental Update Search Index.
         """
         super().__init__()
         self._use_case = use_case
-        self._folder_paths = folder_paths
+        # Drop nested folders (parent rglob already covers children).
+        self._folder_paths = drop_nested_indexed_folders(folder_paths)
+        self._force = force
         self._cancel_event = threading.Event()
+        self.last_summary: Optional[RebuildSummary] = None
 
     def request_cancel(self) -> None:
         """Ask the scan loop to stop at the next cooperative cancel check."""
@@ -50,8 +83,13 @@ class RebuildIndexWorker(QThread):
         self._cancel_event.set()
 
     def run(self) -> None:
-        total_reembedded = 0
-        total_failed = 0
+        summary = RebuildSummary(
+            folders=len(self._folder_paths),
+            force=self._force,
+        )
+        # Cross-folder guard: even after nested drop, never embed the same
+        # resolved path twice in one run.
+        processed_paths: set[str] = set()
 
         try:
             for folder_path in self._folder_paths:
@@ -73,28 +111,33 @@ class RebuildIndexWorker(QThread):
 
                 result = self._use_case.scan_and_index_directory(
                     folder_path,
-                    force=True,
+                    force=self._force,
                     progress_callback=on_progress,
                     cancel_event=self._cancel_event,
+                    processed_paths=processed_paths,
                 )
-                total_reembedded += result.indexed_count
-                total_failed += result.failed_count
+                summary.reindexed += result.indexed_count
+                summary.clip_backfill += int(result.clip_backfill_count or 0)
+                summary.skipped += result.skipped_count
+                summary.failed += result.failed_count
 
-            if self._cancel_event.is_set():
+            summary.cancelled = self._cancel_event.is_set()
+            self.last_summary = summary
+
+            if summary.cancelled:
                 logger.warning(
-                    "FAISS rebuild cancelled: %s file(s) re-embedded, %s failed.",
-                    total_reembedded,
-                    total_failed,
+                    "Search index update cancelled: %s",
+                    summary.format_message(),
                 )
             else:
+                mode = "full rebuild" if self._force else "update"
                 logger.info(
-                    "FAISS rebuild complete: %s file(s) re-embedded, "
-                    "%s failed, across %s folder(s).",
-                    total_reembedded,
-                    total_failed,
-                    len(self._folder_paths),
+                    "Search index %s complete: %s across %s folder(s).",
+                    mode,
+                    summary.format_message(),
+                    summary.folders,
                 )
-            self.rebuild_finished.emit(total_reembedded, total_failed)
+            self.rebuild_finished.emit(summary)
         except Exception as e:
-            logger.error(f"FAISS rebuild failed: {e}")
+            logger.error(f"Search index update failed: {e}")
             self.rebuild_failed.emit(str(e))

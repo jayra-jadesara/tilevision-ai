@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config.indexing_performance import IndexingPerformanceConfig
 from src.core.models import TileImage
-from src.core.use_cases.index_images import _is_unchanged_indexed_file
+from src.core.use_cases.index_skip import is_unchanged_indexed_file as _is_unchanged_indexed_file
 
 
 def test_adaptive_batch_size_shrinks_for_huge_files():

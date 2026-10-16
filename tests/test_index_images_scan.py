@@ -513,11 +513,11 @@ def test_progress_eta_uses_embed_work_not_skip_dilution(env):
         d, progress_callback=progress_cb, force=True
     )
     assert result.modified_count == 14
-    # After the first flush completes we have a real timing sample → ETA > 0
-    # for remaining work. Early callbacks (scanning / first-batch message)
-    # correctly use eta=-1 and must not be required to be positive.
-    positive = [e for e in etas if e > 0]
-    assert positive, f"expected positive ETA samples during rebuild, got {etas}"
+    # Warm-up batch alone stays at eta=-1 ("estimating…"). After a second
+    # batch, ETA is numeric (>= 0). FakeEmbedder is so fast that remaining
+    # ETA may be ~0.0 rather than >>0 — that is still a real sample.
     assert any(e < 0 for e in etas), (
-        f"expected indeterminate ETA before first batch sample, got {etas}"
+        f"expected indeterminate ETA before post-warmup sample, got {etas}"
     )
+    numeric = [e for e in etas if e >= 0]
+    assert numeric, f"expected numeric ETA after post-warmup batch, got {etas}"

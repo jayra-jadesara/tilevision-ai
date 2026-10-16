@@ -350,6 +350,34 @@ class FaissIndexManager:
         ):
             return int(self._index.ntotal) if self._index is not None else 0
 
+    def known_ids(self) -> set[int]:
+        """
+        Return the set of database IDs currently present in this index.
+
+        Used by incremental Update Search Index to detect missing CLIP
+        vectors without a full re-embed. Empty when the index is unloaded
+        or has no id_map (should not happen for IndexIDMap backends).
+        """
+        if self._index is None:
+            try:
+                self.load_index()
+            except Exception:
+                return set()
+        if self._index is None or faiss is None:
+            return set()
+        with synchronized_inference(
+            timeout=DEFAULT_SEARCH_LOCK_TIMEOUT_S, purpose="FAISS known_ids"
+        ):
+            try:
+                id_map = getattr(self._index, "id_map", None)
+                if id_map is None:
+                    return set()
+                arr = faiss.vector_to_array(id_map)
+                return {int(x) for x in arr.tolist()}
+            except Exception as exc:
+                logger.warning("Could not enumerate FAISS ids: %s", exc)
+                return set()
+
     def search_vectors(
         self,
         query_vector: List[float] | np.ndarray,
