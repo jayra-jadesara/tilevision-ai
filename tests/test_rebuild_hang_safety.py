@@ -30,10 +30,13 @@ def test_run_with_timeout_returns_within_timeout_not_task_duration():
     """
     Regression: ThreadPoolExecutor context manager used shutdown(wait=True),
     so sleep(25) with timeout=5 still blocked 25s. Must return near timeout_s.
+
+    Keep the hung sleep only slightly past timeout so leftover daemon workers
+    do not outlive the rest of the suite (macOS Intel CI abort flake).
     """
 
     def _block():
-        time.sleep(30)
+        time.sleep(2.5)
 
     t0 = time.perf_counter()
     with pytest.raises(IndexFileTimeoutError):
@@ -81,7 +84,9 @@ def test_scan_aborts_promptly_on_hung_file(tmp_path, monkeypatch):
         batch_calls.append([i.path.name for i in items])
         for item in items:
             if item.path.name == "hang.png":
-                time.sleep(30)
+                # Past the 1s×N batch timeout, but short enough that the
+                # daemon worker exits before later tests (Intel CI abort).
+                time.sleep(4.0)
         return original(items, persist=persist)
 
     monkeypatch.setattr(uc, "_index_file_batch", flaky_batch)
