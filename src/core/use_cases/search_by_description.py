@@ -20,6 +20,7 @@ from src.core.use_cases.clip_text_query import (
     apply_relevance_cutoff,
     average_l2_normalized,
     description_prompt_variants,
+    score_distribution_stats,
 )
 from src.data.repository_interface import IImageRepository
 from src.utils.image_utils import get_thumbnail_path
@@ -50,7 +51,12 @@ class SearchByDescriptionUseCase:
         variants = description_prompt_variants(query_text)
         if not variants:
             raise ValueError("Enter a short description to search.")
-        vectors = [self._clip.embed_text(v) for v in variants]
+        # One batched get_text_features for all templates (not N sequential).
+        embed_texts = getattr(self._clip, "embed_texts", None)
+        if callable(embed_texts):
+            vectors = list(embed_texts(variants))
+        else:
+            vectors = [self._clip.embed_text(v) for v in variants]
         return average_l2_normalized(vectors)
 
     def execute(
@@ -128,6 +134,24 @@ class SearchByDescriptionUseCase:
                 best[tid_i] = sc
 
         scored_pairs: List[Tuple[int, float]] = list(best.items())
+        raw_scores = [sc for _, sc in scored_pairs]
+        stats = score_distribution_stats(raw_scores)
+        n_templates = len(description_prompt_variants(text))
+        logger.info(
+            "description_search_scores query=%r templates=%d top10=%s "
+            "min=%s max=%s median=%s spread=%s above_floor=%s "
+            "within_margin=%s margin=%s",
+            text,
+            n_templates,
+            stats["top10"],
+            stats["min"],
+            stats["max"],
+            stats["median"],
+            stats["spread"],
+            stats["above_floor"],
+            stats["within_margin"],
+            stats["margin"],
+        )
         kept, used_fallback, before_cutoff = apply_relevance_cutoff(
             scored_pairs, top_k=max(top_k * 3, top_k)
         )

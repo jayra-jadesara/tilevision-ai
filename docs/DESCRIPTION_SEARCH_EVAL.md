@@ -1,11 +1,25 @@
-# Description search eval (PR C Item 4)
+# Description search eval
 
-## Changes
+## Changes (cutoff tune)
 
-1. **Prompt-template ensembling** — average of raw text + tile-oriented templates.
-2. **Relevance cutoff** — absolute CLIP cosine floor (`0.24`) and margin from top (`0.10`); always keep ≥3 results (low-confidence banner when falling back).
-3. Log / status use the description text (`Search for 'gray'…`, `Showing N of M tiles that match 'gray'`).
+1. **Prompt-template ensembling** — average of raw text + tile-oriented templates,
+   embedded in **one batched** `get_text_features` call (not four sequential).
+2. **Distribution-aware relevance cutoff** — absolute CLIP cosine floor (`0.24`)
+   plus adaptive margin `max(0.02, 0.35 × (top − median))` instead of a fixed
+   `0.10` top-margin. Always keep ≥3 results (low-confidence banner when falling
+   back).
+3. **Score logging** — each description search emits an INFO line with query,
+   template count, raw top-10 cosines, min/max/median/spread, and counts above
+   floor / within margin so constants can be retuned from real logs.
 4. CLIP display calibration anchors **unchanged**.
+
+### Why adaptive margin
+
+Real CLIP image–text cosines on a small catalogue cluster in a narrow band
+(~0.18–0.30). A fixed `0.10` margin is often larger than the whole catalogue
+spread, so `matched_pre_cutoff ≈ catalogue` (observed: every query reported
+38/38 pre-cutoff). Scaling the margin to a fraction of `(top − median)` tracks
+that band; the `0.02` floor avoids over-pruning when top ≈ median.
 
 ## Objective colour-word ground truth
 
@@ -27,10 +41,10 @@ python3 dev_tools/eval_description_colour_words.py --catalogue /path/to/Tiles
 | brown | UNVERIFIED | UNVERIFIED | UNVERIFIED | UNVERIFIED |
 
 This CI environment does not have the customer’s 38-tile files or a warmed
-CLIP index. Thresholds (`CLIP_ABS_FLOOR`, `CLIP_TOP_MARGIN`) were chosen from
-CLIP literature / log shape (25/38 unfiltered hits) **before** filling any
-precision cells above — do not retune on the same reported words without
-saying so.
+CLIP index. Thresholds were chosen from the logged score-band shape (narrow
+~0.18–0.30, fixed 0.10 margin keeping ~all) and synthetic unit tests that
+mimic that spread — **not** from a live precision@5 table on the colour words
+above. Do not retune on the same reported words without saying so.
 
 ## Full-frame CLIP vectors
 

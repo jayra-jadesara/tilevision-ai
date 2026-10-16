@@ -47,6 +47,15 @@ class FakeClip:
         self.embed_calls.append(text)
         return self._vec.copy()
 
+    def embed_texts(self, texts):
+        # One call path for batched template ensembling.
+        self.embed_batch_calls = getattr(self, "embed_batch_calls", 0) + 1
+        out = []
+        for t in texts:
+            self.embed_calls.append(t)
+            out.append(self._vec.copy())
+        return out
+
 
 class FakeClipIndex:
     def __init__(self, ids=None, scores=None, total=None):

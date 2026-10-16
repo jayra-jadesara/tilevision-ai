@@ -199,21 +199,29 @@ class ClipEmbedder:
 
     def embed_text(self, text: str) -> np.ndarray:
         """Return L2-normalized 512D text embedding."""
-        cleaned = (text or "").strip()
-        if not cleaned:
+        return self.embed_texts([text])[0]
+
+    def embed_texts(self, texts: list[str] | tuple[str, ...]) -> list[np.ndarray]:
+        """
+        Return L2-normalized 512D embeddings for each text in one batched
+        ``get_text_features`` call (avoids N sequential forward passes for
+        prompt-template ensembling).
+        """
+        cleaned = [(t or "").strip() for t in texts]
+        if not cleaned or any(not c for c in cleaned):
             raise ValueError("Description text is empty.")
         self.ensure_loaded()
         import torch
 
         with synchronized_inference(timeout=120.0, purpose="CLIP text"):
             inputs = self._processor(
-                text=[cleaned], return_tensors="pt", padding=True, truncation=True
+                text=cleaned, return_tensors="pt", padding=True, truncation=True
             )
             inputs = {k: v.to(self._device) for k, v in inputs.items()}
             with torch.no_grad():
                 feats = self._model.get_text_features(**inputs)
-            vec = feats[0].detach().float().cpu().numpy().astype(np.float32)
-        return self._l2_normalize(vec)
+            arr = feats.detach().float().cpu().numpy().astype(np.float32)
+        return [self._l2_normalize(arr[i]) for i in range(arr.shape[0])]
 
     def embed_image(self, image_path: str | Path) -> np.ndarray:
         """Return L2-normalized 512D image embedding (single full view)."""
