@@ -19,6 +19,7 @@ from src.presentation.views.search_view import (
     _ACTIONS_COL,
     _PATH_COL,
     _ACTIONS_COL_WIDTH,
+    _ACTIONS_COL_WIDTH_WITH_WHY,
     _ResultPreviewPanel,
     _TABLE_COLUMNS,
 )
@@ -78,15 +79,53 @@ def test_path_column_is_plain_text_no_cell_widget(search_view):
     assert item.text() == path
 
 
-def test_actions_column_has_preview_why_copy_reveal(search_view):
+def test_actions_column_hides_why_without_orb(search_view):
     cell = search_view._results_table.cellWidget(0, _ACTIONS_COL)
     assert isinstance(cell, _ResultActionsWidget)
     assert cell._preview_btn.toolTip() == "Preview tile"
     assert cell._copy_btn.toolTip() == "Copy path"
     assert cell._reveal_btn.toolTip()  # platform-specific reveal label
-    assert hasattr(cell, "_why_btn")
-    assert cell._why_btn.isEnabled() is False
-    assert "No ORB match data" in cell._why_btn.toolTip()
+    # Why is not rendered at all when ORB data is absent.
+    assert cell._why_btn is None
+    assert search_view._results_table.columnWidth(_ACTIONS_COL) == _ACTIONS_COL_WIDTH
+
+
+def test_actions_column_shows_why_when_orb_present(qapp, tmp_path):
+    use_case = MagicMock()
+    use_case.execute.return_value = []
+    vm = SearchViewModel(use_case=use_case, default_top_k=5)
+    vm._active_search_kind = "image"
+    view = SearchView(vm, theme="light")
+    img = tmp_path / "q.jpg"
+    img.write_bytes(b"x")
+    result = _tile(str(img))
+    result.orb_match_points = [((1.0, 2.0), (3.0, 4.0))]
+    view._populate_table([result])
+    cell = view._results_table.cellWidget(0, _ACTIONS_COL)
+    assert isinstance(cell, _ResultActionsWidget)
+    assert cell._why_btn is not None
+    assert cell._why_btn.isEnabled()
+    assert view._results_table.columnWidth(_ACTIONS_COL) == _ACTIONS_COL_WIDTH_WITH_WHY
+    view.close()
+    view.deleteLater()
+
+
+def test_description_search_never_shows_why(qapp, tmp_path):
+    use_case = MagicMock()
+    use_case.execute.return_value = []
+    vm = SearchViewModel(use_case=use_case, default_top_k=5)
+    vm._active_search_kind = "description"
+    view = SearchView(vm, theme="light")
+    img = tmp_path / "t.jpg"
+    img.write_bytes(b"x")
+    result = _tile(str(img))
+    result.orb_match_points = [((1.0, 2.0), (3.0, 4.0))]
+    view._populate_table([result])
+    cell = view._results_table.cellWidget(0, _ACTIONS_COL)
+    assert isinstance(cell, _ResultActionsWidget)
+    assert cell._why_btn is None
+    view.close()
+    view.deleteLater()
 
 
 def test_copy_shows_floating_toast_not_status_bar(search_view, qapp):

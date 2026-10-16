@@ -106,6 +106,11 @@ class SearchResult:
     orb_match_points: Optional[
         list[tuple[tuple[float, float], tuple[float, float]]]
     ] = None
+    # All catalogue paths that share this content (primary first). Empty or
+    # single-element when the tile has no known copies.
+    copy_paths: Optional[list[str]] = None
+    # len(copy_paths) - 1 when copies exist; drives the "+N copies" badge.
+    extra_copy_count: int = 0
 
 
 @dataclass
