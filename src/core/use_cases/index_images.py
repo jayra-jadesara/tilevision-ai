@@ -6,6 +6,7 @@ thumbnails, generating embeddings via the AI model, and indexing into the FAISS 
 Supports incremental indexing, perceptual hashing, SHA-256 matching, and cooperative thread execution.
 """
 
+import copy
 import logging
 import re
 import threading
@@ -150,6 +151,20 @@ def _max_file_bytes(items: List[_PendingIndexItem]) -> int:
     return max(item.path.stat().st_size for item in items)
 
 
+def _index_content_key(sha256_hash: str, item_index: int) -> str:
+    """Stable dedupe key for byte-identical catalogue files in one batch."""
+    return sha256_hash if sha256_hash else f"__unique:{item_index}"
+
+
+def _clone_index_vectors(features, aux: List) -> Tuple:
+    """Copy vectors so duplicate paths do not share mutable numpy buffers."""
+    import numpy as np
+
+    cloned_features = copy.deepcopy(features)
+    cloned_aux = [np.asarray(vec, dtype=np.float32).copy() for vec in aux]
+    return cloned_features, cloned_aux
+
+
 class IndexImagesUseCase:
     """
     Use case to index single image files or whole directories recursively.
@@ -197,10 +212,10 @@ class IndexImagesUseCase:
         # Ensure thumbnail directory exists
         self._thumbnail_dir.mkdir(parents=True, exist_ok=True)
 
-    def _index_clip_vector(self, db_id: int, image_path: Path, *, persist: bool) -> None:
-        """Best-effort second embedding for description search (never fails DINOv2)."""
+    def _embed_clip_vector(self, image_path: Path) -> Optional[List[float]]:
+        """Return a CLIP vector for ``image_path``, or None when CLIP is unavailable."""
         if self._clip_embedder is None or self._clip_index is None:
-            return
+            return None
         # Skip quietly when CLIP is not on disk yet and has never been loaded —
         # customers who never use description search must not pay a Hub download
         # during every catalogue index.
@@ -213,11 +228,25 @@ class IndexImagesUseCase:
         except Exception:
             ready = bool(getattr(self._clip_embedder, "is_loaded", False))
         if not ready:
-            return
+            return None
         try:
             if getattr(self._clip_index, "_index", None) is None:
                 self._clip_index.load_index()
-            vec = self._clip_embedder.embed_image(image_path)
+            return self._clip_embedder.embed_image(image_path)
+        except Exception as exc:
+            logger.warning(
+                "CLIP embed skipped for %s: %s",
+                image_path.name,
+                exc,
+            )
+            return None
+
+    def _index_clip_vector(self, db_id: int, image_path: Path, *, persist: bool) -> None:
+        """Best-effort second embedding for description search (never fails DINOv2)."""
+        vec = self._embed_clip_vector(image_path)
+        if vec is None or self._clip_index is None:
+            return
+        try:
             self._clip_index.update_vectors([db_id], [vec], persist=persist)
         except Exception as exc:
             logger.warning(
@@ -476,30 +505,58 @@ class IndexImagesUseCase:
                     )
                 )
 
-        features_list = []
+        features_list: List = []
         aux_by_index: List[List] = []
+
+        rep_paths: List[str] = []
+        rep_keys_order: List[str] = []
+        seen_content_keys: set = set()
+        first_row_for_key: dict = {}
+        for i, (item, tile) in enumerate(zip(items, tiles)):
+            key = _index_content_key(tile.sha256_hash, i)
+            if key not in seen_content_keys:
+                seen_content_keys.add(key)
+                rep_keys_order.append(key)
+                rep_paths.append(str(item.path))
+            if key not in first_row_for_key:
+                first_row_for_key[key] = i
+
+        reused_identical = len(items) - len(rep_paths)
 
         with timer.measure("feature_extract"):
             batch_fn = getattr(
                 self._feature_extractor, "extract_index_vectors_batch", None
             )
-            if batch_fn is not None and len(items) > 1:
-                extracted = batch_fn([str(item.path) for item in items])
+            if batch_fn is not None and len(rep_paths) > 1:
+                extracted_reps = batch_fn(rep_paths)
             else:
-                extracted = [
-                    self._feature_extractor.extract_index_vectors(str(item.path))
-                    for item in items
+                extracted_reps = [
+                    self._feature_extractor.extract_index_vectors(path)
+                    for path in rep_paths
                 ]
-            for features, aux in extracted:
+            extracted_by_key = {
+                key: pair for key, pair in zip(rep_keys_order, extracted_reps)
+            }
+            for i, tile in enumerate(tiles):
+                key = _index_content_key(tile.sha256_hash, i)
+                features, aux = extracted_by_key[key]
+                if i != first_row_for_key[key]:
+                    features, aux = _clone_index_vectors(features, aux)
                 features_list.append(features)
                 aux_by_index.append(aux)
 
+        if reused_identical > 0:
+            logger.info(
+                "reused embeddings for %d identical files",
+                reused_identical,
+            )
+
         timings = self._feature_extractor.last_timings
-        batch_size = len(items)
+        embed_count = len(rep_paths)
         # last_timings are already per-file averages from the batch helper.
-        timer.timings.record("preprocessing", timings.preprocessing * batch_size)
-        timer.timings.record("dinov2", timings.dinov2 * batch_size)
-        timer.timings.record("descriptors", timings.descriptors * batch_size)
+        timer.timings.record("preprocessing", timings.preprocessing * embed_count)
+        timer.timings.record("dinov2", timings.dinov2 * embed_count)
+        timer.timings.record("descriptors", timings.descriptors * embed_count)
 
         db_ids: List[int] = []
         faiss_ids: List[int] = []
@@ -530,8 +587,26 @@ class IndexImagesUseCase:
             # Add all CLIP vectors first; persist once per batch (not per tile).
             # Per-tile save rewrote tiles_clip.index + sidecar N times per batch
             # (real Windows log: 12 full rewrites in ~2s for one batch of 12).
-            for db_id, item in zip(db_ids, items):
-                self._index_clip_vector(db_id, item.path, persist=False)
+            clip_by_content: dict = {}
+            for db_id, item, tile in zip(db_ids, items, tiles):
+                clip_key = (
+                    tile.sha256_hash if tile.sha256_hash else f"__id:{db_id}"
+                )
+                cached = clip_by_content.get(clip_key)
+                if cached is not None:
+                    if self._clip_index is not None:
+                        self._clip_index.update_vectors(
+                            [db_id], [cached], persist=False
+                        )
+                    continue
+                vec = self._embed_clip_vector(item.path)
+                if vec is None:
+                    continue
+                clip_by_content[clip_key] = vec
+                if self._clip_index is not None:
+                    self._clip_index.update_vectors(
+                        [db_id], [vec], persist=False
+                    )
             if persist and self._clip_index is not None:
                 try:
                     self._clip_index.save_index()
