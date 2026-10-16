@@ -8,36 +8,43 @@ HOW TO CHECK (10 seconds)
 1. Click Apple menu (top-left) → About This Mac
 
 2. If you see "Chip: Apple M1, M2, M3, or M4"
-   → Use:  TileVisionAI-macOS-AppleSilicon.dmg
+   → Use:  TileVision-AI-AppleSilicon.dmg
 
 3. If you see "Processor: Intel Core i5, i7, i9..."
-   → Use:  TileVisionAI-macOS-Intel.dmg
+   → Use:  TileVision-AI-Intel.dmg
 
    (Intel iMac, Intel MacBook Pro/Air 2020 and earlier)
+
+There is NO Universal2 single DMG. Intel and Apple Silicon use different
+PyTorch builds and must ship as separate packages.
 
 
 INSTALL STEPS
 -------------
 1. Double-click the correct .dmg file above
-2. Drag "TileVision AI" to Applications
-3. First time only: Right-click the app → Open → Open
+2. Drag "TileVision AI" onto the Applications shortcut
+3. First time only (Unsigned build):
+      Right-click the app → Open → Open
 4. Copy your Machine ID and send to your vendor
 5. Paste the license key they send you
 
 
-UPDATES (IMPORTANT — SPEED)
----------------------------
-Do NOT download new versions from the GitHub website in Chrome/Safari.
-Those browser downloads are often very slow (KB/s, hours).
+WHAT IS INCLUDED
+----------------
+The app is fully self-contained (no Python install needed):
+  PySide6, DINOv2, SAM2 ONNX, FAISS, SQLite, OpenCV, Pillow,
+  ReportLab, ONNX Runtime, icons, and model weights.
 
-Instead, open TileVision AI → Settings → Check for Updates.
-The app downloads with many parallel connections and shows time remaining.
+
+UPDATES
+-------
+Prefer: TileVision AI → Settings → Check for Updates
+(parallel download, progress, resume).
 
 
 NOT SURE?
 ---------
 Send your vendor a screenshot of About This Mac.
-They will tell you which file to use.
 
 
 Support: your TileVision vendor contact
