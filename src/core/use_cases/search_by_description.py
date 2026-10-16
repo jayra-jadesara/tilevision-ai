@@ -8,12 +8,19 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
+
+import numpy as np
 
 from src.ai.clip_embedder import ClipEmbedder
 from src.ai.similarity_score import calibrate_clip_display_percent
 from src.ai.vector_index import FaissIndexManager
 from src.core.models import SearchResult
+from src.core.use_cases.clip_text_query import (
+    apply_relevance_cutoff,
+    average_l2_normalized,
+    description_prompt_variants,
+)
 from src.data.repository_interface import IImageRepository
 from src.utils.image_utils import get_thumbnail_path
 from src.utils.search_stages import log_search_stage
@@ -35,6 +42,16 @@ class SearchByDescriptionUseCase:
         self._clip = clip_embedder
         self._index = clip_index
         self._thumbnail_dir = Path(thumbnail_dir)
+        # Last-run meta for UI ("Showing N of M…") / low-confidence banner.
+        self.last_result_meta: Dict[str, object] = {}
+
+    def embed_text_ensemble(self, query_text: str) -> np.ndarray:
+        """Average L2-normalized embeddings across prompt templates."""
+        variants = description_prompt_variants(query_text)
+        if not variants:
+            raise ValueError("Enter a short description to search.")
+        vectors = [self._clip.embed_text(v) for v in variants]
+        return average_l2_normalized(vectors)
 
     def execute(
         self,
@@ -48,15 +65,13 @@ class SearchByDescriptionUseCase:
             raise ValueError("Enter a short description to search.")
 
         top_k = max(1, int(top_k))
+        self.last_result_meta = {"query": text}
 
         def stage(name: str, detail: str = "") -> None:
             log_search_stage(logger, name, detail=detail, on_stage=on_stage)
 
         stage("text_search_start", text[:80])
 
-        # First-use CLIP download can take minutes on a normal connection —
-        # report progress so the UI stall watchdog keeps seeing heartbeats
-        # (via SearchViewModel._on_search_progress / search_heartbeat).
         needs_download = False
         try:
             from src.ai.clip_model_paths import clip_model_available_locally
@@ -91,29 +106,34 @@ class SearchByDescriptionUseCase:
                 "CLIP embedding, then try again."
             )
 
-        stage("text_embedding")
-        query_vec = self._clip.embed_text(text)
+        stage("text_embedding", "prompt_ensemble")
+        query_vec = self.embed_text_ensemble(text)
 
+        # Oversample so cutoff still has room after filters.
         search_k = min(max(top_k * 5, top_k), total)
         stage("clip_faiss_search", f"k={search_k}")
         matching_ids, scores = self._index.search_vectors(query_vec, search_k)
         if not matching_ids:
+            self.last_result_meta.update(
+                {"shown": 0, "matched": 0, "catalogue": total, "low_confidence": False}
+            )
             return []
 
-        # Collapse duplicate ids (best score) — CLIP index stores one vector per tile.
         best: dict[int, float] = {}
-        order: list[int] = []
         for tid, score in zip(matching_ids, scores):
             tid_i = int(tid)
             sc = float(score)
-            if tid_i not in best:
-                order.append(tid_i)
+            prev = best.get(tid_i)
+            if prev is None or sc > prev:
                 best[tid_i] = sc
-            elif sc > best[tid_i]:
-                best[tid_i] = sc
-        order.sort(key=lambda i: best[i], reverse=True)
 
-        tiles = self._repo.get_by_ids(order[: max(top_k * 3, top_k)])
+        scored_pairs: List[Tuple[int, float]] = list(best.items())
+        kept, used_fallback, before_cutoff = apply_relevance_cutoff(
+            scored_pairs, top_k=max(top_k * 3, top_k)
+        )
+        order = [tid for tid, _ in kept]
+
+        tiles = self._repo.get_by_ids(order)
         tile_map = {t.id: t for t in tiles if t.id is not None}
 
         results: List[SearchResult] = []
@@ -129,8 +149,6 @@ class SearchByDescriptionUseCase:
                 ):
                     continue
             thumb = get_thumbnail_path(Path(tile.file_path), self._thumbnail_dir)
-            # CLIP IP scores are cosine after L2 norm — use CLIP calibration,
-            # not the DINOv2 hybrid curve (which maps ~0.27 → ~18%).
             display = calibrate_clip_display_percent(
                 max(0.0, min(1.0, best[tid])),
             )
@@ -144,5 +162,44 @@ class SearchByDescriptionUseCase:
             if len(results) >= top_k:
                 break
 
-        stage("text_results_ready", f"{len(results)}")
+        # If filters emptied a fallback set, re-fill from unfiltered cutoff.
+        if not results and used_fallback:
+            for tid, _sc in kept[:3]:
+                tile = tile_map.get(tid) or next(
+                    (t for t in self._repo.get_by_ids([tid]) if t.id == tid),
+                    None,
+                )
+                if tile is None:
+                    continue
+                thumb = get_thumbnail_path(Path(tile.file_path), self._thumbnail_dir)
+                display = calibrate_clip_display_percent(
+                    max(0.0, min(1.0, best[tid])),
+                )
+                results.append(
+                    SearchResult(
+                        tile=tile,
+                        similarity_score=display,
+                        thumbnail_path=str(thumb),
+                    )
+                )
+
+        shown = len(results)
+        self.last_result_meta.update(
+            {
+                "shown": shown,
+                "matched": before_cutoff,
+                "catalogue": total,
+                "low_confidence": used_fallback,
+                "status": (
+                    f"Showing {shown} of {total} tiles that match '{text}'"
+                    if shown < total
+                    else f"Showing {shown} tiles that match '{text}'"
+                ),
+            }
+        )
+        stage(
+            "text_results_ready",
+            f"{shown} (matched_pre_cutoff={before_cutoff} catalogue={total} "
+            f"query={text!r} low_confidence={used_fallback})",
+        )
         return results

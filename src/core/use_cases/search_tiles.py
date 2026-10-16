@@ -184,6 +184,8 @@ class SearchTilesUseCase:
         self,
         embeddings: list,
         search_k: int,
+        *,
+        photo_view_counts: Optional[List[int]] = None,
     ) -> tuple[List[int], dict[int, float], dict[int, int]]:
         """
         Run FAISS for each query crop and merge across views.
@@ -193,6 +195,10 @@ class SearchTilesUseCase:
         Reciprocal Rank Fusion across views while still returning MAX cosine
         per tile for aux-boost / logging. Search-time only — does not change
         indexed vectors or ``CURRENT_FEATURE_VERSION``.
+
+        When ``photo_view_counts`` is set (multi-photo search), views are
+        grouped per photo: MAX within a photo, then mean + coverage bonus
+        across photos so tiles matching more than one photo rank higher.
         """
         if not embeddings:
             return [], {}, {}
@@ -218,6 +224,43 @@ class SearchTilesUseCase:
         for emb in embeddings:
             ids, scores = self._index.search_vectors(emb, search_k)
             per_view.append((list(ids), list(scores)))
+
+        if photo_view_counts and len(photo_view_counts) >= 2:
+            from src.ai.search_quality.multi_photo_fusion import (
+                collapse_view_lists_to_photo_best,
+                fuse_multi_photo_scores,
+            )
+
+            per_photo = collapse_view_lists_to_photo_best(
+                per_view, photo_view_counts
+            )
+            ordered, fused = fuse_multi_photo_scores(per_photo)
+            # best_view: first photo that contributed the tile (for logging).
+            best_view: dict[int, int] = {}
+            for photo_idx, best in enumerate(per_photo):
+                for tid in best:
+                    best_view.setdefault(int(tid), photo_idx)
+            # Preserve MAX cosine across all views for aux-boost banding.
+            best_cosine: dict[int, float] = {}
+            for ids, scores in per_view:
+                for tid, sc in zip(ids, scores):
+                    tid_i = int(tid)
+                    sc_f = float(sc)
+                    prev = best_cosine.get(tid_i)
+                    if prev is None or sc_f > prev:
+                        best_cosine[tid_i] = sc_f
+            # Use fused scores for ranking; keep best_cosine for display path.
+            logger.info(
+                "Multi-photo FAISS merge: method=mean_coverage photos=%d "
+                "views=%d unique_ids=%d",
+                len(photo_view_counts),
+                len(embeddings),
+                len(ordered),
+            )
+            # Return fused values as the ranking scores via best_cosine override
+            # for the ordered list — callers use best_cosine[tid] for ranking
+            # when walking matching_ids.
+            return ordered, fused, best_view
 
         merged = merge_multi_view_faiss(per_view, method, rrf_k=rrf_k)
         logger.info(
@@ -417,12 +460,12 @@ class SearchTilesUseCase:
         on_stage: Optional[Callable[[str], None]] = None,
     ) -> List[SearchResult]:
         """
-        Search using 2–3 separate photos as FAISS views (opt-in multi-photo).
+        Search using 2–3 separate photos with the same extraction as single-photo.
 
-        Each photo is embedded with the same single-view query path used for
-        speed on CPU machines (``for_query=True``). Results are fused via the
-        existing ``merge_multi_view_faiss`` path — the default single-photo
-        ``execute()`` path is untouched.
+        Each photo goes through ``extract_for_search`` (tile isolation, adaptive
+        kind, multi-scale views). Views are grouped per photo: MAX within a
+        photo, then mean + coverage bonus across photos so tiles supported by
+        more than one photo rank above one-photo-only matches.
         """
         paths = [Path(p) for p in query_image_paths]
         if len(paths) < 2:
@@ -441,23 +484,48 @@ class SearchTilesUseCase:
             self._feature_extractor.load_model()
 
         embeddings: List[np.ndarray] = []
+        photo_view_counts: List[int] = []
         primary_features: Optional[TileFeatures] = None
+        extract_for_search = getattr(
+            self._feature_extractor, "extract_for_search", None
+        )
         for path in paths:
             stage(STAGE_EMBEDDING_GENERATED, f"multi_photo:{path.name}")
-            features = self._feature_extractor.extract(str(path), for_query=True)
-            if features is None or features.embedding is None:
+            if extract_for_search is not None:
+                # Same extract path as single-photo drop search (adaptive kind /
+                # multi-crop when the analyzer says so). Do not pass a special
+                # origin that would force the crop-tool shortcut.
+                features, views = extract_for_search(str(path))
+                view_list = [
+                    np.asarray(v, dtype=np.float32) for v in (views or [])
+                ]
+                if not view_list and features is not None:
+                    view_list = [np.asarray(features.embedding, dtype=np.float32)]
+            else:
+                features = self._feature_extractor.extract(
+                    str(path), for_query=True
+                )
+                view_list = (
+                    [np.asarray(features.embedding, dtype=np.float32)]
+                    if features is not None
+                    else []
+                )
+            if features is None or not view_list:
                 raise RuntimeError(
                     f"DINOv2 embedding generation failed for query image: {path.name}"
                 )
-            embeddings.append(np.asarray(features.embedding, dtype=np.float32))
+            embeddings.extend(view_list)
+            photo_view_counts.append(len(view_list))
             if primary_features is None:
                 primary_features = features
 
         assert primary_features is not None
         logger.info(
-            "Multi-photo search: %d photos → %d single-view embeddings (fused as FAISS views)",
+            "Multi-photo search: %d photos → %d views (per-photo %s; "
+            "fuse=mean_coverage)",
             len(paths),
             len(embeddings),
+            photo_view_counts,
         )
         return self.execute(
             str(paths[0]),
@@ -467,6 +535,7 @@ class SearchTilesUseCase:
             query_origin="multi_photo",
             query_features_override=primary_features,
             query_embeddings_override=embeddings,
+            multi_photo_view_counts=photo_view_counts,
         )
 
     def execute(
@@ -478,6 +547,7 @@ class SearchTilesUseCase:
         query_origin: str | None = None,
         query_features_override: Optional[TileFeatures] = None,
         query_embeddings_override: Optional[List[np.ndarray]] = None,
+        multi_photo_view_counts: Optional[List[int]] = None,
     ) -> List[SearchResult]:
         """
         Execute visual similarity search for a query tile image.
@@ -683,6 +753,7 @@ class SearchTilesUseCase:
                         self._search_faiss_multi_crop(
                             query_embeddings or [query_features.embedding],
                             search_k,
+                            photo_view_counts=multi_photo_view_counts,
                         )
                     )
 
