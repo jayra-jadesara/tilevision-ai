@@ -7,7 +7,7 @@ Lets the user configure:
   - Language (placeholder — English only for now).
   - Backup Database (uses the database path internally; not shown to the
     user — an absolute file path invites accidental navigation/deletion).
-  - Rebuild Search Index (force re-embed everything).
+  - Update Search Index (incremental) and Full rebuild (re-embed everything).
   - Clear thumbnail Cache.
   - Export Logs.
 """
@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QLineEdit,
     QCheckBox,
+    QDialogButtonBox,
 )
 
 from src.ai.feature_versions import CURRENT_FEATURE_VERSION, FeatureVersionStatus
@@ -47,7 +48,11 @@ from src.config.settings import AppSettings
 from src.core.use_cases.index_images import IndexImagesUseCase
 from src.core.use_cases.monitor_folder import is_watchdog_available
 from src.licensing.hardware import get_machine_fingerprint
-from src.presentation.workers.rebuild_index_worker import RebuildIndexWorker
+from src.presentation.workers.rebuild_index_worker import (
+    RebuildIndexWorker,
+    RebuildSummary,
+)
+from src.utils.duration_format import format_eta_seconds
 from src.utils.logger import get_log_file_path
 from src.presentation.views.catalogue_profiles_panel import CatalogueProfilesPanel
 from src.theme.theme_manager import (
@@ -658,10 +663,12 @@ class SettingsView(QWidget):
         layout = QVBoxLayout(box)
 
         note = QLabel(
-            "Rebuild Search Index re-analyzes every tile after a software update. "
-            "Clear Cache removes thumbnails only (they regenerate automatically). "
-            "Backup Database, Export Logs, and Export Diagnostics are optional "
-            "support tools — use them before major changes or when contacting support."
+            "Update Search Index only re-analyzes tiles that are new, changed, "
+            "or missing description-search vectors — use this for day-to-day "
+            "maintenance. Full rebuild re-embeds everything and can take hours "
+            "on large catalogues. Clear Cache removes thumbnails only "
+            "(they regenerate automatically). Backup Database, Export Logs, "
+            "and Export Diagnostics are optional support tools."
         )
         note.setObjectName("SectionNote")
         note.setWordWrap(True)
@@ -679,12 +686,20 @@ class SettingsView(QWidget):
         self._export_logs_button.setObjectName("SecondaryButton")
         self._export_logs_button.clicked.connect(self._on_export_logs)
 
-        self._rebuild_button = QPushButton("Rebuild Search Index")
-        self._rebuild_button.setObjectName("SecondaryButton")
-        self._rebuild_button.clicked.connect(self._on_rebuild_faiss)
-        self._rebuild_button.setEnabled(
-            self._indexing_use_case is not None and self._indexed_folders_provider is not None
+        indexing_enabled = (
+            self._indexing_use_case is not None
+            and self._indexed_folders_provider is not None
         )
+
+        self._rebuild_button = QPushButton("Update Search Index")
+        self._rebuild_button.setObjectName("SecondaryButton")
+        self._rebuild_button.clicked.connect(self._on_update_search_index)
+        self._rebuild_button.setEnabled(indexing_enabled)
+
+        self._full_rebuild_button = QPushButton("Full rebuild (re-embed everything)")
+        self._full_rebuild_button.setObjectName("SecondaryButton")
+        self._full_rebuild_button.clicked.connect(self._on_full_rebuild_faiss)
+        self._full_rebuild_button.setEnabled(indexing_enabled)
 
         self._clear_cache_button = QPushButton("Clear Cache")
         self._clear_cache_button.setObjectName("SecondaryButton")
@@ -694,20 +709,37 @@ class SettingsView(QWidget):
         self._export_diagnostics_button.setObjectName("SecondaryButton")
         self._export_diagnostics_button.clicked.connect(self._on_export_diagnostics)
 
+        self._rebuild_bg_status = QLabel("")
+        self._rebuild_bg_status.setObjectName("SectionNote")
+        self._rebuild_bg_status.setWordWrap(True)
+        self._rebuild_bg_status.hide()
+        self._rebuild_show_dialog_button = QPushButton("Show progress")
+        self._rebuild_show_dialog_button.setObjectName("SecondaryButton")
+        self._rebuild_show_dialog_button.clicked.connect(self._on_rebuild_show_dialog)
+        self._rebuild_show_dialog_button.hide()
+        self._rebuild_bg_cancel_button = QPushButton("Cancel update")
+        self._rebuild_bg_cancel_button.setObjectName("SecondaryButton")
+        self._rebuild_bg_cancel_button.clicked.connect(self._on_rebuild_cancel_clicked)
+        self._rebuild_bg_cancel_button.hide()
+
         for button in (
             self._backup_button,
             self._export_logs_button,
             self._rebuild_button,
+            self._full_rebuild_button,
             self._clear_cache_button,
             self._export_diagnostics_button,
+            self._rebuild_show_dialog_button,
+            self._rebuild_bg_cancel_button,
         ):
             button.setMinimumHeight(36)
 
         grid.addWidget(self._backup_button, 0, 0)
         grid.addWidget(self._export_logs_button, 0, 1)
         grid.addWidget(self._rebuild_button, 1, 0)
-        grid.addWidget(self._clear_cache_button, 1, 1)
-        grid.addWidget(self._export_diagnostics_button, 2, 0, 1, 2)
+        grid.addWidget(self._full_rebuild_button, 1, 1)
+        grid.addWidget(self._clear_cache_button, 2, 0)
+        grid.addWidget(self._export_diagnostics_button, 2, 1)
 
         self._check_updates_button = QPushButton("Check for Updates")
         self._check_updates_button.setObjectName("SecondaryButton")
@@ -716,12 +748,18 @@ class SettingsView(QWidget):
         self._check_updates_button.setEnabled(self._on_check_updates is not None)
         grid.addWidget(self._check_updates_button, 3, 0, 1, 2)
 
+        layout.addLayout(grid)
+
+        layout.addWidget(self._rebuild_bg_status)
+        bg_row = QHBoxLayout()
+        bg_row.addWidget(self._rebuild_show_dialog_button)
+        bg_row.addWidget(self._rebuild_bg_cancel_button)
+        layout.addLayout(bg_row)
+
         self._auto_update_checkbox = QCheckBox("Notify me when a new version is available")
         self._auto_update_checkbox.setChecked(self._settings.check_for_updates)
         self._auto_update_checkbox.toggled.connect(self._on_auto_update_toggled)
         layout.addWidget(self._auto_update_checkbox)
-
-        layout.addLayout(grid)
 
         return box
 
@@ -894,24 +932,24 @@ class SettingsView(QWidget):
             logger.error("Diagnostics export failed: %s", e)
 
     def offer_guided_rebuild(self, summary: str) -> None:
-        """Prompt the user to rebuild after an incompatible upgrade."""
+        """Prompt the user to update after an incompatible upgrade."""
         if self._indexing_use_case is None or self._indexed_folders_provider is None:
             message_box.warning(
                 self,
-                "Rebuild Recommended",
+                "Update Recommended",
                 f"{summary}\n\nOpen Settings when folders are configured, then "
-                "use Rebuild Search Index.",
+                "use Update Search Index.",
             )
             return
         reply = message_box.question(
             self,
-            "Guided Rebuild",
-            f"{summary}\n\nStart Rebuild Search Index now?",
+            "Guided Update",
+            f"{summary}\n\nStart Update Search Index now?",
             message_box.StandardButton.Yes | message_box.StandardButton.No,
             message_box.StandardButton.Yes,
         )
         if reply == message_box.StandardButton.Yes:
-            self._on_rebuild_faiss()
+            self._on_update_search_index()
 
     def _on_clear_cache(self) -> None:
         thumb_dir = Path(self._settings.thumbnail_dir)
@@ -949,21 +987,59 @@ class SettingsView(QWidget):
             "maintenance", f"Cleared thumbnail cache — {deleted} file(s)"
         )
 
-    def _on_rebuild_faiss(self) -> None:
+    def _on_update_search_index(self) -> None:
+        """Incremental update: skip current tiles; CLIP-only when needed."""
         if self._indexing_use_case is None or self._indexed_folders_provider is None:
             return
 
         folders = self._indexed_folders_provider()
         if not folders:
-            message_box.information(self, "Nothing to Rebuild", "No indexed folders found.")
+            message_box.information(
+                self, "Nothing to Update", "No indexed folders found."
+            )
             return
 
         confirm = message_box.question(
             self,
-            "Rebuild Search Index",
-            f"This will re-analyze every image in {len(folders)} indexed folder(s) and "
-            "rebuild search from scratch. This can take a while for large "
-            "catalogs and cannot be cancelled once started.\n\nContinue?",
+            "Update Search Index",
+            f"Update search for {len(folders)} indexed folder(s).\n\n"
+            "Only new, changed, or outdated tiles are re-analyzed. Tiles that "
+            "already have current features but are missing description-search "
+            "vectors get a fast CLIP-only pass. Already up-to-date tiles are "
+            "skipped.\n\nContinue?",
+            message_box.StandardButton.Yes | message_box.StandardButton.No,
+            message_box.StandardButton.Yes,
+        )
+        if confirm != message_box.StandardButton.Yes:
+            return
+
+        self._start_rebuild(
+            force=False,
+            window_title="Updating Search Index",
+            preparing_text="Preparing update…",
+            progress_prefix="Updating Search Index",
+        )
+
+    def _on_full_rebuild_faiss(self) -> None:
+        """Explicit full re-embed — can take hours on 1000+ tile catalogues."""
+        if self._indexing_use_case is None or self._indexed_folders_provider is None:
+            return
+
+        folders = self._indexed_folders_provider()
+        if not folders:
+            message_box.information(
+                self, "Nothing to Rebuild", "No indexed folders found."
+            )
+            return
+
+        confirm = message_box.question(
+            self,
+            "Full rebuild (re-embed everything)",
+            f"This will re-analyze every image in {len(folders)} indexed "
+            "folder(s) from scratch, even when features are already current.\n\n"
+            "On a CPU laptop this can take hours for large catalogues "
+            "(~11 s/image). Prefer Update Search Index when you only need "
+            "new tiles or description-search vectors.\n\nContinue with full rebuild?",
             message_box.StandardButton.Yes | message_box.StandardButton.No,
             message_box.StandardButton.No,
         )
@@ -971,25 +1047,31 @@ class SettingsView(QWidget):
             return
 
         self._start_rebuild(
-            skip_confirm=True,
-            window_title="Rebuilding Search Index",
-            preparing_text="Preparing rebuild...",
-            progress_prefix="Rebuilding Search Index",
+            force=True,
+            window_title="Full Rebuild",
+            preparing_text="Preparing full rebuild…",
+            progress_prefix="Full Rebuild",
         )
+
+    # Back-compat alias for older call sites / guided paths.
+    def _on_rebuild_faiss(self) -> None:
+        self._on_update_search_index()
 
     def _start_rebuild(
         self,
         *,
+        force: bool = False,
         skip_confirm: bool = False,
-        window_title: str = "Rebuilding Search Index",
-        preparing_text: str = "Preparing rebuild...",
-        progress_prefix: str = "Rebuilding Search Index",
+        window_title: str = "Updating Search Index",
+        preparing_text: str = "Preparing update…",
+        progress_prefix: str = "Updating Search Index",
     ) -> None:
         if self._indexing_use_case is None or self._indexed_folders_provider is None:
             return
         folders = self._indexed_folders_provider()
         if not folders:
             return
+        _ = skip_confirm
 
         # Ensure production FlatIP configuration before rebuild.
         self._settings.index_backend = "flat_ip"
@@ -1001,6 +1083,8 @@ class SettingsView(QWidget):
 
         self._rebuild_progress_prefix = progress_prefix
         self._rebuild_button.setEnabled(False)
+        if hasattr(self, "_full_rebuild_button"):
+            self._full_rebuild_button.setEnabled(False)
         import time as _time
 
         self._rebuild_last_progress_mono = _time.monotonic()
@@ -1010,6 +1094,7 @@ class SettingsView(QWidget):
         self._rebuild_eta_seconds = -1.0
         self._rebuild_eta_issued_mono = self._rebuild_last_progress_mono
         self._rebuild_stall_seconds = 0
+        self._rebuild_hidden = False
         # Closing the dialog on success emits canceled — ignore that path.
         self._rebuild_closing_cleanly = False
 
@@ -1017,6 +1102,7 @@ class SettingsView(QWidget):
             preparing_text, "Cancel", 0, 1, self
         )
         self._rebuild_progress_dialog.setWindowTitle(window_title)
+        # Modal by default; Hide switches to background (status + Cancel).
         self._rebuild_progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
         self._rebuild_progress_dialog.setMinimumDuration(0)
         self._rebuild_progress_dialog.setAutoClose(False)
@@ -1024,10 +1110,13 @@ class SettingsView(QWidget):
         self._rebuild_progress_dialog.setMinimumWidth(420)
         self._rebuild_progress_dialog.setCancelButtonText("Cancel")
         self._style_rebuild_progress_dialog(self._rebuild_progress_dialog)
+        self._attach_rebuild_hide_button(self._rebuild_progress_dialog)
         self._rebuild_progress_dialog.show()
         self._center_rebuild_progress_dialog(self._rebuild_progress_dialog)
 
-        self._rebuild_worker = RebuildIndexWorker(self._indexing_use_case, folders)
+        self._rebuild_worker = RebuildIndexWorker(
+            self._indexing_use_case, folders, force=force
+        )
         self._rebuild_worker.progress_updated.connect(self._on_rebuild_progress)
         self._rebuild_worker.rebuild_finished.connect(self._on_rebuild_finished)
         self._rebuild_worker.rebuild_failed.connect(self._on_rebuild_failed)
@@ -1088,24 +1177,27 @@ class SettingsView(QWidget):
         processed = self._rebuild_processed
         total = self._rebuild_total
         if self._rebuild_eta_seconds < 0 and not stale_eta:
-            dialog.setLabelText(
+            label = (
                 f"{prefix}: {name} ({processed}/{total}). "
-                f"First batch can take a few minutes on CPU — no ETA until it finishes."
+                f"Estimating… first batches include model warm-up on CPU."
             )
+            dialog.setLabelText(label)
+            self._sync_rebuild_bg_status(label)
             return
         if stale_eta or stalled_for >= self._rebuild_stall_warn_s:
-            dialog.setLabelText(
+            label = (
                 f"{prefix}: Still working on {name} "
                 f"({processed}/{total}, {int(stalled_for)}s)… "
                 f"this is taking unusually long. You can Cancel."
             )
+            dialog.setLabelText(label)
+            self._sync_rebuild_bg_status(label)
             return
-        eta_text = (
-            f" — ~{int(self._rebuild_eta_seconds)}s remaining"
-            if self._rebuild_eta_seconds > 1
-            else ""
-        )
-        dialog.setLabelText(f"{prefix}: {name} ({processed}/{total}){eta_text}")
+        eta_fmt = format_eta_seconds(self._rebuild_eta_seconds)
+        eta_text = f" — {eta_fmt} remaining" if eta_fmt else ""
+        label = f"{prefix}: {name} ({processed}/{total}){eta_text}"
+        dialog.setLabelText(label)
+        self._sync_rebuild_bg_status(label)
 
     def _on_rebuild_progress(
         self,
@@ -1134,10 +1226,68 @@ class SettingsView(QWidget):
         dialog.setValue(min(processed, max(total, 1)))
         self._apply_rebuild_label(stale_eta=False, stalled_for=0.0)
 
+    def _attach_rebuild_hide_button(self, dialog: QProgressDialog) -> None:
+        """Add Hide / Run in background beside Cancel for long catalogues."""
+        hide_btn = QPushButton("Hide / Run in background", dialog)
+        hide_btn.setObjectName("SecondaryButton")
+        hide_btn.clicked.connect(self._on_rebuild_hide_clicked)
+        box = dialog.findChild(QDialogButtonBox)
+        if box is not None:
+            box.addButton(hide_btn, QDialogButtonBox.ButtonRole.ActionRole)
+        else:
+            # Fallback: keep a reference so GC doesn't collect it.
+            dialog._tv_hide_button = hide_btn  # type: ignore[attr-defined]
+            hide_btn.move(12, dialog.height() - 40)
+            hide_btn.show()
+
+    def _on_rebuild_hide_clicked(self) -> None:
+        dialog = self._rebuild_progress_dialog
+        if dialog is None:
+            return
+        self._rebuild_hidden = True
+        dialog.setWindowModality(Qt.WindowModality.NonModal)
+        dialog.hide()
+        if hasattr(self, "_rebuild_bg_status"):
+            self._rebuild_bg_status.show()
+            self._rebuild_show_dialog_button.show()
+            self._rebuild_bg_cancel_button.show()
+        self._sync_rebuild_bg_status(
+            f"{getattr(self, '_rebuild_progress_prefix', 'Updating')}: "
+            f"running in background "
+            f"({self._rebuild_processed}/{self._rebuild_total})…"
+        )
+
+    def _on_rebuild_show_dialog(self) -> None:
+        dialog = self._rebuild_progress_dialog
+        if dialog is None:
+            return
+        self._rebuild_hidden = False
+        dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        dialog.show()
+        self._center_rebuild_progress_dialog(dialog)
+
+    def _sync_rebuild_bg_status(self, text: str) -> None:
+        if not getattr(self, "_rebuild_hidden", False):
+            return
+        if hasattr(self, "_rebuild_bg_status"):
+            self._rebuild_bg_status.setText(text)
+            self._rebuild_bg_status.show()
+
     def _stop_rebuild_ui(self) -> None:
         self._rebuild_stall_timer.stop()
         self._rebuild_button.setEnabled(True)
+        if hasattr(self, "_full_rebuild_button"):
+            self._full_rebuild_button.setEnabled(
+                self._indexing_use_case is not None
+                and self._indexed_folders_provider is not None
+            )
         self._rebuild_closing_cleanly = True
+        self._rebuild_hidden = False
+        if hasattr(self, "_rebuild_bg_status"):
+            self._rebuild_bg_status.hide()
+            self._rebuild_bg_status.setText("")
+            self._rebuild_show_dialog_button.hide()
+            self._rebuild_bg_cancel_button.hide()
         if self._rebuild_progress_dialog is not None:
             dialog = self._rebuild_progress_dialog
             try:
@@ -1148,11 +1298,19 @@ class SettingsView(QWidget):
             self._rebuild_progress_dialog = None
         self._rebuild_worker = None
 
-    def _on_rebuild_finished(self, total_reembedded: int, total_failed: int) -> None:
-        was_cancelled = bool(
-            self._rebuild_worker is not None
-            and self._rebuild_worker._cancel_event.is_set()
-        )
+    def _on_rebuild_finished(self, summary) -> None:
+        was_cancelled = False
+        if isinstance(summary, RebuildSummary):
+            was_cancelled = summary.cancelled
+            detail = summary.format_message()
+        else:
+            # Legacy (processed, failed) tuple — keep UI from crashing.
+            was_cancelled = bool(
+                self._rebuild_worker is not None
+                and self._rebuild_worker._cancel_event.is_set()
+            )
+            detail = f"{summary} image(s) re-indexed"
+
         self._stop_rebuild_ui()
 
         if self._on_catalog_changed is not None:
@@ -1161,19 +1319,13 @@ class SettingsView(QWidget):
         self.refresh_search_engine_status()
 
         if was_cancelled:
-            message = (
-                f"Rebuild cancelled. {total_reembedded} image(s) re-indexed before stop."
-            )
-            if total_failed:
-                message += f" {total_failed} failed."
-            message_box.information(self, "Rebuild Cancelled", message)
+            message = f"Update cancelled. {detail}."
+            message_box.information(self, "Update Cancelled", message)
             self._record_activity("maintenance", message)
             return
 
-        message = f"Rebuild complete. {total_reembedded} image(s) re-indexed."
-        if total_failed:
-            message += f" {total_failed} failed."
-        message_box.information(self, "Rebuild Complete", message)
+        message = f"Update complete. {detail}."
+        message_box.information(self, "Update Complete", message)
         self._record_activity("maintenance", message)
 
     def _on_rebuild_failed(self, error_message: str) -> None:

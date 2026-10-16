@@ -180,10 +180,10 @@ def test_rebuild_worker_cancel_stops_scan(tmp_path, monkeypatch):
 
     monkeypatch.setattr(uc, "_index_file_batch", slow_batch)
 
-    worker = RebuildIndexWorker(uc, [str(images)])
+    worker = RebuildIndexWorker(uc, [str(images)], force=True)
     finished = []
     failed = []
-    worker.rebuild_finished.connect(lambda a, b: finished.append((a, b)))
+    worker.rebuild_finished.connect(lambda summary: finished.append(summary))
     worker.rebuild_failed.connect(lambda m: failed.append(m))
     worker.start()
     time.sleep(0.5)

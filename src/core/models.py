@@ -59,6 +59,15 @@ class TileImage:
     features: Optional[TileFeatures] = None
 
     # ------------------------------------------------------------------
+    # Feature pipeline metadata (for incremental update / staleness)
+    # ------------------------------------------------------------------
+
+    feature_version: Optional[int] = None
+    pattern_feature_version: Optional[int] = None
+    embedding_model: Optional[str] = None
+    embedding_dimension: Optional[int] = None
+
+    # ------------------------------------------------------------------
     # Database
     # ------------------------------------------------------------------
 
@@ -133,6 +142,8 @@ class ScanResult:
     deleted_count: int = 0
     skipped_count: int = 0
     failed_count: int = 0
+    # DINOv2 current but CLIP vector missing — CLIP-only backfill (no DINOv2).
+    clip_backfill_count: int = 0
     total_files_scanned: int = 0
     is_completed: bool = True
     elapsed_seconds: float = 0.0
@@ -140,13 +151,18 @@ class ScanResult:
 
     @property
     def indexed_count(self) -> int:
-        """Total files actually (re-)embedded this scan (new + modified)."""
+        """Total files that received a full DINOv2 (+CLIP) embed this scan."""
         return self.new_count + self.modified_count
 
     @property
     def has_any_changes(self) -> bool:
         """True if this scan found anything to do at all."""
-        return self.new_count > 0 or self.modified_count > 0 or self.deleted_count > 0
+        return (
+            self.new_count > 0
+            or self.modified_count > 0
+            or self.deleted_count > 0
+            or self.clip_backfill_count > 0
+        )
 
 
 @dataclass

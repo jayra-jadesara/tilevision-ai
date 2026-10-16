@@ -186,6 +186,19 @@ class SQLiteImageRepository(IImageRepository):
         # Build TileImage entity
         # -------------------------------------------------------
 
+        # Feature pipeline columns — present on SELECT *; tolerate older rows.
+        keys = row.keys()
+        feature_version = row["feature_version"] if "feature_version" in keys else None
+        pattern_feature_version = (
+            row["pattern_feature_version"]
+            if "pattern_feature_version" in keys
+            else None
+        )
+        embedding_model = row["embedding_model"] if "embedding_model" in keys else None
+        embedding_dimension = (
+            row["embedding_dimension"] if "embedding_dimension" in keys else None
+        )
+
         return TileImage(
             id=row["id"],
             file_path=row["file_path"],
@@ -204,6 +217,16 @@ class SQLiteImageRepository(IImageRepository):
             perceptual_hash=row["perceptual_hash"],
             embedding_id=row["embedding_id"],
             features=features,
+            feature_version=int(feature_version) if feature_version is not None else None,
+            pattern_feature_version=(
+                int(pattern_feature_version)
+                if pattern_feature_version is not None
+                else None
+            ),
+            embedding_model=str(embedding_model) if embedding_model else None,
+            embedding_dimension=(
+                int(embedding_dimension) if embedding_dimension is not None else None
+            ),
             created_time=created_time,
             updated_time=updated_time,
             is_indexed=bool(row["is_indexed"]),

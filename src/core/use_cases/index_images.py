@@ -16,6 +16,8 @@ from typing import Callable, List, Optional, Tuple
 
 from src.config.indexing_performance import IndexingPerformanceConfig
 from src.core.models import TileImage, ScanResult, IndexedFolderState
+from src.core.use_cases.index_eta import typical_work_seconds
+from src.core.use_cases.index_skip import is_unchanged_indexed_file
 from src.core.use_cases.index_timeout import (
     IndexFileTimeoutError,
     IndexStallAbort,
@@ -24,6 +26,7 @@ from src.core.use_cases.index_timeout import (
     run_with_timeout,
     stall_abort_message,
 )
+from src.core.use_cases.index_work_classify import IndexWorkKind, classify_index_work
 from src.data.repository_interface import IImageRepository, IIndexedFolderRepository
 from src.ai.feature_extractor import FeatureExtractor
 from src.ai.inference_guard import wait_while_search_priority
@@ -139,36 +142,8 @@ def parse_filename_metadata(stem: str) -> Tuple[str, str, str, str, str]:
 class _PendingIndexItem:
     path: Path
     was_previously_indexed: bool
-
-
-def _is_unchanged_indexed_file(
-    path: Path,
-    existing_record: Optional[TileImage],
-    *,
-    force: bool,
-) -> bool:
-    """
-    Return True when an indexed file can be skipped without re-embedding.
-
-    Uses size+mtime fingerprint first (no disk read). Falls back to SHA256
-    for legacy rows that predate file_mtime storage.
-    """
-    if force or existing_record is None or not existing_record.is_indexed:
-        return False
-
-    stat = path.stat()
-    if stat.st_size != existing_record.file_size:
-        return False
-
-    stored_mtime = float(existing_record.file_mtime or 0.0)
-    if stored_mtime > 0 and abs(stat.st_mtime - stored_mtime) < 1e-6:
-        return True
-
-    if stored_mtime <= 0:
-        current_sha = compute_sha256(path)
-        return current_sha == existing_record.sha256_hash
-
-    return False
+    work: str = IndexWorkKind.FULL.value
+    db_id: Optional[int] = None
 
 
 def _max_file_bytes(items: List[_PendingIndexItem]) -> int:
@@ -405,7 +380,7 @@ class IndexImagesUseCase:
         """
         resolved_path = file_path.resolve()
         existing_record = self._repo.get_by_path(str(resolved_path))
-        if _is_unchanged_indexed_file(resolved_path, existing_record, force=False):
+        if is_unchanged_indexed_file(resolved_path, existing_record, force=False):
             logger.debug("Auto-monitor skipping unchanged file: %s", resolved_path.name)
             return None
 
@@ -552,8 +527,16 @@ class IndexImagesUseCase:
             self._index.update_vectors(faiss_ids, faiss_vectors, persist=persist)
 
         with timer.measure("clip"):
+            # Add all CLIP vectors first; persist once per batch (not per tile).
+            # Per-tile save rewrote tiles_clip.index + sidecar N times per batch
+            # (real Windows log: 12 full rewrites in ~2s for one batch of 12).
             for db_id, item in zip(db_ids, items):
-                self._index_clip_vector(db_id, item.path, persist=persist)
+                self._index_clip_vector(db_id, item.path, persist=False)
+            if persist and self._clip_index is not None:
+                try:
+                    self._clip_index.save_index()
+                except Exception as exc:
+                    logger.warning("CLIP index batch save skipped: %s", exc)
 
         with timer.measure("database"):
             for tile in tiles:
@@ -562,6 +545,44 @@ class IndexImagesUseCase:
 
         timer.log_summary(log=logger)
 
+    def _clip_backfill_batch(
+        self,
+        items: List[_PendingIndexItem],
+        *,
+        persist: bool = True,
+    ) -> int:
+        """
+        Write CLIP vectors only for tiles whose DINOv2 features are already current.
+
+        ~55× cheaper than a full re-embed on CPU (CLIP ~0.2 s vs DINOv2 ~11 s).
+        """
+        if not items or self._clip_embedder is None or self._clip_index is None:
+            return 0
+        done = 0
+        for item in items:
+            db_id = item.db_id
+            if db_id is None:
+                existing = self._repo.get_by_path(str(item.path.resolve()))
+                db_id = existing.id if existing is not None else None
+            if db_id is None:
+                logger.warning(
+                    "CLIP backfill skipped (no db id) for %s", item.path.name
+                )
+                continue
+            try:
+                self._index_clip_vector(int(db_id), item.path, persist=False)
+                done += 1
+            except Exception as exc:
+                logger.warning(
+                    "CLIP backfill failed for %s: %s", item.path.name, exc
+                )
+        if persist and done > 0:
+            try:
+                self._clip_index.save_index()
+            except Exception as exc:
+                logger.warning("CLIP backfill save skipped: %s", exc)
+        return done
+
     def scan_and_index_directory(
         self,
         directory_path: Path,
@@ -569,6 +590,7 @@ class IndexImagesUseCase:
         cancel_event: Optional[threading.Event] = None,
         pause_event: Optional[threading.Event] = None,
         force: bool = False,
+        processed_paths: Optional[set] = None,
     ) -> ScanResult:
         """
         Scan a directory recursively and perform a "smart" incremental
@@ -590,17 +612,16 @@ class IndexImagesUseCase:
                 (UI must not invent a seconds estimate from queue time).
             cancel_event: Threading event to stop the scan loop.
             pause_event: Threading event to temporarily pause the scan loop.
-            force: If True, re-embed every file regardless of whether its
-                content hash matches what's already indexed (Task D:
-                Settings' "Rebuild FAISS Index" action — useful if the
-                FAISS index file itself was lost/corrupted while SQLite
-                metadata is still intact, since vectors aren't otherwise
-                recoverable without re-running the embedding model).
-                Every file is counted as "modified" in the returned
-                ScanResult, not "new", since it was already known.
+            force: If True, re-embed every file (full rebuild). When False
+                (Update Search Index), only stale / missing / CLIP-gap tiles
+                are processed.
+            processed_paths: Optional set of resolved path strings already
+                handled earlier in this rebuild run (nested-folder guard).
+                Mutated in place as files finish.
 
         Returns:
-            A ScanResult with the new/modified/deleted/skipped breakdown.
+            A ScanResult with the new/modified/deleted/skipped/clip_backfill
+            breakdown.
         """
         root = Path(directory_path).resolve()
         if not root.exists() or not root.is_dir():
@@ -624,9 +645,21 @@ class IndexImagesUseCase:
         modified_count = 0
         skipped_count = 0
         failed_count = 0
+        clip_backfill_count = 0
         is_completed = True
+        cross_run_seen: set = processed_paths if processed_paths is not None else set()
 
         self._index.load_index()
+        clip_enabled = self._clip_embedder is not None and self._clip_index is not None
+        clip_ids_present: Optional[set] = None
+        if clip_enabled and not force:
+            try:
+                if getattr(self._clip_index, "_index", None) is None:
+                    self._clip_index.load_index()
+                clip_ids_present = self._clip_index.known_ids()
+            except Exception as exc:
+                logger.warning("Could not load CLIP id set for backfill: %s", exc)
+                clip_ids_present = set()
 
         # perf_counter: Windows time.time() can round sub-15ms scans to 0 and
         # zero-out ETA during fast FakeEmbedder / tiny-folder tests.
@@ -641,12 +674,13 @@ class IndexImagesUseCase:
         # this folder whose path isn't in this set was removed from disk).
         paths_seen_on_disk: set = set()
         pending_batch: List[_PendingIndexItem] = []
+        pending_clip_batch: List[_PendingIndexItem] = []
 
         # Per-batch wall-clock (seconds per image) for files that re-embed.
         # First flush often includes one-time model warmup (DINOv2/CLIP load).
-        # Old mean-of-expanded-samples let that warmup (or a slow early streak)
-        # project ~5× too high an ETA (reproduced: ~315s remaining at 60% when
-        # true remaining was ~1 min). Use median of recent post-warmup batches.
+        # Never feed that warm-up batch alone into ETA — wait for a second
+        # sample (real log: 59 s/image first vs ~12.6 s steady → "~46 min"
+        # when true total was ~14 min).
         batch_timings_log: List[float] = []
         warmup_batches_skip = 1
         recent_batch_window = 4
@@ -655,33 +689,10 @@ class IndexImagesUseCase:
         first_batch_max = 4
 
         def _typical_work_seconds() -> float:
-            """Median seconds/image from recent post-warmup batches."""
-            if not batch_timings_log:
-                return 0.0
-            steady = (
-                batch_timings_log[warmup_batches_skip:]
-                if len(batch_timings_log) > warmup_batches_skip
-                else list(batch_timings_log)
-            )
-            if not steady:
-                return 0.0
-            recent = steady[-recent_batch_window:]
-            ordered = sorted(recent)
-            mid = len(ordered) // 2
-            median = (
-                ordered[mid]
-                if len(ordered) % 2
-                else 0.5 * (ordered[mid - 1] + ordered[mid])
-            )
-            # Drop extreme outliers still sitting in the short window.
-            capped = [s for s in ordered if s <= max(median * 3.0, median + 1.5)]
-            if not capped:
-                capped = ordered
-            mid = len(capped) // 2
-            return (
-                capped[mid]
-                if len(capped) % 2
-                else 0.5 * (capped[mid - 1] + capped[mid])
+            return typical_work_seconds(
+                batch_timings_log,
+                warmup_batches_skip=warmup_batches_skip,
+                recent_batch_window=recent_batch_window,
             )
 
         def _flush_threshold(items: List[_PendingIndexItem]) -> int:
@@ -901,6 +912,13 @@ class IndexImagesUseCase:
                     typical,
                     ",".join(f"{s:.3f}" for s in batch_timings_log[-8:]),
                 )
+                for item in items:
+                    cross_run_seen.add(str(item.path.resolve()))
+                    if clip_ids_present is not None and item.db_id is None:
+                        # After full embed, id is on the repo row.
+                        rec = self._repo.get_by_path(str(item.path.resolve()))
+                        if rec is not None and rec.id is not None:
+                            clip_ids_present.add(int(rec.id))
                 last_name = items[-1].path.name if items else "batch"
                 typical_note = ""
                 if typical > 0:
@@ -909,6 +927,8 @@ class IndexImagesUseCase:
                     if remaining:
                         typical_note += f", ~{int(typical * remaining)}s left"
                     typical_note += ")"
+                elif len(batch_timings_log) <= warmup_batches_skip:
+                    typical_note = " (estimating…)"
                 _emit_progress(f"{last_name}{typical_note}")
             except IndexStallAbort:
                 is_completed = False
@@ -916,6 +936,32 @@ class IndexImagesUseCase:
                     cancel_event.set()
                 logger.error("INDEX STALL ABORT — stopping scan")
                 raise
+
+        def _flush_clip_batch() -> None:
+            nonlocal clip_backfill_count, completed_count, failed_count
+            if not pending_clip_batch:
+                return
+            items = list(pending_clip_batch)
+            pending_clip_batch.clear()
+            _emit_progress(
+                f"Adding description-search vectors for {len(items)} images…",
+                eta=_eta_seconds(completed_count),
+            )
+            try:
+                done = self._clip_backfill_batch(items, persist=True)
+                clip_backfill_count += done
+                completed_count += len(items)
+                for item in items:
+                    cross_run_seen.add(str(item.path.resolve()))
+                    if clip_ids_present is not None and item.db_id is not None:
+                        clip_ids_present.add(int(item.db_id))
+                last_name = items[-1].path.name if items else "clip"
+                _emit_progress(f"{last_name} (description-search vectors)")
+            except Exception as exc:
+                failed_count += len(items)
+                completed_count += len(items)
+                logger.error("CLIP backfill batch failed: %s", exc)
+                _emit_progress("description-search backfill failed")
 
         if progress_callback:
             progress_callback(
@@ -942,37 +988,67 @@ class IndexImagesUseCase:
             if cancel_event and cancel_event.is_set():
                 logger.warning("Indexing worker canceled by user request. Stopping...")
                 _flush_pending_batch()
+                _flush_clip_batch()
                 is_completed = False
                 break
 
             resolved_path = file_path.resolve()
             file_name = resolved_path.name
-            paths_seen_on_disk.add(str(resolved_path))
+            resolved_key = str(resolved_path)
+            paths_seen_on_disk.add(resolved_key)
 
             logger.debug("INDEX SCAN FILE: %s", file_name)
 
             try:
-                # 3. Incremental Index Check: distinguish unchanged (skip),
-                #    modified (re-embed, was already a known file), and new
-                #    (re-embed, never seen before).
-                existing_record = self._repo.get_by_path(str(resolved_path))
-                was_previously_indexed = bool(existing_record and existing_record.is_indexed)
-
-                if _is_unchanged_indexed_file(
-                    resolved_path,
-                    existing_record,
-                    force=force,
-                ):
-                    logger.debug(f"Skipping unchanged tile: {file_name}")
+                # Already handled by a parent folder earlier in this rebuild.
+                if resolved_key in cross_run_seen:
+                    logger.debug(
+                        "Skipping already-processed path this run: %s", file_name
+                    )
                     skipped_count += 1
                     completed_count += 1
                     _emit_progress(file_name)
+                    continue
+
+                existing_record = self._repo.get_by_path(resolved_key)
+                was_previously_indexed = bool(
+                    existing_record and existing_record.is_indexed
+                )
+                work = classify_index_work(
+                    resolved_path,
+                    existing_record,
+                    force=force,
+                    clip_ids_present=clip_ids_present,
+                    clip_enabled=clip_enabled,
+                )
+
+                if work is IndexWorkKind.SKIP:
+                    logger.debug(f"Skipping unchanged tile: {file_name}")
+                    skipped_count += 1
+                    completed_count += 1
+                    cross_run_seen.add(resolved_key)
+                    _emit_progress(file_name)
+                    continue
+
+                if work is IndexWorkKind.CLIP_ONLY:
+                    pending_clip_batch.append(
+                        _PendingIndexItem(
+                            path=resolved_path,
+                            was_previously_indexed=was_previously_indexed,
+                            work=IndexWorkKind.CLIP_ONLY.value,
+                            db_id=existing_record.id if existing_record else None,
+                        )
+                    )
+                    if len(pending_clip_batch) >= _flush_threshold(pending_clip_batch):
+                        _flush_clip_batch()
                     continue
 
                 pending_batch.append(
                     _PendingIndexItem(
                         path=resolved_path,
                         was_previously_indexed=was_previously_indexed,
+                        work=IndexWorkKind.FULL.value,
+                        db_id=existing_record.id if existing_record else None,
                     )
                 )
 
@@ -990,6 +1066,7 @@ class IndexImagesUseCase:
 
         try:
             _flush_pending_batch()
+            _flush_clip_batch()
         except IndexStallAbort:
             is_completed = False
             raise
@@ -1007,7 +1084,7 @@ class IndexImagesUseCase:
         # Always flush any pending vector additions/removals before
         # returning, whether the scan completed, was cancelled, or hit
         # errors along the way — partial progress must never be lost.
-        if (new_count + modified_count) > 0 or deleted_count > 0:
+        if (new_count + modified_count + clip_backfill_count) > 0 or deleted_count > 0:
             self._index.save_index()
             if self._clip_index is not None:
                 try:
@@ -1015,8 +1092,14 @@ class IndexImagesUseCase:
                 except Exception as exc:
                     logger.warning("CLIP index save skipped: %s", exc)
             logger.info(
-                f"Index directory complete. New: {new_count}, Modified: {modified_count}, "
-                f"Deleted: {deleted_count}, Skipped: {skipped_count}, Failed: {failed_count}"
+                "Index directory complete. New: %s, Modified: %s, "
+                "CLIP backfill: %s, Deleted: %s, Skipped: %s, Failed: %s",
+                new_count,
+                modified_count,
+                clip_backfill_count,
+                deleted_count,
+                skipped_count,
+                failed_count,
             )
 
         # Record this folder as indexed (Task 1) so the Index page can
@@ -1050,6 +1133,7 @@ class IndexImagesUseCase:
             deleted_count=deleted_count,
             skipped_count=skipped_count,
             failed_count=failed_count,
+            clip_backfill_count=clip_backfill_count,
             total_files_scanned=total_files,
             is_completed=is_completed,
             elapsed_seconds=elapsed_total,

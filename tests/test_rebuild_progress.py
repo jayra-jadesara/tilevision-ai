@@ -143,51 +143,42 @@ def test_progress_reports_completed_not_queued_batch12_of_38(env):
 
 
 def test_first_callbacks_have_no_numeric_eta_until_batch_sample(env):
-    """ETA must be -1 until a real batch timing sample exists."""
+    """ETA must be -1 until a post-warmup batch timing sample exists."""
     d = env["images_dir"]
     for i in range(10):
         _make_image(d / f"t{i}.jpg", (i * 20, 40, 80))
 
-    etas_before_positive_completed = []
-    first_positive_completed = None
+    calls = []
 
     def progress_cb(processed, total, filename, eta):
-        nonlocal first_positive_completed
-        if processed == 0:
-            etas_before_positive_completed.append(eta)
-        elif first_positive_completed is None:
-            first_positive_completed = (processed, eta, filename)
+        calls.append((processed, total, filename, eta))
 
     env["use_case"].scan_and_index_directory(d, progress_callback=progress_cb)
-    assert etas_before_positive_completed
-    assert all(e < 0 for e in etas_before_positive_completed), (
-        f"fabricated ETA before any completion: {etas_before_positive_completed}"
+    assert calls
+    # Before any completion, and right after warm-up batch 1, ETA is -1.
+    before_second = [c for c in calls if c[0] < 8]
+    assert before_second
+    assert all(c[3] < 0 for c in before_second if c[2] != "Done"), (
+        f"fabricated ETA before post-warmup sample: {before_second}"
     )
-    assert first_positive_completed is not None
-    # After first batch of 4 finishes we have a real sample → ETA >= 0
-    # (may be ~0 with FakeEmbedder for remaining work, but not -1 once
-    # typical_work_seconds > 0 and remaining > 0; last files may hit 0).
-    processed, eta, name = first_positive_completed
-    assert processed == 4
-    assert eta >= 0 or "s/image" in name or "s left" in name or eta == -1
-    # With remaining work and a real timing sample, ETA should be numeric.
-    # 10 files, first batch 4 → 6 remaining → eta should be >= 0.
-    assert eta >= 0, f"expected numeric ETA after first batch, got {eta} name={name!r}"
+    # After second batch (processed >= 8 for 10 files: 4 then 6), ETA >= 0.
+    after_second = [c for c in calls if c[0] >= 8 and c[2] != "Done"]
+    assert after_second, f"expected post-warmup callbacks, got {calls}"
+    assert any(c[3] >= 0 for c in after_second), (
+        f"expected numeric ETA after second batch, got {after_second}"
+    )
 
 
 def test_slow_embedder_honest_message_then_sane_eta(env):
-    """Faked slow first batch: dialog copy is honest, then ETA appears."""
+    """Faked slow batches: honest first-batch copy, then ETA after batch 2."""
     d = env["images_dir"]
     for i in range(8):
         _make_image(d / f"slow_{i}.jpg", (10, i * 20, 50))
 
     calls = []
-    batch_n = {"n": 0}
     original = env["use_case"]._index_file_batch
 
     def slow_batch(items, persist=True):
-        batch_n["n"] += 1
-        # ~0.15s/image so ETA math is visible without making CI slow.
         time.sleep(0.15 * max(1, len(items)))
         return original(items, persist=persist)
 
@@ -205,16 +196,17 @@ def test_slow_embedder_honest_message_then_sane_eta(env):
     assert first_embed[0] == 0
     assert first_embed[3] < 0
 
-    after = [c for c in calls if c[0] >= 4 and c[2] != "Done"]
-    assert after
-    # Post-first-batch: either numeric ETA or status mentioning s/image.
-    mid = after[0]
-    assert mid[3] >= 0 or "s/image" in mid[2]
-    # Should not claim ~10s remaining from queue-scan elapsed.
-    # With 0.15s/img * ~4 remaining after first batch of 4 → ETA order ~0.6s,
-    # never the false "~10s from 1s elapsed / 11 queued" class of bug.
-    if mid[3] > 0:
-        assert mid[3] < 5.0, f"ETA inflated from queue time?: {mid}"
+    # After warm-up batch only: still estimating (eta < 0).
+    after_first = [c for c in calls if c[0] == 4]
+    assert after_first
+    assert after_first[0][3] < 0 or "estimating" in after_first[0][2].lower()
+
+    # After second batch: numeric ETA (8 files = 4 + 4).
+    after_second = [c for c in calls if c[0] >= 8 and c[2] != "Done"]
+    assert after_second
+    assert after_second[0][3] >= 0
+    if after_second[0][3] > 0:
+        assert after_second[0][3] < 5.0, f"ETA inflated?: {after_second[0]}"
 
 
 def test_closing_rebuild_dialog_after_finish_does_not_request_cancel():

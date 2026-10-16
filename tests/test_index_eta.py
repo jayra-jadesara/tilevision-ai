@@ -5,44 +5,35 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-
-def _typical_work_seconds(batch_timings, warmup_batches_skip=1, recent_batch_window=4):
-    """Mirror of IndexImagesUseCase steady-state helper (keep in sync)."""
-    if not batch_timings:
-        return 0.0
-    steady = (
-        batch_timings[warmup_batches_skip:]
-        if len(batch_timings) > warmup_batches_skip
-        else list(batch_timings)
-    )
-    if not steady:
-        return 0.0
-    recent = steady[-recent_batch_window:]
-    ordered = sorted(recent)
-    mid = len(ordered) // 2
-    median = (
-        ordered[mid]
-        if len(ordered) % 2
-        else 0.5 * (ordered[mid - 1] + ordered[mid])
-    )
-    capped = [s for s in ordered if s <= max(median * 3.0, median + 1.5)]
-    if not capped:
-        capped = ordered
-    mid = len(capped) // 2
-    return (
-        capped[mid]
-        if len(capped) % 2
-        else 0.5 * (capped[mid - 1] + capped[mid])
-    )
+from src.core.use_cases.index_eta import typical_work_seconds
+from src.utils.duration_format import format_eta_seconds
 
 
 def test_warmup_batch_does_not_inflate_typical():
     # First batch after cold model load is often many× slower.
     batches = [8.0, 1.0, 1.1, 0.9, 1.0]
     mean_old = sum(batches) / len(batches)
-    typical = _typical_work_seconds(batches)
+    typical = typical_work_seconds(batches)
     assert mean_old > 2.0
     assert typical < 1.2
+
+
+def test_warmup_alone_returns_zero_until_second_batch():
+    """
+    Real Windows log: first batch per_image=59.077s (model load) vs steady
+    ~12.6 s. Using the warm-up alone projected "~46 min" when true total
+    was ~14 min. ETA must stay indeterminate (0 → UI 'estimating…').
+    """
+    assert typical_work_seconds([59.077]) == 0.0
+    assert typical_work_seconds([29.556]) == 0.0
+    # After a second (steady) sample, use post-warmup only.
+    typical = typical_work_seconds([59.077, 12.6])
+    assert abs(typical - 12.6) < 0.01
+    remaining = 34  # ~38 - first batch of 4
+    eta = typical * remaining
+    # Old (warmup-fed) ETA would be ~2000s (~33 min); new is ~7 min class.
+    assert eta < 500
+    assert typical_work_seconds([59.077]) * remaining == 0.0
 
 
 def test_eta_at_60_percent_matches_user_304s_scenario():
@@ -54,16 +45,13 @@ def test_eta_at_60_percent_matches_user_304s_scenario():
     total = 40
     batch_size = 4
     batches = [45.0, 25.0, 20.0, 18.0, 15.0, 12.0]  # 24 files = 60%
-    # Expand like the old code did (per-file duplicates of batch rate).
     work = []
     for pi in batches:
         work.extend([pi] * batch_size)
     remaining = total - 24
     old_eta = (sum(work) / len(work)) * remaining
-    new_eta = _typical_work_seconds(batches) * remaining
-    assert old_eta > 280  # ~360s — matches screenshot class of bug
-    # Recent post-warmup median cuts the inflated projection; full recovery
-    # needs later fast batches (covered below).
+    new_eta = typical_work_seconds(batches) * remaining
+    assert old_eta > 280
     assert new_eta < old_eta
     assert new_eta < 280
 
@@ -75,6 +63,15 @@ def test_eta_tracks_speedup_after_warmup():
     for pi in batches:
         old_expanded.extend([pi] * 4)
     old_eta = (sum(old_expanded) / len(old_expanded)) * remaining
-    new_eta = _typical_work_seconds(batches) * remaining
+    new_eta = typical_work_seconds(batches) * remaining
     assert old_eta > new_eta * 2
     assert abs(new_eta - 16.0) < 2.0  # ~1s/file * 16
+
+
+def test_format_eta_human_readable():
+    assert format_eta_seconds(40) == "~40 s"
+    assert format_eta_seconds(14 * 60) == "~14 min"
+    assert "h" in format_eta_seconds(11500)
+    assert format_eta_seconds(3 * 3600 + 12 * 60) == "~3 h 12 min"
+    assert format_eta_seconds(0) == ""
+    assert format_eta_seconds(-1) == ""
