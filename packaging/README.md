@@ -5,7 +5,7 @@ PyInstaller builds must run **on the target OS** (no cross-compiling).
 | Platform | Spec file | Output |
 |----------|-----------|--------|
 | Windows | `packaging/tilevision.spec` | `dist/TileVisionAI/TileVisionAI.exe` |
-| macOS | `packaging/tilevision_mac.spec` | `dist/TileVisionAI.app` |
+| macOS | `packaging/tilevision_mac.spec` | `dist/TileVision AI.app` → `TileVision-AI-Intel.dmg` / `TileVision-AI-AppleSilicon.dmg` |
 | Linux | `packaging/tilevision_linux.spec` | `dist/TileVisionAI/TileVisionAI` |
 
 See also [docs/CROSS_PLATFORM.md](../docs/CROSS_PLATFORM.md) for run-from-source setup.
