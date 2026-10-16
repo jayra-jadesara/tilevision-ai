@@ -90,6 +90,7 @@ class SearchViewModel(QObject):
         self._worker: Optional[SearchWorker] = None
         self._last_results: List[SearchResult] = []
         self._last_query_path: Optional[str] = None
+        self._last_description_query: Optional[str] = None
         self._active_filters: dict = {}
         self._last_elapsed_seconds: float = 0.0
         self._history_repo = search_history_repository
@@ -500,6 +501,7 @@ class SearchViewModel(QObject):
 
         self._claim_search_priority()
         self._last_query_path = None
+        self._last_description_query = text
         self._active_search_kind = "description"
         self._search_generation += 1
         generation = self._search_generation
@@ -669,7 +671,15 @@ class SearchViewModel(QObject):
 
         if results:
             self._set_state(SearchState.RESULTS)
-            self.status_message.emit(f"Found {len(results)} similar tile(s).")
+            status = f"Found {len(results)} similar tile(s)."
+            if self._active_search_kind == "description" and self._description_use_case:
+                meta = getattr(self._description_use_case, "last_result_meta", None) or {}
+                custom = meta.get("status")
+                if custom:
+                    status = str(custom)
+                if meta.get("low_confidence"):
+                    status += " (low confidence — weak text match)"
+            self.status_message.emit(status)
             logger.info("[SEARCH] Results displayed: %d", len(results))
         else:
             self._set_state(SearchState.NO_RESULTS)
@@ -680,7 +690,7 @@ class SearchViewModel(QObject):
             logger.warning(
                 "[SEARCH] Emitting empty results reason=search_completed_zero "
                 "query=%s generation=%s",
-                self._last_query_path,
+                self._last_query_path or self._last_description_query,
                 generation,
             )
 
@@ -847,7 +857,10 @@ class SearchViewModel(QObject):
     @Slot(float)
     def _on_search_timed(self, elapsed_seconds: float) -> None:
         self._last_elapsed_seconds = elapsed_seconds
-        logger.info(f"Search for '{self._last_query_path}' completed in {elapsed_seconds:.3f}s.")
+        label = self._last_query_path
+        if not label:
+            label = getattr(self, "_last_description_query", None) or "description"
+        logger.info("Search for %r completed in %.3fs.", label, elapsed_seconds)
 
     @Slot()
     def load_search_history(self, limit: int = 10) -> None:

@@ -52,7 +52,11 @@ def test_execute_multi_photos_embeds_each_path_once_and_delegates(tmp_path):
     extractor = MagicMock()
     fa = _features(1.0)
     fb = _features(2.0)
-    extractor.extract.side_effect = [fa, fb]
+    # Full single-photo extract path returns (features, view_list).
+    extractor.extract_for_search.side_effect = [
+        (fa, [fa.embedding, fa.embedding * 0.99]),
+        (fb, [fb.embedding]),
+    ]
 
     use_case = SearchTilesUseCase.__new__(SearchTilesUseCase)
     use_case._feature_extractor = extractor
@@ -68,18 +72,15 @@ def test_execute_multi_photos_embeds_each_path_once_and_delegates(tmp_path):
     out = use_case.execute_multi_photos([str(a), str(b)], top_k=7, filters={"brand": "X"})
 
     assert out == ["ok"]
-    assert extractor.extract.call_count == 2
-    for call in extractor.extract.call_args_list:
-        assert call.kwargs.get("for_query") is True
+    assert extractor.extract_for_search.call_count == 2
     assert captured["path"] == str(a)
     assert captured["kwargs"]["top_k"] == 7
     assert captured["kwargs"]["filters"] == {"brand": "X"}
     assert captured["kwargs"]["query_origin"] == "multi_photo"
     assert captured["kwargs"]["query_features_override"] is fa
     embs = captured["kwargs"]["query_embeddings_override"]
-    assert len(embs) == 2
-    np.testing.assert_allclose(embs[0], fa.embedding)
-    np.testing.assert_allclose(embs[1], fb.embedding)
+    assert len(embs) == 3  # 2 views from a + 1 from b
+    assert captured["kwargs"]["multi_photo_view_counts"] == [2, 1]
 
 
 def test_execute_multi_photos_truncates_to_three(tmp_path):
@@ -90,7 +91,10 @@ def test_execute_multi_photos_truncates_to_three(tmp_path):
         paths.append(str(p))
 
     extractor = MagicMock()
-    extractor.extract.side_effect = [_features(float(i + 1)) for i in range(3)]
+    extractor.extract_for_search.side_effect = [
+        (_features(float(i + 1)), [_features(float(i + 1)).embedding])
+        for i in range(3)
+    ]
 
     use_case = SearchTilesUseCase.__new__(SearchTilesUseCase)
     use_case._feature_extractor = extractor
@@ -98,8 +102,9 @@ def test_execute_multi_photos_truncates_to_three(tmp_path):
     use_case.execute = lambda path, **kwargs: captured.update(kwargs) or []  # type: ignore
 
     use_case.execute_multi_photos(paths)
-    assert extractor.extract.call_count == 3
+    assert extractor.extract_for_search.call_count == 3
     assert len(captured["query_embeddings_override"]) == 3
+    assert captured["multi_photo_view_counts"] == [1, 1, 1]
 
 
 def test_execute_multi_photos_requires_two_images():
