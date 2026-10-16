@@ -297,6 +297,8 @@ class DropZone(QFrame):
         self._on_images_selected = on_images_selected
         self._on_drop_rejected = on_drop_rejected
         self._multi_photo_enabled = False
+        self._on_thumbnail_selected: Optional[Callable[[int], None]] = None
+        self._selected_thumb_index = 0
         self.setObjectName("DropZone")
         self.setAcceptDrops(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -328,12 +330,16 @@ class DropZone(QFrame):
         multi_layout.setSpacing(6)
         multi_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._multi_preview_labels: list[QLabel] = []
-        for _ in range(self._MAX_MULTI):
+        for i in range(self._MAX_MULTI):
             lbl = QLabel()
             lbl.setObjectName("DropZoneMultiPreview")
             lbl.setFixedSize(72, 72)
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lbl.setVisible(False)
+            lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+            lbl.mousePressEvent = (  # type: ignore[method-assign]
+                lambda event, idx=i: self._on_multi_thumb_pressed(event, idx)
+            )
             multi_layout.addWidget(lbl)
             self._multi_preview_labels.append(lbl)
         layout.addWidget(self._multi_preview_row)
@@ -357,6 +363,36 @@ class DropZone(QFrame):
         else:
             self._title_label.setText("Drag a tile photo here")
             self._subtitle_label.setText("or click to browse for an image")
+
+    def set_thumbnail_selected_callback(
+        self, callback: Optional[Callable[[int], None]]
+    ) -> None:
+        """Notify SearchView when the user clicks a multi-photo thumbnail."""
+        self._on_thumbnail_selected = callback
+
+    def set_selected_thumb_index(self, index: int) -> None:
+        """Highlight which photo Manual Crop will operate on."""
+        self._selected_thumb_index = max(0, int(index))
+        self._refresh_thumb_selection_style()
+
+    def _on_multi_thumb_pressed(self, event, index: int) -> None:
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        self._selected_thumb_index = index
+        self._refresh_thumb_selection_style()
+        if self._on_thumbnail_selected is not None:
+            self._on_thumbnail_selected(index)
+
+    def _refresh_thumb_selection_style(self) -> None:
+        for i, lbl in enumerate(self._multi_preview_labels):
+            if not lbl.isVisible():
+                continue
+            selected = i == self._selected_thumb_index
+            lbl.setStyleSheet(
+                "border: 2px solid #3B82F6; border-radius: 4px;"
+                if selected
+                else "border: 2px solid transparent; border-radius: 4px;"
+            )
 
     def set_busy(self, busy: bool) -> None:
         """Disable interaction while a search is in progress."""
@@ -425,8 +461,11 @@ class DropZone(QFrame):
         names = ", ".join(Path(p).name for p in paths[:3])
         self._title_label.setText(f"{len(paths)} photos selected")
         self._subtitle_label.setText(
-            f"{names} — click to choose different images"
+            f"{names} — click a thumbnail to select for Crop, or click zone to replace"
         )
+        if self._selected_thumb_index >= len(paths):
+            self._selected_thumb_index = 0
+        self._refresh_thumb_selection_style()
 
     def reset(self) -> None:
         """Reset the drop zone back to its empty prompt state."""
@@ -729,8 +768,16 @@ class SearchView(QWidget):
         self._results_generation = 0
         self._current_query_image_path: Optional[str] = None
         self._current_query_paths: list[str] = []
+        # Original user photos — crops never overwrite these (precise-after-auto
+        # must start from the photo, not from a previous crop output).
+        self._original_query_paths: list[str] = []
+        self._selected_query_index: int = 0
         self._crop_worker: Optional[TileCropWorker] = None
         self._crop_busy = False
+        self._multi_crop_queue: list[tuple[int, str]] = []
+        self._multi_crop_results: dict[int, str] = {}
+        self._multi_crop_mode: Optional[str] = None
+        self._multi_crop_total: int = 0
         self._preview_panel = _ResultPreviewPanel(self, theme=theme)
         self._search_animation_timer = QTimer(self)
         self._search_animation_timer.setInterval(400)
@@ -806,6 +853,7 @@ class SearchView(QWidget):
             on_images_selected=self._on_images_chosen,
             on_drop_rejected=self._on_drop_rejected,
         )
+        self._drop_zone.set_thumbnail_selected_callback(self._on_query_thumbnail_selected)
         drop_col_layout.addWidget(self._drop_zone, stretch=0)
 
         # Opt-in only — default off preserves the fast single-photo CPU path.
@@ -1181,10 +1229,12 @@ class SearchView(QWidget):
 
     def _on_query_image_selected(self, image_path: str) -> None:
         """Keep drop-zone preview and action buttons aligned with the ViewModel query."""
+        # Do not overwrite _original_query_paths — crops are display/search only.
         self._current_query_image_path = image_path
         paths = list(getattr(self, "_current_query_paths", []) or [])
         if len(paths) > 1:
             self._drop_zone.show_preview(image_path, image_paths=paths)
+            self._drop_zone.set_selected_thumb_index(self._selected_query_index)
         else:
             self._drop_zone.show_preview(image_path)
         self._refresh_action_buttons()
@@ -1207,9 +1257,12 @@ class SearchView(QWidget):
             return
 
         logger.info("Multi-photo query selected: %s", paths)
+        self._original_query_paths = list(paths)
         self._current_query_paths = list(paths)
         self._current_query_image_path = paths[0]
+        self._selected_query_index = 0
         self._confidence_banner.setVisible(False)
+        self._drop_zone.set_selected_thumb_index(0)
         self._drop_zone.show_preview(paths[0], image_paths=paths)
         self._refresh_action_buttons()
         self._status_label.setText(
@@ -1219,8 +1272,10 @@ class SearchView(QWidget):
 
     def _on_image_chosen(self, image_path: str) -> None:
         logger.info(f"Query image selected: {image_path}")
+        self._original_query_paths = [image_path]
         self._current_query_paths = [image_path]
         self._current_query_image_path = image_path
+        self._selected_query_index = 0
         self._confidence_banner.setVisible(False)
         # Enable Clear / crop immediately (SEARCHING can lag one event-loop tick).
         self._refresh_action_buttons()
@@ -1234,6 +1289,28 @@ class SearchView(QWidget):
             )
         self._viewmodel.search_by_image(image_path)
 
+    def _on_query_thumbnail_selected(self, index: int) -> None:
+        """Manual Crop operates on the selected multi-photo thumbnail."""
+        if not self._original_query_paths:
+            return
+        if index < 0 or index >= len(self._original_query_paths):
+            return
+        self._selected_query_index = index
+        self._drop_zone.set_selected_thumb_index(index)
+        n = len(self._original_query_paths)
+        name = Path(self._original_query_paths[index]).name
+        self._status_label.setText(
+            f"Selected photo {index + 1} of {n} ({name}) for Crop and Search."
+        )
+
+    def _crop_source_path(self, index: Optional[int] = None) -> Optional[str]:
+        """Always crop from the original photo, never from a prior crop output."""
+        idx = self._selected_query_index if index is None else index
+        originals = list(getattr(self, "_original_query_paths", []) or [])
+        if originals and 0 <= idx < len(originals):
+            return originals[idx]
+        return self._current_query_image_path
+
     def _on_drop_rejected(self, reason: str) -> None:
         self._status_label.setText(reason)
         self._empty_state_label.setText(reason)
@@ -1241,35 +1318,136 @@ class SearchView(QWidget):
         message_box.information(self, "Cannot Search This File", reason)
 
     def _on_crop_clicked(self) -> None:
-        if not self._current_query_image_path:
+        source = self._crop_source_path()
+        if not source:
             return
-        dialog = CropDialog(self._current_query_image_path, parent=self, theme=self._theme)
+        n = max(1, len(self._original_query_paths) or 1)
+        idx = self._selected_query_index
+        title = (
+            f"Crop photo {idx + 1} of {n}"
+            if n > 1
+            else "Crop & Search — Select a Region"
+        )
+        dialog = CropDialog(
+            source, parent=self, theme=self._theme, window_title=title
+        )
         if dialog.exec() == dialog.DialogCode.Accepted and dialog.cropped_image_path:
-            logger.info(f"Searching with cropped region: {dialog.cropped_image_path}")
-            self._viewmodel.search_by_image(
-                dialog.cropped_image_path, query_origin="crop_tool"
-            )
+            crop_path = str(dialog.cropped_image_path)
+            logger.info("Searching with cropped region: %s", crop_path)
+            if len(self._original_query_paths) >= 2:
+                paths = list(self._current_query_paths or self._original_query_paths)
+                if idx < len(paths):
+                    paths[idx] = crop_path
+                self._current_query_paths = paths
+                self._current_query_image_path = paths[0]
+                self._drop_zone.show_preview(paths[0], image_paths=paths)
+                self._drop_zone.set_selected_thumb_index(idx)
+                self._viewmodel.search_by_images(paths)
+            else:
+                # Single-photo: preview the crop but keep original for next crop.
+                self._current_query_paths = [crop_path]
+                self._current_query_image_path = crop_path
+                self._drop_zone.show_preview(crop_path)
+                self._viewmodel.search_by_image(crop_path, query_origin="crop_tool")
 
     def _on_auto_crop_clicked(self) -> None:
-        if not self._current_query_image_path:
+        if not self._crop_source_path():
             return
-        self._start_background_crop("auto")
+        if len(self._original_query_paths) >= 2:
+            self._start_multi_background_crop("auto")
+        else:
+            self._start_background_crop("auto")
 
     def _on_precise_crop_clicked(self) -> None:
-        if not self._current_query_image_path:
+        if not self._crop_source_path():
             return
-        self._start_background_crop("precise")
+        if len(self._original_query_paths) >= 2:
+            self._start_multi_background_crop("precise")
+        else:
+            self._start_background_crop("precise")
 
-    def _start_background_crop(self, mode: str) -> None:
-        """Run Auto/Precise crop off the UI thread (critical on Mac Intel)."""
+    def _start_multi_background_crop(self, mode: str) -> None:
+        """Crop every original photo, then one multi-photo search."""
         if self._crop_busy or self._viewmodel.is_searching:
             return
-        if not self._current_query_image_path:
+        originals = list(self._original_query_paths)
+        if len(originals) < 2:
+            self._start_background_crop(mode)
             return
 
-        # Drop any prior worker only after its QThread has stopped. Clearing the
-        # Python ref while the C++ thread is still winding down aborts Mac Intel
-        # CI with: QThread: Destroyed while thread '' is still running.
+        self._stop_prior_crop_worker()
+        self._multi_crop_mode = mode
+        self._multi_crop_queue = list(enumerate(originals))
+        self._multi_crop_results = {}
+        self._multi_crop_total = len(originals)
+        self._crop_busy = True
+        self._set_crop_controls_enabled(False)
+        self._progress_bar.setVisible(True)
+        self._run_next_multi_crop()
+
+    def _run_next_multi_crop(self) -> None:
+        if not self._multi_crop_queue:
+            self._finish_multi_crop_search()
+            return
+        index, source = self._multi_crop_queue.pop(0)
+        mode = self._multi_crop_mode or "auto"
+        label = "Precise Crop" if mode == "precise" else "Auto Crop"
+        self._status_label.setText(
+            f"Cropping photo {index + 1} of {self._multi_crop_total} ({label})…"
+        )
+        worker = TileCropWorker(source, mode)  # type: ignore[arg-type]
+        self._crop_worker = worker
+        worker.crop_finished.connect(
+            lambda path, crop, idx=index, m=mode: self._on_multi_crop_one_finished(
+                m, idx, path, crop
+            ),
+            Qt.ConnectionType.QueuedConnection,
+        )
+        worker.crop_failed.connect(
+            lambda message, m=mode: self._on_background_crop_failed(m, message),
+            Qt.ConnectionType.QueuedConnection,
+        )
+        worker.finished.connect(
+            lambda w=worker: self._on_crop_worker_finished(w),
+            Qt.ConnectionType.QueuedConnection,
+        )
+        worker.start()
+
+    def _on_multi_crop_one_finished(
+        self, mode: str, index: int, crop_path: str, crop
+    ) -> None:
+        self._multi_crop_results[index] = str(crop_path)
+        logger.info(
+            "Multi-photo %s crop %d/%d → %s",
+            mode,
+            index + 1,
+            self._multi_crop_total,
+            crop_path,
+        )
+        # Continue after this worker's finished signal has cleaned up.
+        QTimer.singleShot(0, self._run_next_multi_crop)
+
+    def _finish_multi_crop_search(self) -> None:
+        self._crop_busy = False
+        self._progress_bar.setVisible(False)
+        n = self._multi_crop_total
+        paths = [
+            self._multi_crop_results.get(i, self._original_query_paths[i])
+            for i in range(n)
+        ]
+        self._multi_crop_mode = None
+        self._multi_crop_queue = []
+        self._current_query_paths = paths
+        self._current_query_image_path = paths[0] if paths else None
+        self._drop_zone.show_preview(paths[0], image_paths=paths)
+        self._drop_zone.set_selected_thumb_index(self._selected_query_index)
+        self._status_label.setText(
+            f"Cropped {n} photos — running multi-photo search…"
+        )
+        self._refresh_action_buttons()
+        self._viewmodel.search_by_images(paths)
+
+    def _stop_prior_crop_worker(self) -> None:
         prev = self._crop_worker
         if prev is not None:
             if prev.isRunning():
@@ -1277,13 +1455,25 @@ class SearchView(QWidget):
                 prev.wait(5_000)
             self._crop_worker = None
 
+    def _start_background_crop(self, mode: str) -> None:
+        """Run Auto/Precise crop off the UI thread (critical on Mac Intel)."""
+        if self._crop_busy or self._viewmodel.is_searching:
+            return
+        source = self._crop_source_path()
+        if not source:
+            return
+
+        self._stop_prior_crop_worker()
+        self._multi_crop_mode = None
+        self._multi_crop_queue = []
+
         label = "Precise Crop" if mode == "precise" else "Auto Crop"
         self._crop_busy = True
         self._set_crop_controls_enabled(False)
         self._status_label.setText(f"{label} running… UI stays responsive.")
         self._progress_bar.setVisible(True)
 
-        worker = TileCropWorker(self._current_query_image_path, mode)  # type: ignore[arg-type]
+        worker = TileCropWorker(source, mode)  # type: ignore[arg-type]
         self._crop_worker = worker
         # QueuedConnection: never run UI/search work nested inside QThread.run().
         worker.crop_finished.connect(
@@ -1307,6 +1497,9 @@ class SearchView(QWidget):
         worker.deleteLater()
 
     def _on_background_crop_finished(self, mode: str, crop_path: str, crop) -> None:
+        # Multi-photo queue uses _on_multi_crop_one_finished instead.
+        if self._multi_crop_mode is not None and self._multi_crop_total > 1:
+            return
         self._crop_busy = False
         self._progress_bar.setVisible(self._viewmodel.is_searching)
         method = getattr(crop, "method", "crop")
@@ -1328,11 +1521,17 @@ class SearchView(QWidget):
             )
             logger.info("Searching with auto-cropped region: %s", crop_path)
 
+        # Preview the crop for search, but keep _original_query_paths intact
+        # so Precise after Auto still uses the user's photo.
+        self._current_query_paths = [str(crop_path)]
+        self._current_query_image_path = str(crop_path)
         self._drop_zone.show_preview(str(crop_path))
         self._viewmodel.search_by_image(str(crop_path), query_origin="crop_tool")
 
     def _on_background_crop_failed(self, mode: str, message: str) -> None:
         self._crop_busy = False
+        self._multi_crop_mode = None
+        self._multi_crop_queue = []
         self._progress_bar.setVisible(self._viewmodel.is_searching)
         self._refresh_action_buttons()
         logger.error("%s crop failed: %s", mode, message)
@@ -1391,6 +1590,11 @@ class SearchView(QWidget):
         self._current_query_image_path = None
         self._description_input.clear()
         self._current_query_paths = []
+        self._original_query_paths = []
+        self._selected_query_index = 0
+        self._multi_crop_queue = []
+        self._multi_crop_results = {}
+        self._multi_crop_mode = None
         self._current_results = []
         self._confidence_banner.setVisible(False)
         self._progress_bar.setVisible(False)
