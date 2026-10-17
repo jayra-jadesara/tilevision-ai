@@ -23,6 +23,46 @@ def test_adaptive_batch_size_shrinks_for_huge_files():
     assert perf.adaptive_batch_size(80 * 1024 * 1024) == 2
 
 
+def test_dinov2_embedder_using_gpu_follows_runtime(monkeypatch):
+    """CUDA/MPS selection is wired into embedder.using_gpu (hardware UNVERIFIED here)."""
+    from types import SimpleNamespace
+
+    from src.ai.embedder import DINOv2Embedder
+
+    fake_torch = SimpleNamespace(
+        __version__="2.5.1+cu124",
+        cuda=SimpleNamespace(
+            is_available=lambda: True,
+            device_count=lambda: 1,
+            get_device_name=lambda _i: "NVIDIA Test GPU",
+            get_device_properties=lambda _i: SimpleNamespace(total_memory=8 * 1024 ** 3),
+        ),
+        version=SimpleNamespace(cuda="12.4"),
+        backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False)),
+        device=lambda name: SimpleNamespace(type=name),
+    )
+    monkeypatch.setattr("src.ai.embedder.torch", fake_torch)
+    monkeypatch.setattr(
+        "src.ai.embedder.detect_gpu_runtime",
+        lambda preference="auto": SimpleNamespace(
+            active_device="cuda",
+            using_gpu=True,
+            summary_for_log=lambda: "cuda",
+            summary_for_ui=lambda: "CUDA",
+        ),
+    )
+    monkeypatch.setattr(DINOv2Embedder, "load_model", lambda self: None)
+
+    embedder = DINOv2Embedder(device_preference="auto")
+    assert embedder.using_gpu is True
+
+
+def test_index_view_forward_chunk_default():
+    from src.ai.embedder import DINOv2Embedder
+
+    assert DINOv2Embedder._INDEX_VIEW_FORWARD_CHUNK == 24
+
+
 def test_from_settings_uses_larger_batch_when_gpu_active(tmp_path):
     from src.config.settings import AppSettings
 
