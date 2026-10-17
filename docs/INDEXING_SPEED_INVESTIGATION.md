@@ -50,3 +50,46 @@ Keep **Accurate (default)** unchanged. If a future PR exposes
 “Indexing speed: Accurate / Fast”, gate Fast behind measured top-1/top-5
 on the real 38-tile crop suite plus a customer acceptance note that Fast
 requires rebuild. Do not change views or `TARGET_SIZE` in the default path.
+
+## Multi-process embedding (measured sandbox — do not ship)
+
+**Decision: do not add worker processes for DINOv2 indexing.**
+
+Measured in this cloud sandbox (2 vCPU, CPU-only PyTorch, ViT-sized matmul
+micro-benchmark and multi-process throughput experiment):
+
+| Finding | Value |
+| --- | --- |
+| ViT-sized matmul (single job) | ~200 ms/job |
+| Throughput, 4 worker processes | ~9.4 jobs/s |
+| Throughput, 10 worker processes | ~9.4 jobs/s (same ceiling) |
+| Ceiling | ~2 jobs/s per core → caps at physical core count |
+| Torch in one process | Already uses all cores via intra-op threads |
+| Extra process cost | Each worker loads another DINOv2-large (~1.2 GB RAM) |
+| Overlap vs DINOv2 | Preprocessing ~0.8 s vs DINOv2 ~128 s per batch of 12 images — overlapping decode saves nothing meaningful |
+
+Parallelism across files is already handled by batched forwards inside one
+process; spawning more Python processes only duplicates model weights and
+contends for the same CPUs.
+
+## Byte-identical file reuse (PR C)
+
+When several pending FULL paths share the same `sha256_hash` in one flush,
+indexing embeds one representative and copies DINOv2 (primary + aux), CLIP,
+and handcrafted descriptors to the other SQLite/FAISS ids (paths and filename
+metadata stay distinct). Log line: `reused embeddings for N identical files`.
+
+## GPU indexing path (code review)
+
+- **Device:** `DINOv2Embedder` selects CUDA or MPS via `detect_gpu_runtime()`
+  when `inference_device` is `auto`; `embedder.using_gpu` drives
+  `IndexingPerformanceConfig.from_settings(..., use_gpu=...)`.
+- **Flush batch size:** CPU default `index_batch_size` 12; when GPU is active,
+  `gpu_index_batch_size` 24 (see `tests/test_indexing_performance.py`).
+- **Views per forward:** `_INDEX_VIEW_FORWARD_CHUNK` defaults to **24** for all
+  devices (override: `TILEVISION_INDEX_VIEW_BATCH`). This is **not** scaled up
+  on GPU in code today — **UNVERIFIED** whether a larger GPU-only chunk would
+  help without OOM on customer hardware.
+
+Variant 1 (int8) and Variant 2 (smaller `TARGET_SIZE`) remain **opt-in /
+plan-only**; defaults unchanged.
