@@ -78,10 +78,10 @@ def test_nested_folders_each_file_embedded_once(tmp_path):
     embed_calls = []
     original = uc._index_file_batch
 
-    def tracking(items, persist=True):
+    def tracking(items, persist=True, **kwargs):
         for item in items:
             embed_calls.append(str(item.path.resolve()))
-        return original(items, persist=persist)
+        return original(items, persist=persist, **kwargs)
 
     uc._index_file_batch = tracking
 

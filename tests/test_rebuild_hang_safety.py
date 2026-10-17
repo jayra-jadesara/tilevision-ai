@@ -80,14 +80,14 @@ def test_scan_aborts_promptly_on_hung_file(tmp_path, monkeypatch):
     original = uc._index_file_batch
     batch_calls = []
 
-    def flaky_batch(items, persist=True):
+    def flaky_batch(items, persist=True, **kwargs):
         batch_calls.append([i.path.name for i in items])
         for item in items:
             if item.path.name == "hang.png":
                 # Past the 1s×N batch timeout, but short enough that the
                 # daemon worker exits before later tests (Intel CI abort).
                 time.sleep(4.0)
-        return original(items, persist=persist)
+        return original(items, persist=persist, **kwargs)
 
     monkeypatch.setattr(uc, "_index_file_batch", flaky_batch)
 
@@ -136,9 +136,9 @@ def test_normal_flush_uses_single_batched_call(tmp_path, monkeypatch):
     original = uc._index_file_batch
     calls = []
 
-    def tracking(items, persist=True):
+    def tracking(items, persist=True, **kwargs):
         calls.append((len(items), persist))
-        return original(items, persist=persist)
+        return original(items, persist=persist, **kwargs)
 
     monkeypatch.setattr(uc, "_index_file_batch", tracking)
     result = uc.scan_and_index_directory(images, force=True)
@@ -179,9 +179,9 @@ def test_rebuild_worker_cancel_stops_scan(tmp_path, monkeypatch):
 
     real = uc._index_file_batch
 
-    def slow_batch(items, persist=True):
+    def slow_batch(items, persist=True, **kwargs):
         time.sleep(0.35)
-        return real(items, persist=persist)
+        return real(items, persist=persist, **kwargs)
 
     monkeypatch.setattr(uc, "_index_file_batch", slow_batch)
 

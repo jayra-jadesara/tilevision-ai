@@ -11,9 +11,10 @@ import logging
 import re
 import threading
 import time
-from dataclasses import dataclass
+from collections import OrderedDict
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from src.config.indexing_performance import IndexingPerformanceConfig
 from src.core.models import TileImage, ScanResult, IndexedFolderState
@@ -153,7 +154,7 @@ def _max_file_bytes(items: List[_PendingIndexItem]) -> int:
 
 
 def _index_content_key(sha256_hash: str, item_index: int) -> str:
-    """Stable dedupe key for byte-identical catalogue files in one batch."""
+    """Stable dedupe key for byte-identical catalogue files."""
     return sha256_hash if sha256_hash else f"__unique:{item_index}"
 
 
@@ -164,6 +165,91 @@ def _clone_index_vectors(features, aux: List) -> Tuple:
     cloned_features = copy.deepcopy(features)
     cloned_aux = [np.asarray(vec, dtype=np.float32).copy() for vec in aux]
     return cloned_features, cloned_aux
+
+
+@dataclass
+class _CachedContentEmbed:
+    """Successful DINOv2 (+ aux) + optional CLIP vectors for one sha256."""
+
+    features: Any
+    aux: List
+    clip_vec: Optional[Any] = None
+
+
+class ContentEmbedCache:
+    """
+    Scan-wide LRU cache of embeddings keyed by sha256_hash.
+
+    Nested copies of the same image often land in different flush batches
+    (directory-sorted ``rglob``, batch_size 12, first batch 4). In-batch
+    dedupe alone therefore saves nothing for the customer's layout. This
+    cache lives for one ``scan_and_index_directory`` (or one rebuild across
+    folders) so a later batch reuses the representative's vectors.
+
+    Choice: rely on the cache rather than reordering pending files — keeps
+    directory walk / progress order stable; lookup is O(1).
+
+    Cap defaults to 2000 unique images (~few KB of vectors each). Failed /
+    timed-out representatives are never stored, so copies still get their
+    own embed attempt.
+    """
+
+    DEFAULT_MAX_ENTRIES = 2000
+
+    def __init__(self, max_entries: int = DEFAULT_MAX_ENTRIES) -> None:
+        self._max = max(1, int(max_entries))
+        self._data: "OrderedDict[str, _CachedContentEmbed]" = OrderedDict()
+        self.reuse_hits: int = 0
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def __bool__(self) -> bool:
+        # Avoid ``cache or ContentEmbedCache()`` treating an empty LRU as falsy.
+        return True
+
+    def get(self, sha256_hash: str) -> Optional[_CachedContentEmbed]:
+        key = (sha256_hash or "").strip()
+        if not key or key not in self._data:
+            return None
+        self._data.move_to_end(key)
+        self.reuse_hits += 1
+        return self._data[key]
+
+    def put_features(self, sha256_hash: str, features, aux: List) -> None:
+        key = (sha256_hash or "").strip()
+        if not key:
+            return
+        # Store clones so later mutations of the live tile cannot corrupt cache.
+        feat_clone, aux_clone = _clone_index_vectors(features, aux)
+        existing = self._data.get(key)
+        clip = existing.clip_vec if existing is not None else None
+        self._data[key] = _CachedContentEmbed(
+            features=feat_clone, aux=aux_clone, clip_vec=clip
+        )
+        self._data.move_to_end(key)
+        while len(self._data) > self._max:
+            self._data.popitem(last=False)
+
+    def put_clip(self, sha256_hash: str, clip_vec) -> None:
+        key = (sha256_hash or "").strip()
+        if not key or key not in self._data or clip_vec is None:
+            return
+        import numpy as np
+
+        entry = self._data[key]
+        entry.clip_vec = np.asarray(clip_vec, dtype=np.float32).copy()
+        self._data.move_to_end(key)
+
+    def get_clip(self, sha256_hash: str):
+        key = (sha256_hash or "").strip()
+        entry = self._data.get(key)
+        if entry is None or entry.clip_vec is None:
+            return None
+        import numpy as np
+
+        self._data.move_to_end(key)
+        return np.asarray(entry.clip_vec, dtype=np.float32).copy()
 
 
 class IndexImagesUseCase:
@@ -449,6 +535,8 @@ class IndexImagesUseCase:
         self,
         items: List[_PendingIndexItem],
         persist: bool = True,
+        *,
+        content_embed_cache: Optional[ContentEmbedCache] = None,
     ) -> None:
         """
         Index multiple files from a folder scan.
@@ -457,6 +545,10 @@ class IndexImagesUseCase:
         (``prepare_index_primary`` panel isolation + aux FAISS vectors). The
         old ``extract_batch()`` + ``ImagePreprocessor.preprocess()`` path wrote
         full-sheet descriptors to SQLite and caused PGYS2319-style hybrid drift.
+
+        When ``content_embed_cache`` is provided, byte-identical sha256 hits
+        reuse DINOv2/aux/CLIP vectors from earlier batches in this scan
+        (cloned buffers; each path keeps its own metadata).
         """
         if not items:
             return
@@ -464,6 +556,14 @@ class IndexImagesUseCase:
         wait_while_search_priority()
         timer = PipelineTimer("INDEX BATCH TIMING")
         tiles: List[TileImage] = []
+        # Local fallback so callers without a scan-wide cache still dedupe
+        # within this batch only. Use ``is None`` — an empty shared LRU is
+        # still a live cache (``bool(empty_cache)`` must not drop it).
+        cache = (
+            content_embed_cache
+            if content_embed_cache is not None
+            else ContentEmbedCache()
+        )
 
         with timer.measure("image_loading"):
             for item in items:
@@ -512,54 +612,74 @@ class IndexImagesUseCase:
                     )
                 )
 
-        features_list: List = []
-        aux_by_index: List[List] = []
+        features_list: List = [None] * len(tiles)  # type: ignore[list-item]
+        aux_by_index: List[List] = [None] * len(tiles)  # type: ignore[list-item]
 
-        rep_paths: List[str] = []
-        rep_keys_order: List[str] = []
-        seen_content_keys: set = set()
-        first_row_for_key: dict = {}
+        # Rows that must be embedded this batch (cache miss).
+        embed_indices: List[int] = []
+        embed_paths: List[str] = []
+        # Within this batch, only one forward per sha256.
+        pending_key_to_embed_slot: Dict[str, int] = {}
+
         for i, (item, tile) in enumerate(zip(items, tiles)):
             key = _index_content_key(tile.sha256_hash, i)
-            if key not in seen_content_keys:
-                seen_content_keys.add(key)
-                rep_keys_order.append(key)
-                rep_paths.append(str(item.path))
-            if key not in first_row_for_key:
-                first_row_for_key[key] = i
-
-        reused_identical = len(items) - len(rep_paths)
+            cached = cache.get(key) if tile.sha256_hash else None
+            if cached is not None:
+                features, aux = _clone_index_vectors(cached.features, cached.aux)
+                features_list[i] = features
+                aux_by_index[i] = aux
+                continue
+            if key in pending_key_to_embed_slot:
+                # Same hash earlier in this batch — wait for that forward.
+                continue
+            pending_key_to_embed_slot[key] = len(embed_paths)
+            embed_indices.append(i)
+            embed_paths.append(str(item.path))
 
         with timer.measure("feature_extract"):
-            batch_fn = getattr(
-                self._feature_extractor, "extract_index_vectors_batch", None
-            )
-            if batch_fn is not None and len(rep_paths) > 1:
-                extracted_reps = batch_fn(rep_paths)
-            else:
-                extracted_reps = [
-                    self._feature_extractor.extract_index_vectors(path)
-                    for path in rep_paths
-                ]
-            extracted_by_key = {
-                key: pair for key, pair in zip(rep_keys_order, extracted_reps)
-            }
-            for i, tile in enumerate(tiles):
-                key = _index_content_key(tile.sha256_hash, i)
-                features, aux = extracted_by_key[key]
-                if i != first_row_for_key[key]:
-                    features, aux = _clone_index_vectors(features, aux)
-                features_list.append(features)
-                aux_by_index.append(aux)
+            if embed_paths:
+                batch_fn = getattr(
+                    self._feature_extractor, "extract_index_vectors_batch", None
+                )
+                try:
+                    if batch_fn is not None and len(embed_paths) > 1:
+                        extracted_reps = batch_fn(embed_paths)
+                    else:
+                        extracted_reps = [
+                            self._feature_extractor.extract_index_vectors(path)
+                            for path in embed_paths
+                        ]
+                except Exception:
+                    # Do not poison the scan-wide cache with a partial failure.
+                    raise
 
-        if reused_identical > 0:
-            logger.info(
-                "reused embeddings for %d identical files",
-                reused_identical,
-            )
+                for slot, (features, aux) in enumerate(extracted_reps):
+                    idx = embed_indices[slot]
+                    tile = tiles[idx]
+                    key = _index_content_key(tile.sha256_hash, idx)
+                    features_list[idx] = features
+                    aux_by_index[idx] = aux
+                    # Only cache successful representatives (never failures).
+                    if tile.sha256_hash:
+                        cache.put_features(tile.sha256_hash, features, aux)
+
+            # Fill same-batch siblings that waited on a representative.
+            for i, tile in enumerate(tiles):
+                if features_list[i] is not None:
+                    continue
+                key = _index_content_key(tile.sha256_hash, i)
+                cached = cache.get(key) if tile.sha256_hash else None
+                if cached is None:
+                    raise RuntimeError(
+                        f"Missing embedding for {tile.file_name} "
+                        f"(content key {key!r})"
+                    )
+                features, aux = _clone_index_vectors(cached.features, cached.aux)
+                features_list[i] = features
+                aux_by_index[i] = aux
 
         timings = self._feature_extractor.last_timings
-        embed_count = len(rep_paths)
+        embed_count = max(1, len(embed_paths))
         # last_timings are already per-file averages from the batch helper.
         timer.timings.record("preprocessing", timings.preprocessing * embed_count)
         timer.timings.record("dinov2", timings.dinov2 * embed_count)
@@ -592,24 +712,21 @@ class IndexImagesUseCase:
 
         with timer.measure("clip"):
             # Add all CLIP vectors first; persist once per batch (not per tile).
-            # Per-tile save rewrote tiles_clip.index + sidecar N times per batch
-            # (real Windows log: 12 full rewrites in ~2s for one batch of 12).
-            clip_by_content: dict = {}
+            # Prefer scan-wide cache so nested copies across batches share CLIP too.
             for db_id, item, tile in zip(db_ids, items, tiles):
-                clip_key = (
-                    tile.sha256_hash if tile.sha256_hash else f"__id:{db_id}"
-                )
-                cached = clip_by_content.get(clip_key)
-                if cached is not None:
+                clip_key = tile.sha256_hash if tile.sha256_hash else ""
+                cached_clip = cache.get_clip(clip_key) if clip_key else None
+                if cached_clip is not None:
                     if self._clip_index is not None:
                         self._clip_index.update_vectors(
-                            [db_id], [cached], persist=False
+                            [db_id], [cached_clip], persist=False
                         )
                     continue
                 vec = self._embed_clip_vector(item.path)
                 if vec is None:
                     continue
-                clip_by_content[clip_key] = vec
+                if clip_key:
+                    cache.put_clip(clip_key, vec)
                 if self._clip_index is not None:
                     self._clip_index.update_vectors(
                         [db_id], [vec], persist=False
@@ -706,6 +823,7 @@ class IndexImagesUseCase:
         pause_event: Optional[threading.Event] = None,
         force: bool = False,
         processed_paths: Optional[set] = None,
+        content_embed_cache: Optional[ContentEmbedCache] = None,
     ) -> ScanResult:
         """
         Scan a directory recursively and perform a "smart" incremental
@@ -733,6 +851,10 @@ class IndexImagesUseCase:
             processed_paths: Optional set of resolved path strings already
                 handled earlier in this rebuild run (nested-folder guard).
                 Mutated in place as files finish.
+            content_embed_cache: Optional scan-/rebuild-wide sha256→embedding
+                LRU (max 2000). When omitted a fresh cache is created for this
+                scan so nested copies across flush batches still share forwards.
+                Rebuild worker should pass one shared instance across folders.
 
         Returns:
             A ScanResult with the new/modified/deleted/skipped/clip_backfill
@@ -742,6 +864,11 @@ class IndexImagesUseCase:
         if not root.exists() or not root.is_dir():
             logger.error(f"Invalid directory path provided for scan: {root}")
             return ScanResult(is_completed=False)
+
+        # Scan-wide cache (or shared rebuild cache). We rely on this instead of
+        # reordering files by hash so directory/progress order stays stable.
+        embed_cache = content_embed_cache or ContentEmbedCache()
+        reuse_hits_at_start = embed_cache.reuse_hits
 
         logger.info(f"Scanning directory for new tiles: {root}")
 
@@ -865,7 +992,11 @@ class IndexImagesUseCase:
             )
             try:
                 run_with_timeout(
-                    lambda: self._index_file_batch([item], persist=True),
+                    lambda: self._index_file_batch(
+                        [item],
+                        persist=True,
+                        content_embed_cache=embed_cache,
+                    ),
                     timeout_s=timeout_s,
                     label=label,
                 )
@@ -957,7 +1088,11 @@ class IndexImagesUseCase:
             try:
                 try:
                     run_with_timeout(
-                        lambda: self._index_file_batch(items, persist=True),
+                        lambda: self._index_file_batch(
+                            items,
+                            persist=True,
+                            content_embed_cache=embed_cache,
+                        ),
                         timeout_s=batch_timeout,
                         label=f"batch[{batch_size}:{names}]",
                     )
@@ -1289,6 +1424,13 @@ class IndexImagesUseCase:
         # Emit final progress update
         if progress_callback:
             progress_callback(total_files, total_files, "Done", 0.0)
+
+        reused_this_scan = embed_cache.reuse_hits - reuse_hits_at_start
+        if reused_this_scan > 0:
+            logger.info(
+                "reused embeddings for %d identical files across batches",
+                reused_this_scan,
+            )
 
         return ScanResult(
             new_count=new_count,

@@ -93,6 +93,11 @@ class RebuildIndexWorker(QThread):
         # Cross-folder guard: even after nested drop, never embed the same
         # resolved path twice in one run.
         processed_paths: set[str] = set()
+        # Shared sha256→embedding cache so nested copies across folders /
+        # flush batches reuse DINOv2+CLIP instead of re-embedding.
+        from src.core.use_cases.index_images import ContentEmbedCache
+
+        content_embed_cache = ContentEmbedCache()
 
         try:
             for folder_path in self._folder_paths:
@@ -118,6 +123,7 @@ class RebuildIndexWorker(QThread):
                     progress_callback=on_progress,
                     cancel_event=self._cancel_event,
                     processed_paths=processed_paths,
+                    content_embed_cache=content_embed_cache,
                 )
                 summary.reindexed += result.indexed_count
                 summary.clip_backfill += int(result.clip_backfill_count or 0)

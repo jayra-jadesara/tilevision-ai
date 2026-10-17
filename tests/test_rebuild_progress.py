@@ -82,14 +82,14 @@ def test_progress_reports_completed_not_queued_batch12_of_38(env):
     original_batch = env["use_case"]._index_file_batch
     flush_n = {"n": 0}
 
-    def slowish_batch(items, persist=True):
+    def slowish_batch(items, persist=True, **kwargs):
         flush_n["n"] += 1
         if flush_n["n"] == 1:
             # Snapshot every progress report observed so far; first flush
             # has not finished yet so completed must still be 0.
             processed_while_first_batch_runs.extend(c[0] for c in calls)
             time.sleep(0.05)
-        return original_batch(items, persist=persist)
+        return original_batch(items, persist=persist, **kwargs)
 
     env["use_case"]._index_file_batch = slowish_batch
 
@@ -178,9 +178,9 @@ def test_slow_embedder_honest_message_then_sane_eta(env):
     calls = []
     original = env["use_case"]._index_file_batch
 
-    def slow_batch(items, persist=True):
+    def slow_batch(items, persist=True, **kwargs):
         time.sleep(0.15 * max(1, len(items)))
-        return original(items, persist=persist)
+        return original(items, persist=persist, **kwargs)
 
     env["use_case"]._index_file_batch = slow_batch
 
