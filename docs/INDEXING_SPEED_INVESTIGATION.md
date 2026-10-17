@@ -72,12 +72,21 @@ Parallelism across files is already handled by batched forwards inside one
 process; spawning more Python processes only duplicates model weights and
 contends for the same CPUs.
 
-## Byte-identical file reuse (PR C)
+## Byte-identical file reuse (PR C + cross-batch fix)
 
-When several pending FULL paths share the same `sha256_hash` in one flush,
-indexing embeds one representative and copies DINOv2 (primary + aux), CLIP,
-and handcrafted descriptors to the other SQLite/FAISS ids (paths and filename
-metadata stay distinct). Log line: `reused embeddings for N identical files`.
+When several pending FULL paths share the same `sha256_hash`, indexing embeds
+one representative and copies DINOv2 (primary + aux), CLIP, and handcrafted
+descriptors to the other SQLite/FAISS ids (paths and filename metadata stay
+distinct).
+
+**Cross-batch (required for nested copies):** `scan_and_index_directory`
+sorts files by path, so copies in `Tiles\`, `Tiles\New\`, `Tiles\New\New2\`
+often land in different flush batches (batch_size 12, first batch 4). A
+scan-/rebuild-wide `ContentEmbedCache` (LRU, max 2000 sha256 keys) reuses
+successful embeddings across batches and folders. Failed/timed-out
+representatives are never cached. Choice: rely on the cache (no reordering)
+so progress order stays stable. Log:
+`reused embeddings for N identical files across batches`.
 
 ## GPU indexing path (code review)
 
