@@ -14,6 +14,7 @@ from src.core.use_cases.index_skip import is_unchanged_indexed_file
 class IndexWorkKind(str, Enum):
     FULL = "full"
     CLIP_ONLY = "clip_only"
+    METADATA_ONLY = "metadata_only"
     SKIP = "skip"
 
 
@@ -49,8 +50,17 @@ def classify_index_work(
         db_id = existing_record.id
         if db_id is not None and int(db_id) not in clip_ids_present:
             return IndexWorkKind.CLIP_ONLY
+        if db_id is not None and int(db_id) in clip_ids_present:
+            if _color_needs_backfill(existing_record):
+                return IndexWorkKind.METADATA_ONLY
 
     return IndexWorkKind.SKIP
+
+
+def _color_needs_backfill(record: TileImage) -> bool:
+    """True when showroom colour was never resolved (Unknown / empty)."""
+    label = (getattr(record, "color", None) or "").strip().lower()
+    return label in ("", "unknown")
 
 
 def _features_are_current(record: TileImage) -> bool:

@@ -27,6 +27,7 @@ class RebuildSummary:
 
     reindexed: int = 0
     clip_backfill: int = 0
+    color_backfill: int = 0
     skipped: int = 0
     failed: int = 0
     folders: int = 0
@@ -39,6 +40,8 @@ class RebuildSummary:
             f"{self.clip_backfill} description-search vectors added",
             f"{self.skipped} already up to date",
         ]
+        if self.color_backfill:
+            parts.insert(2, f"{self.color_backfill} colours detected")
         if self.failed:
             parts.append(f"{self.failed} failed")
         return ", ".join(parts)
@@ -118,6 +121,7 @@ class RebuildIndexWorker(QThread):
                 )
                 summary.reindexed += result.indexed_count
                 summary.clip_backfill += int(result.clip_backfill_count or 0)
+                summary.color_backfill += int(result.color_backfill_count or 0)
                 summary.skipped += result.skipped_count
                 summary.failed += result.failed_count
 

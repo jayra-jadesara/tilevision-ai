@@ -37,6 +37,8 @@ class TileImage:
     brand: str = "Unknown"
     category: str = "Unknown"
     color: str = "Unknown"
+    # ``filename`` | ``auto`` | ``unknown`` — filename parse always wins on index.
+    color_source: str = "unknown"
     size: str = "Unknown"
     product_code: str = "Unknown"
 
@@ -106,6 +108,8 @@ class SearchResult:
     orb_match_points: Optional[
         list[tuple[tuple[float, float], tuple[float, float]]]
     ] = None
+    copy_paths: Optional[list[str]] = None
+    extra_copy_count: int = 0
 
 
 @dataclass
@@ -144,6 +148,8 @@ class ScanResult:
     failed_count: int = 0
     # DINOv2 current but CLIP vector missing — CLIP-only backfill (no DINOv2).
     clip_backfill_count: int = 0
+    # Fast pixel colour backfill (no embed, no feature_version bump).
+    color_backfill_count: int = 0
     total_files_scanned: int = 0
     is_completed: bool = True
     elapsed_seconds: float = 0.0
@@ -162,6 +168,7 @@ class ScanResult:
             or self.modified_count > 0
             or self.deleted_count > 0
             or self.clip_backfill_count > 0
+            or self.color_backfill_count > 0
         )
 
 

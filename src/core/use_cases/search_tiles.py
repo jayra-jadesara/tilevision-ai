@@ -959,21 +959,49 @@ class SearchTilesUseCase:
             reranked = self._filter_weak_results(reranked, top_k)
             stage(STAGE_WEAK_FILTER, f"kept {len(reranked)}")
 
+            # Collapse byte-identical / near-exact catalogue copies before top_k
+            # so 3 folder copies of one tile do not fill three result slots.
+            from src.ai.search_quality.result_dedupe import collapse_scored_by_content
+
+            scored_for_dedupe = [(tile, float(score)) for score, tile, _ex in reranked]
+            collapsed = collapse_scored_by_content(scored_for_dedupe)
+            # Preserve exact_match + ORB from the winning primary tile.
+            exact_by_id = {
+                int(tile.id): bool(exact)
+                for score, tile, exact in reranked
+                if tile.id is not None
+            }
+            score_by_id = {
+                int(tile.id): float(score)
+                for score, tile, _exact in reranked
+                if tile.id is not None
+            }
+
             results: List[SearchResult] = []
 
             # Thumbnail paths only — existence / QPixmap decode is deferred to
             # the UI so search returns as soon as ranking finishes.
             with timer.measure("thumbnail"):
-                for score, tile, exact_match in reranked[:top_k]:
+                for tile, _sc, paths in collapsed[:top_k]:
                     thumbnail_path = get_thumbnail_path(
                         Path(tile.file_path),
                         self._thumbnail_dir,
                     )
+                    tile_id = tile.id
+                    raw_score = (
+                        score_by_id.get(int(tile_id), float(_sc))
+                        if tile_id is not None
+                        else float(_sc)
+                    )
+                    exact_match = (
+                        exact_by_id.get(int(tile_id), False)
+                        if tile_id is not None
+                        else False
+                    )
                     similarity_percentage = calibrate_display_percent(
-                        score,
+                        raw_score,
                         exact_match=exact_match,
                     )
-                    tile_id = tile.id
                     orb_pts = (
                         orb_points_by_tile.get(tile_id)
                         if tile_id is not None
@@ -985,6 +1013,8 @@ class SearchTilesUseCase:
                             similarity_score=similarity_percentage,
                             thumbnail_path=str(thumbnail_path),
                             orb_match_points=orb_pts,
+                            copy_paths=list(paths),
+                            extra_copy_count=max(0, len(paths) - 1),
                         )
                     )
 

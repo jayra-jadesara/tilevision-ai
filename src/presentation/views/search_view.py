@@ -85,13 +85,14 @@ _TABLE_COLUMNS = [
 
 _PATH_COL = 5
 _ACTIONS_COL = 6
-# Preview + Why + Copy + Reveal
-_ACTIONS_COL_WIDTH = 140
+# Preview + Copy + Reveal (Why is omitted unless ORB data exists).
+_ACTIONS_COL_WIDTH = 104
+_ACTIONS_COL_WIDTH_WITH_WHY = 136
 
 
 class _ResultActionsWidget(QWidget):
     """
-    Compact icon actions: Preview, Why this match, Copy path, Reveal.
+    Compact themed line-icon actions: Preview, optional Why, Copy, Reveal.
 
     Copied feedback is a floating overlay (not in the layout) so it never
     squeezes the Image Path column or causes double-text overlap.
@@ -116,8 +117,10 @@ class _ResultActionsWidget(QWidget):
         self._on_copy = on_copy
         self._on_reveal = on_reveal
         self._on_why = on_why
+        self._why_enabled = bool(why_enabled and on_why is not None)
         self._fade_anim: Optional[QPropertyAnimation] = None
         self._copied_toast: Optional[QLabel] = None
+        self._why_btn: Optional[QToolButton] = None
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(4, 2, 4, 2)
@@ -129,44 +132,43 @@ class _ResultActionsWidget(QWidget):
         reveal_tip = reveal_action_label().lstrip("📍 ").strip()
 
         self._preview_btn = self._make_action_btn(
-            "👁", "Preview tile", "ResultPreviewButton"
+            "Preview tile", "ResultPreviewButton"
         )
         self._preview_btn.clicked.connect(lambda: self._on_preview(self._path))
 
-        self._why_btn = self._make_action_btn(
-            "?",
-            "Why this match" if why_enabled else "No ORB match data for this result",
-            "ResultWhyButton",
-        )
-        self._why_btn.setEnabled(bool(why_enabled and on_why is not None))
-        if why_enabled and on_why is not None:
+        # Only render Why when ORB geometric data exists (never for description
+        # search). Hidden — not merely disabled — so path gets the column space.
+        if self._why_enabled:
+            self._why_btn = self._make_action_btn(
+                "Why this match", "ResultWhyButton"
+            )
             self._why_btn.clicked.connect(lambda: self._on_why(self._path))
 
-        self._copy_btn = self._make_action_btn(
-            "⧉", "Copy path", "ResultCopyButton"
-        )
+        self._copy_btn = self._make_action_btn("Copy path", "ResultCopyButton")
         self._copy_btn.clicked.connect(self._handle_copy)
 
-        self._reveal_btn = self._make_action_btn(
-            "📂", reveal_tip, "ResultRevealButton"
-        )
+        self._reveal_btn = self._make_action_btn(reveal_tip, "ResultRevealButton")
         self._reveal_btn.clicked.connect(lambda: self._on_reveal(self._path))
 
         layout.addWidget(self._preview_btn)
-        layout.addWidget(self._why_btn)
+        if self._why_btn is not None:
+            layout.addWidget(self._why_btn)
         layout.addWidget(self._copy_btn)
         layout.addWidget(self._reveal_btn)
         self._apply_styles()
 
     @staticmethod
-    def _make_action_btn(icon_text: str, tooltip: str, object_name: str) -> QToolButton:
+    def _make_action_btn(tooltip: str, object_name: str) -> QToolButton:
         btn = QToolButton()
         btn.setObjectName(object_name)
-        btn.setText(icon_text)
         btn.setToolTip(tooltip)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setFixedSize(28, 28)
         btn.setAutoRaise(True)
+        btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        # Kill the default Windows blue focus rectangle; themed ring is in QSS.
+        btn.setAttribute(Qt.WidgetAttribute.WA_MacShowFocusRect, False)
+        btn.setStyle(btn.style())
         return btn
 
     def _handle_copy(self) -> None:
@@ -246,7 +248,50 @@ class _ResultActionsWidget(QWidget):
         self._apply_styles()
 
     def _apply_styles(self) -> None:
+        from src.presentation.icons.result_action_icons import (
+            icon_copy,
+            icon_preview,
+            icon_reveal,
+            icon_why,
+        )
+
         p = get_palette(self._theme)
+        normal = p["text_secondary"]
+        accent = p["accent_text"]
+        disabled = p.get("text_faint", p["text_secondary"])
+
+        self._preview_btn.setIcon(icon_preview(normal))
+        self._preview_btn.setIconSize(QSize(18, 18))
+        self._copy_btn.setIcon(icon_copy(normal))
+        self._copy_btn.setIconSize(QSize(18, 18))
+        self._reveal_btn.setIcon(icon_reveal(normal))
+        self._reveal_btn.setIconSize(QSize(18, 18))
+        if self._why_btn is not None:
+            self._why_btn.setIcon(icon_why(normal))
+            self._why_btn.setIconSize(QSize(18, 18))
+
+        # Store accent icons for hover via property (QSS cannot swap QIcon).
+        self._preview_btn.setProperty("icon_normal", icon_preview(normal))
+        self._preview_btn.setProperty("icon_hover", icon_preview(accent))
+        self._copy_btn.setProperty("icon_normal", icon_copy(normal))
+        self._copy_btn.setProperty("icon_hover", icon_copy(accent))
+        self._reveal_btn.setProperty("icon_normal", icon_reveal(normal))
+        self._reveal_btn.setProperty("icon_hover", icon_reveal(accent))
+        if self._why_btn is not None:
+            self._why_btn.setProperty("icon_normal", icon_why(normal))
+            self._why_btn.setProperty("icon_hover", icon_why(accent))
+
+        for btn in (
+            self._preview_btn,
+            self._copy_btn,
+            self._reveal_btn,
+            self._why_btn,
+        ):
+            if btn is None:
+                continue
+            btn.enterEvent = self._make_hover_enter(btn)  # type: ignore[method-assign]
+            btn.leaveEvent = self._make_hover_leave(btn)  # type: ignore[method-assign]
+
         self.setStyleSheet(
             f"""
             QToolButton {{
@@ -254,16 +299,48 @@ class _ResultActionsWidget(QWidget):
                 color: {p['text_secondary']};
                 border: 1px solid {p['border_strong']};
                 border-radius: 5px;
-                font-size: 13px;
                 padding: 0;
+                outline: none;
             }}
             QToolButton:hover {{
                 background-color: {p['button_hover']};
-                color: {p['accent_text']};
                 border-color: {p['accent_soft']};
+            }}
+            QToolButton:pressed {{
+                background-color: {p['accent_deep']};
+                border-color: {p['accent']};
+            }}
+            QToolButton:disabled {{
+                background-color: {p['bg_panel']};
+                border-color: {p['border_strong']};
+                color: {disabled};
+            }}
+            QToolButton:focus {{
+                border: 2px solid {p['accent']};
+                outline: none;
             }}
             """
         )
+
+    @staticmethod
+    def _make_hover_enter(btn: QToolButton):
+        def _enter(event) -> None:
+            hover = btn.property("icon_hover")
+            if hover is not None:
+                btn.setIcon(hover)
+            QToolButton.enterEvent(btn, event)
+
+        return _enter
+
+    @staticmethod
+    def _make_hover_leave(btn: QToolButton):
+        def _leave(event) -> None:
+            normal = btn.property("icon_normal")
+            if normal is not None:
+                btn.setIcon(normal)
+            QToolButton.leaveEvent(btn, event)
+
+        return _leave
 
 
 class DropZone(QFrame):
@@ -1067,20 +1144,25 @@ class SearchView(QWidget):
                 message_box.information(self, "Export Catalogue", "Select one or more results first.")
                 return
 
+        # Expand content-deduped rows so every catalogue copy is listed in the
+        # PDF (primary first, then other paths) — never silently drop copies.
+        export_results = self._expand_results_for_export(
+            self._current_results, selected_indices
+        )
         service = PDFExportService()
         try:
             created = service.export_catalogue(
                 output_file=output_path,
                 query_image_path=self._current_query_image_path,
-                results=self._current_results,
+                results=export_results,
                 options=options,
-                selected_indices=selected_indices,
+                selected_indices=None,
             )
         except Exception as exc:
             message_box.critical(self, "Export Failed", str(exc))
             return
 
-        count = len(selected_indices) if selected_indices is not None else len(self._current_results)
+        count = len(export_results)
         if hasattr(self._viewmodel, "record_catalogue_export"):
             self._viewmodel.record_catalogue_export(created, count)
         message_box.information(self, "Export Complete", f"Catalogue saved to:\n{created}")
@@ -1753,6 +1835,7 @@ class SearchView(QWidget):
         palette = get_palette(self._theme)
         best_match_bg = QColor(palette["highlight_bg"])
         best_match_text = QColor(palette["text_primary"])
+        any_why = False
 
         for row, result in enumerate(results):
             tile = result.tile
@@ -1778,17 +1861,31 @@ class SearchView(QWidget):
             self._results_table.setItem(row, 3, QTableWidgetItem(tile.brand or "—"))
             self._results_table.setItem(row, 4, QTableWidgetItem(tile.category or "—"))
 
-            # Plain path text only — actions live in the Actions column so the
-            # path never double-paints under a cell widget.
-            path_item = QTableWidgetItem(tile.file_path)
-            path_item.setToolTip(tile.file_path)
+            # Plain path text + optional "+N copies" badge. Actions live in
+            # the Actions column so the path never double-paints under a widget.
+            extra = int(getattr(result, "extra_copy_count", 0) or 0)
+            path_label = tile.file_path
+            if extra > 0:
+                path_label = f"{tile.file_path}  (+{extra} copies)"
+            path_item = QTableWidgetItem(path_label)
+            copy_paths = list(getattr(result, "copy_paths", None) or [tile.file_path])
+            tip_lines = ["Primary:"] + [f"  {copy_paths[0]}"]
+            if len(copy_paths) > 1:
+                tip_lines.append("Other copies:")
+                tip_lines.extend(f"  {p}" for p in copy_paths[1:])
+                tip_lines.append("Right-click → Show all copies…")
+            path_item.setToolTip("\n".join(tip_lines))
             self._results_table.setItem(row, _PATH_COL, path_item)
 
             # Placeholder item under the actions widget (selection/background).
             actions_item = QTableWidgetItem("")
             actions_item.setFlags(actions_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self._results_table.setItem(row, _ACTIONS_COL, actions_item)
+            # Why only when ORB data exists *and* this is not a description search
+            # (no query photo to overlay). Hidden entirely otherwise.
+            search_kind = getattr(self._viewmodel, "_active_search_kind", "image")
             has_orb = bool(getattr(result, "orb_match_points", None))
+            show_why = bool(has_orb and search_kind != "description")
             actions = _ResultActionsWidget(
                 tile.file_path,
                 theme=self._theme,
@@ -1796,10 +1893,12 @@ class SearchView(QWidget):
                 on_copy=self._copy_path_text,
                 on_reveal=self._reveal_path_deferred,
                 on_why=lambda _p, r=row: self._why_at_row(r),
-                why_enabled=has_orb,
+                why_enabled=show_why,
                 parent=self._results_table,
             )
             self._results_table.setCellWidget(row, _ACTIONS_COL, actions)
+            if show_why:
+                any_why = True
 
             if is_best_match:
                 for col in range(self._results_table.columnCount()):
@@ -1811,7 +1910,8 @@ class SearchView(QWidget):
                         font.setBold(True)
                         item.setFont(font)
 
-        self._results_table.setColumnWidth(_ACTIONS_COL, _ACTIONS_COL_WIDTH)
+        width = _ACTIONS_COL_WIDTH_WITH_WHY if any_why else _ACTIONS_COL_WIDTH
+        self._results_table.setColumnWidth(_ACTIONS_COL, width)
 
         # Defer pixmap I/O until after the table is visible.
         generation = self._results_generation
@@ -1893,11 +1993,24 @@ class SearchView(QWidget):
 
         from src.utils.reveal_file import reveal_action_label
 
+        result = self._current_results[row]
+        copy_paths = list(getattr(result, "copy_paths", None) or [result.tile.file_path])
+        extra = int(getattr(result, "extra_copy_count", 0) or 0)
+
         menu = QMenu(self)
         open_image_action = menu.addAction("Open Image")
-        open_folder_action = menu.addAction("📂  Open Containing Folder")
+        open_folder_action = menu.addAction("Open Containing Folder")
         reveal_action = menu.addAction(reveal_action_label())
         copy_path_action = menu.addAction("Copy Path")
+        show_copies_action = None
+        reveal_other_actions: list = []
+        if extra > 0 and len(copy_paths) > 1:
+            menu.addSeparator()
+            show_copies_action = menu.addAction("Show all copies…")
+            others = menu.addMenu("Reveal other copy")
+            for other in copy_paths[1:]:
+                act = others.addAction(other)
+                reveal_other_actions.append((act, other))
 
         chosen = menu.exec(self._results_table.viewport().mapToGlobal(position))
         if chosen == open_image_action:
@@ -1908,6 +2021,55 @@ class SearchView(QWidget):
             self._reveal_file_at_row(row)
         elif chosen == copy_path_action:
             self._copy_path_at_row(row)
+        elif show_copies_action is not None and chosen == show_copies_action:
+            message_box.information(
+                self,
+                "All copies",
+                "\n".join(copy_paths),
+            )
+        else:
+            for act, other_path in reveal_other_actions:
+                if chosen == act:
+                    self._reveal_path_deferred(other_path)
+                    break
+
+    @staticmethod
+    def _expand_results_for_export(
+        results: List[SearchResult],
+        selected_indices: Optional[List[int]],
+    ) -> List[SearchResult]:
+        """
+        Flatten ``copy_paths`` into one SearchResult per file path.
+
+        Export lists every copy (does not silently drop duplicates). Selected
+        rows expand to all of that tile's known copies.
+        """
+        from dataclasses import replace
+
+        chosen = (
+            [results[i] for i in selected_indices if 0 <= i < len(results)]
+            if selected_indices is not None
+            else list(results)
+        )
+        expanded: List[SearchResult] = []
+        for result in chosen:
+            paths = list(getattr(result, "copy_paths", None) or [])
+            if not paths:
+                paths = [result.tile.file_path]
+            for i, path in enumerate(paths):
+                if i == 0:
+                    expanded.append(result)
+                    continue
+                tile = replace(result.tile, file_path=path, file_name=Path(path).name)
+                expanded.append(
+                    replace(
+                        result,
+                        tile=tile,
+                        copy_paths=[path],
+                        extra_copy_count=0,
+                    )
+                )
+        return expanded
 
     def _copy_path_text(self, path: str) -> None:
         """Copy path silently — Copied feedback is the floating toast on the icon."""
