@@ -334,11 +334,16 @@ class DatabaseContext:
 
     def prepare_for_seal(self) -> None:
         """Checkpoint WAL then close every pooled connection before seal."""
+        import gc
+
         try:
             self.wal_checkpoint_truncate()
         except Exception:
             logger.exception("WAL checkpoint before seal raised unexpectedly")
         self.close_all()
+        # Windows keeps the file locked until the Connection C objects are
+        # collected; force a GC so seal_database's unlink can succeed.
+        gc.collect()
 
     @contextmanager
     def session(self) -> Generator[sqlite3.Connection, None, None]:
