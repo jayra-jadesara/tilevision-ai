@@ -1,13 +1,16 @@
 """
 Application-level UI activity logging for TileVision AI.
 
-Installs a ``QApplication`` event filter that writes INFO lines to logger
-``tilevision.ui`` for meaningful user actions (clicks, menu opens, tab
-switches, dialogs, shortcuts). Sensitive fields (licence / password) are
-never logged as typed text.
+Installs a ``QApplication`` event filter for event types that exist in
+PySide6 (Show / Close / ContextMenu / Drop / KeyPress / WindowStateChange /
+MouseButtonRelease) plus signal hooks for actions, tabs, combos, and
+stacked widgets. Sensitive fields (licence / password) are never logged as
+typed text.
 
 Meaningful actions can also be forwarded to the in-app Activity page via
 an optional ``activity_recorder(activity_type, message)`` callback.
+Navigation ("Opened Index" etc.) is owned by ``MainWindow._navigate`` —
+this filter does not double-record it.
 """
 
 from __future__ import annotations
@@ -15,7 +18,8 @@ from __future__ import annotations
 import logging
 import re
 import time
-from typing import Callable, Optional
+import weakref
+from typing import Callable, Optional, Set
 
 from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtGui import QAction, QKeySequence
@@ -28,6 +32,8 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QRadioButton,
+    QStackedWidget,
+    QTabBar,
     QTabWidget,
     QTableWidget,
     QToolButton,
@@ -47,35 +53,16 @@ _SENSITIVE_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 
-_MEANINGFUL_BUTTON_HINTS = (
-    "export",
-    "rebuild",
-    "update",
-    "index",
-    "search",
-    "browse",
-    "start",
-    "cancel",
-    "pause",
-    "resume",
-    "crop",
-    "auto",
-    "precise",
-    "manual",
-    "duplicate",
-    "help",
-    "settings",
-    "theme",
-    "preview",
-    "reveal",
-    "copy",
-    "activate",
-    "check for update",
-)
-
 
 class UiActivityFilter(QObject):
-    """QApplication event filter — logs UI actions without pixel coordinates."""
+    """
+    QApplication event filter + signal hooks for UI activity logging.
+
+    PySide6 has no ``QEvent.Type.Triggered`` / ``CurrentChanged`` — those
+    used to raise on every non-button event and were swallowed at DEBUG,
+    leaving only button clicks logged. Actions / tabs / combos / stacks
+    are wired via real Qt signals instead.
+    """
 
     def __init__(
         self,
@@ -87,6 +74,7 @@ class UiActivityFilter(QObject):
         self._recorder = activity_recorder
         self._last_key: Optional[str] = None
         self._last_mono: float = 0.0
+        self._hooked_ids: Set[int] = set()
 
     def set_activity_recorder(self, recorder: ActivityRecorder) -> None:
         self._recorder = recorder
@@ -95,12 +83,21 @@ class UiActivityFilter(QObject):
         try:
             self._handle(obj, event)
         except Exception:
-            # Never break the UI for logging.
+            # Never break the UI for logging — one bad branch must not
+            # kill the others (log at DEBUG only).
             logger.debug("ui activity filter error", exc_info=True)
         return False
 
     def _handle(self, obj: QObject, event: QEvent) -> None:
         et = event.type()
+
+        # Install signal hooks when widgets appear / children are added.
+        if et in (QEvent.Type.Show, QEvent.Type.ChildAdded, QEvent.Type.Polish):
+            self._maybe_hook_signals(obj)
+            if et == QEvent.Type.ChildAdded:
+                child = event.child()  # type: ignore[attr-defined]
+                if isinstance(child, QObject):
+                    self._maybe_hook_signals(child)
 
         if et == QEvent.Type.MouseButtonRelease and isinstance(obj, QAbstractButton):
             if event.button() != Qt.MouseButton.LeftButton:  # type: ignore[attr-defined]
@@ -108,27 +105,9 @@ class UiActivityFilter(QObject):
             self._log_click(obj)
             return
 
-        if et == QEvent.Type.Triggered and isinstance(obj, QAction):
-            self._log_action(obj)
-            return
-
         if et == QEvent.Type.Show and isinstance(obj, QMenu):
             title = (obj.title() or obj.objectName() or "menu").strip() or "menu"
             self._emit_log(f"[UI] menu open '{title}' (QMenu) in {self._owner_name(obj)}")
-            return
-
-        if et == QEvent.Type.CurrentChanged and isinstance(obj, QTabWidget):
-            idx = obj.currentIndex()
-            label = obj.tabText(idx) if idx >= 0 else "?"
-            self._emit_log(
-                f"[UI] tab '{label}' (QTabWidget) in {self._owner_name(obj)}"
-            )
-            self._maybe_record("navigation", f"Switched to tab '{label}'")
-            return
-
-        if et in (QEvent.Type.FocusIn,) and isinstance(obj, QComboBox):
-            # Combo activation is noisy; log on activated via signal hookups
-            # is better — here log selection change via QEvent.Type if needed.
             return
 
         if et == QEvent.Type.MouseButtonDblClick and isinstance(obj, QTableWidget):
@@ -168,16 +147,112 @@ class UiActivityFilter(QObject):
             return
 
         if et == QEvent.Type.Drop and isinstance(obj, QWidget):
-            self._emit_log(f"[UI] drop onto ({obj.__class__.__name__}) in {self._owner_name(obj)}")
+            self._emit_log(
+                f"[UI] drop onto ({obj.__class__.__name__}) in {self._owner_name(obj)}"
+            )
             self._maybe_record("search", "Dropped image onto search drop zone")
             return
 
-        # Checkbox / radio toggles
-        if et == QEvent.Type.MouseButtonRelease and isinstance(
-            obj, (QCheckBox, QRadioButton)
-        ):
-            # Also handled as QAbstractButton above — skip duplicate.
+    def _maybe_hook_signals(self, obj: QObject) -> None:
+        """Connect once to signals that replace non-existent QEvent types."""
+        oid = id(obj)
+        if oid in self._hooked_ids:
             return
+
+        hooked = False
+        if isinstance(obj, QAction):
+            obj.triggered.connect(self._on_action_triggered)
+            hooked = True
+        elif isinstance(obj, QTabWidget):
+            obj.currentChanged.connect(
+                lambda idx, w=weakref.ref(obj): self._on_tab_changed(w, idx)
+            )
+            hooked = True
+        elif isinstance(obj, QTabBar):
+            obj.currentChanged.connect(
+                lambda idx, w=weakref.ref(obj): self._on_tab_bar_changed(w, idx)
+            )
+            hooked = True
+        elif isinstance(obj, QComboBox):
+            obj.activated.connect(
+                lambda idx, w=weakref.ref(obj): self._on_combo_activated(w, idx)
+            )
+            hooked = True
+        elif isinstance(obj, QStackedWidget):
+            obj.currentChanged.connect(
+                lambda idx, w=weakref.ref(obj): self._on_stack_changed(w, idx)
+            )
+            hooked = True
+
+        if hooked:
+            self._hooked_ids.add(oid)
+
+        # Also walk immediate children so late-created actions are covered.
+        if isinstance(obj, QWidget):
+            for child in obj.findChildren(QAction):
+                cid = id(child)
+                if cid not in self._hooked_ids:
+                    child.triggered.connect(self._on_action_triggered)
+                    self._hooked_ids.add(cid)
+            for child in obj.findChildren(QTabWidget):
+                self._maybe_hook_signals(child)
+            for child in obj.findChildren(QComboBox):
+                self._maybe_hook_signals(child)
+            for child in obj.findChildren(QStackedWidget):
+                self._maybe_hook_signals(child)
+            for child in obj.findChildren(QTabBar):
+                self._maybe_hook_signals(child)
+
+    def _on_action_triggered(self, checked: bool = False) -> None:  # noqa: ARG002
+        action = self.sender()
+        if isinstance(action, QAction):
+            self._log_action(action)
+
+    def _on_tab_changed(self, widget_ref: weakref.ref, index: int) -> None:
+        widget = widget_ref()
+        if not isinstance(widget, QTabWidget):
+            return
+        label = widget.tabText(index) if index >= 0 else "?"
+        self._emit_log(
+            f"[UI] tab '{label}' (QTabWidget) in {self._owner_name(widget)}"
+        )
+        self._maybe_record("navigation", f"Switched to tab '{label}'")
+
+    def _on_tab_bar_changed(self, widget_ref: weakref.ref, index: int) -> None:
+        widget = widget_ref()
+        if not isinstance(widget, QTabBar):
+            return
+        label = widget.tabText(index) if index >= 0 else "?"
+        self._emit_log(
+            f"[UI] tab '{label}' (QTabBar) in {self._owner_name(widget)}"
+        )
+
+    def _on_combo_activated(self, widget_ref: weakref.ref, index: int) -> None:
+        widget = widget_ref()
+        if not isinstance(widget, QComboBox):
+            return
+        label = widget.itemText(index) if index >= 0 else widget.currentText()
+        name = self._widget_label(widget)
+        self._emit_log(
+            f"[UI] combo '{name}' -> '{label}' (QComboBox) in {self._owner_name(widget)}"
+        )
+        self._maybe_record("search", f"Filter '{name}' set to '{label}'")
+
+    def _on_stack_changed(self, widget_ref: weakref.ref, index: int) -> None:
+        widget = widget_ref()
+        if not isinstance(widget, QStackedWidget):
+            return
+        page = widget.widget(index)
+        name = (
+            (page.objectName() or page.__class__.__name__)
+            if page is not None
+            else str(index)
+        )
+        self._emit_log(
+            f"[UI] stack page '{name}' (QStackedWidget) in {self._owner_name(widget)}"
+        )
+        # Do NOT record navigation here — MainWindow._navigate owns Activity
+        # "Opened …" lines so they appear once.
 
     def _log_click(self, button: QAbstractButton) -> None:
         if isinstance(button, QCheckBox):
@@ -231,7 +306,7 @@ class UiActivityFilter(QObject):
         self._emit_log(f"[UI] shortcut '{seq}' in {self._owner_name(obj)}")
 
     def _widget_label(self, widget: QWidget) -> str:
-        for attr in ("text", "accessibleName", "toolTip", "objectName"):
+        for attr in ("text", "accessibleName", "toolTip", "objectName", "currentText"):
             getter = getattr(widget, attr, None)
             if callable(getter):
                 try:
@@ -268,7 +343,6 @@ class UiActivityFilter(QObject):
         while cur is not None:
             name = cur.objectName() or ""
             if name and name not in {"qt_scrollarea_viewport", "qt_scrollarea_hcontainer"}:
-                # Prefer known view objectNames
                 if name.endswith("View") or name in {
                     "MainWindow",
                     "NavButton",
@@ -301,15 +375,25 @@ class UiActivityFilter(QObject):
 
     def _maybe_record_click(self, label: str, owner: str) -> None:
         low = label.casefold()
-        if any(h in low for h in ("index", "search", "settings", "help", "activity", "history", "catalog", "pricing")):
+        # Navigation ("Opened Index/Search/…") is recorded once by
+        # MainWindow._navigate — skip here to avoid Activity page duplicates.
+        if any(
+            h in low
+            for h in (
+                "index",
+                "search",
+                "settings",
+                "help",
+                "activity",
+                "history",
+                "catalog",
+                "pricing",
+            )
+        ):
             if "NavButton" in owner or owner == "MainWindow" or "nav" in low:
-                self._maybe_record("navigation", f"Opened {label}")
                 return
         if "export" in low:
             self._maybe_record("export", f"Clicked '{label}'")
-            return
-        if "help" in low:
-            self._maybe_record("navigation", "Opened Help")
             return
         if any(h in low for h in ("rebuild", "update search", "full rebuild", "start indexing")):
             self._maybe_record("index", f"Clicked '{label}'")
