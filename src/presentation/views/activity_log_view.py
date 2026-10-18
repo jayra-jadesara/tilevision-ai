@@ -45,6 +45,8 @@ _TYPE_LABELS = {
     "settings": "Settings",
     "maintenance": "Maintenance",
     "navigation": "Navigation",
+    "crop": "Crop",
+    "ui": "UI",
 }
 
 

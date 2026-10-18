@@ -780,6 +780,20 @@ class MainWindow(QMainWindow):
         self._content_stack.setCurrentIndex(index)
         logger.debug(f"Navigated to content stack index: {index}")
 
+        page_names = {
+            0: "Index",
+            1: "Search",
+            2: "Catalog",
+            3: "Settings",
+            4: "Help",
+            5: "Pricing",
+            6: "History",
+            7: "Activity",
+        }
+        page = page_names.get(index)
+        if page:
+            self._record_activity("navigation", f"Opened {page}")
+
         if index == 0 and hasattr(self, "_indexing_view") and hasattr(
             self._indexing_view, "refresh_folder_display"
         ):

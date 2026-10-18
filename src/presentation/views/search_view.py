@@ -1105,7 +1105,22 @@ class SearchView(QWidget):
     def _on_filter_changed(self, field: str, value: str) -> None:
         # Ignore the placeholder "Any X" item text as a real filter value.
         is_placeholder = value.startswith("Any ")
-        self._viewmodel.set_filter(field, "" if is_placeholder else value)
+        applied = "" if is_placeholder else value
+        logger.info(
+            "[UI] filter '%s' → %s (QComboBox) in SearchView",
+            field,
+            applied or "(any)",
+        )
+        recorder = getattr(self._viewmodel, "_activity_repo", None)
+        if recorder is not None:
+            try:
+                recorder.record_activity(
+                    "search",
+                    f"Filter {field}={applied or 'any'}",
+                )
+            except Exception:
+                pass
+        self._viewmodel.set_filter(field, applied)
 
     def _on_export_clicked(self) -> None:
         import traceback
