@@ -140,8 +140,14 @@ def test_export_12_photos_timing_and_size(tmp_path):
     # Soft bound — must stay responsive-scale (worker moves this off UI).
     assert elapsed < 30.0, f"export too slow: {elapsed:.1f}s"
     assert size_mb < 25.0, f"PDF too large: {size_mb:.1f} MB"
-    # Record for PR evidence
-    evidence = Path("/opt/cursor/artifacts")
+    # Record for PR evidence (writable path — CI macOS cannot create /opt/cursor).
+    import os
+
+    evidence = Path(
+        os.environ.get("TILEVISION_ARTIFACT_DIR")
+        or os.environ.get("CURSOR_ARTIFACT_DIR")
+        or tmp_path
+    )
     evidence.mkdir(parents=True, exist_ok=True)
     (evidence / "export_twelve_timing.txt").write_text(
         f"elapsed_s={elapsed:.2f}\nsize_mb={size_mb:.2f}\n",
@@ -151,9 +157,15 @@ def test_export_12_photos_timing_and_size(tmp_path):
 
 def test_render_export_pdf_pages(tmp_path):
     """Attach light-page PNG renders for single / description / multi cases."""
+    import os
+
     import pypdfium2 as pdfium
 
-    artifacts = Path("/opt/cursor/artifacts/export_pdf_renders")
+    artifacts = Path(
+        os.environ.get("TILEVISION_ARTIFACT_DIR")
+        or os.environ.get("CURSOR_ARTIFACT_DIR")
+        or tmp_path
+    ) / "export_pdf_renders"
     artifacts.mkdir(parents=True, exist_ok=True)
 
     def _build(name: str, *, query: str | None, results):
