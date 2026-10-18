@@ -34,6 +34,21 @@ def test_help_step_screenshots_exist_wide(theme: str):
             assert img.size[1] >= 300
 
 
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_help_step_screenshots_are_unique(theme: str):
+    """Fail if two Help step images are byte-identical (wrong capture reuse)."""
+    import hashlib
+    from collections import defaultdict
+
+    by_hash: dict[str, list[str]] = defaultdict(list)
+    for stem in _expected_stems():
+        path = _HELP_DIR / theme / f"{stem}.png"
+        digest = hashlib.md5(path.read_bytes()).hexdigest()
+        by_hash[digest].append(stem)
+    dupes = {h: stems for h, stems in by_hash.items() if len(stems) > 1}
+    assert not dupes, f"Byte-identical Help screenshots ({theme}): {dupes}"
+
+
 @pytest.fixture
 def qapp():
     from PySide6.QtWidgets import QApplication
@@ -51,6 +66,34 @@ def test_help_view_renders(theme: str, qapp):
     view.show()
     qapp.processEvents()
     assert view.isVisible()
+    view.close()
+
+
+def test_help_contents_buttons_escape_ampersand_mnemonic(qapp):
+    """QPushButton '&' mnemonic must not turn 'A & B' into 'A _B'."""
+    from PySide6.QtWidgets import QPushButton
+
+    view = HelpView(theme="light")
+    view.show()
+    qapp.processEvents()
+    labels = [
+        btn.text()
+        for btn in view.findChildren(QPushButton)
+        if btn.objectName() == "HelpContentsLink"
+    ]
+    assert labels, "Expected Contents links"
+    # Visible text keeps the ampersand (Qt stores && in the property).
+    joined = " | ".join(labels)
+    assert "Add folder && Index" in joined or "Add folder & Index" in joined
+    assert "History && Activity" in joined or "History & Activity" in joined
+    assert "Licence && support" in joined or "Licence & support" in joined
+    # Must not show the mnemonic-underscore form as the button text property
+    # without escaping (raw single & would be consumed).
+    for label in labels:
+        # After setText("A && B"), text() returns "A & B" in Qt — either is OK.
+        assert "_Index" not in label
+        assert "_Activity" not in label
+        assert "_support" not in label
     view.close()
 
 

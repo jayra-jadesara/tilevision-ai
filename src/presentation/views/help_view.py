@@ -239,10 +239,14 @@ class HelpView(QWidget):
         heading.setObjectName("HelpContentsTitle")
         layout.addWidget(heading)
         for step in _STEPS:
-            link = QPushButton(f"{step.number}. {step.title}")
+            # QPushButton treats '&' as a mnemonic marker ("Add folder & Index"
+            # rendered as "Add folder _Index"). Escape as '&&'.
+            link = QPushButton(f"{step.number}. {step.title}".replace("&", "&&"))
             link.setObjectName("HelpContentsLink")
             link.setCursor(Qt.CursorShape.PointingHandCursor)
             link.setFlat(True)
+            link.setAutoDefault(False)
+            link.setDefault(False)
             link.clicked.connect(
                 lambda _checked=False, n=step.number: self._scroll_to_step(n)
             )
