@@ -17,6 +17,7 @@ import hashlib
 import logging
 import tempfile
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from html import escape as html_escape
@@ -47,6 +48,11 @@ logger = logging.getLogger("tilevision.services.pdf_export")
 _PDF_IMAGE_MAX_EDGE = 1200
 _PDF_JPEG_QUALITY = 85
 _UNKNOWN_LABELS = {"", "unknown", "n/a", "none", "—", "-"}
+# Cap the shared JPEG downscale cache under the system temp dir.
+_PDF_CACHE_MAX_BYTES = 200 * 1024 * 1024  # 200 MiB
+_PDF_CACHE_MAX_AGE_S = 7 * 24 * 3600  # 7 days
+_pdf_cache_prune_lock = threading.Lock()
+_pdf_cache_last_prune_s = 0.0
 
 try:
     from src.core.models import SearchResult
@@ -856,6 +862,7 @@ class PDFExportService:
         src = Path(image_path)
         cache_dir = Path(tempfile.gettempdir()) / "tilevision_pdf_img_cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
+        self._prune_pdf_image_cache(cache_dir)
         try:
             stamp = f"{src.stat().st_mtime_ns}:{src.stat().st_size}:{_PDF_IMAGE_MAX_EDGE}"
         except OSError:
@@ -876,6 +883,45 @@ class PDFExportService:
                 )
             rgb.save(dest, format="JPEG", quality=_PDF_JPEG_QUALITY, optimize=True)
         return dest
+
+    @staticmethod
+    def _prune_pdf_image_cache(cache_dir: Path) -> None:
+        """Drop aged / excess JPEG cache files (at most once per minute)."""
+        global _pdf_cache_last_prune_s
+        now = time.time()
+        with _pdf_cache_prune_lock:
+            if now - _pdf_cache_last_prune_s < 60.0:
+                return
+            _pdf_cache_last_prune_s = now
+        try:
+            entries: list[tuple[float, int, Path]] = []
+            total = 0
+            for path in cache_dir.glob("*.jpg"):
+                try:
+                    st = path.stat()
+                except OSError:
+                    continue
+                if now - st.st_mtime > _PDF_CACHE_MAX_AGE_S:
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    continue
+                entries.append((st.st_mtime, st.st_size, path))
+                total += st.st_size
+            if total <= _PDF_CACHE_MAX_BYTES:
+                return
+            entries.sort()  # oldest first
+            for _mtime, size, path in entries:
+                if total <= _PDF_CACHE_MAX_BYTES:
+                    break
+                try:
+                    path.unlink(missing_ok=True)
+                    total -= size
+                except OSError:
+                    pass
+        except OSError as exc:
+            logger.debug("PDF image cache prune skipped: %s", exc)
 
     @staticmethod
     def _is_unknown(value: Optional[str]) -> bool:
