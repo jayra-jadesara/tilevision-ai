@@ -264,16 +264,41 @@ class DatabaseContext:
         self._local.conn = conn
         return conn
 
+    def wal_checkpoint_truncate(self) -> None:
+        """
+        Flush the WAL into the main DB file and truncate ``-wal``.
+
+        Must run while at least one connection is still open. Call this
+        before ``close_all()`` so ``seal_database`` encrypts a complete
+        catalogue and can delete ``-wal`` / ``-shm`` sidecars.
+        """
+        conn = self._thread_connection()
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+            conn.commit()
+            logger.info("SQLite WAL checkpoint (TRUNCATE) completed.")
+        except sqlite3.Error as exc:
+            logger.warning("WAL checkpoint before seal failed: %s", exc)
+
     def close_all(self) -> None:
         """Close every pooled connection (call on app shutdown)."""
         with self._pool_lock:
-            for conn in self._all_connections:
+            for conn in list(self._all_connections):
                 try:
                     conn.close()
                 except Exception:
                     pass
             self._all_connections.clear()
         self._local.conn = None
+        logger.info("All SQLite pooled connections closed.")
+
+    def prepare_for_seal(self) -> None:
+        """Checkpoint WAL then close every pooled connection before seal."""
+        try:
+            self.wal_checkpoint_truncate()
+        except Exception:
+            logger.exception("WAL checkpoint before seal raised unexpectedly")
+        self.close_all()
 
     @contextmanager
     def session(self) -> Generator[sqlite3.Connection, None, None]:
