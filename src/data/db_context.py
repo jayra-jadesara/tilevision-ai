@@ -142,6 +142,7 @@ class DatabaseContext:
                 include_search_image INTEGER NOT NULL DEFAULT 1,
                 include_image_path INTEGER NOT NULL DEFAULT 0,
                 export_only_selected INTEGER NOT NULL DEFAULT 0,
+                include_also_at INTEGER NOT NULL DEFAULT 1,
                 watermark_text TEXT DEFAULT '',
                 max_results INTEGER NOT NULL DEFAULT 12,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -224,6 +225,21 @@ class DatabaseContext:
                 f"""
                 ALTER TABLE tiles
                 ADD COLUMN {column} {definition}
+                """
+            )
+
+        # catalogue_profiles: optional "Also at" copy listing in PDF export
+        cursor.execute("PRAGMA table_info(catalogue_profiles)")
+        profile_columns = {
+            row["name"] if isinstance(row, sqlite3.Row) else row[1]
+            for row in cursor.fetchall()
+        }
+        if "include_also_at" not in profile_columns and profile_columns:
+            logger.info("Adding column: catalogue_profiles.include_also_at")
+            cursor.execute(
+                """
+                ALTER TABLE catalogue_profiles
+                ADD COLUMN include_also_at INTEGER NOT NULL DEFAULT 1
                 """
             )
 

@@ -13,11 +13,15 @@ Requires:
 
 from __future__ import annotations
 
+import hashlib
+import logging
+import tempfile
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from html import escape as html_escape
 from pathlib import Path
-from typing import Iterable, Optional, Sequence
+from typing import Callable, Iterable, Optional, Sequence
 
 from PIL import Image
 from reportlab.lib import colors
@@ -36,6 +40,13 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
+
+logger = logging.getLogger("tilevision.services.pdf_export")
+
+# Long-edge cap for embedded photos (keeps PDFs small and export off the UI thread).
+_PDF_IMAGE_MAX_EDGE = 1200
+_PDF_JPEG_QUALITY = 85
+_UNKNOWN_LABELS = {"", "unknown", "n/a", "none", "—", "-"}
 
 try:
     from src.core.models import SearchResult
@@ -67,10 +78,15 @@ class PdfExportOptions:
     include_image_path: bool = False
     include_similarity: bool = True
     include_selected_only: bool = False
+    # List extra copy paths under each tile instead of repeating the image.
+    include_also_at: bool = True
     max_results: int = 12
     landscape_mode: bool = False
     watermark_text: Optional[str] = None
     generated_by: str = "TileVision AI"
+
+
+ProgressCallback = Optional[Callable[[int, int, str], None]]  # done, total, label
 
 
 class PdfExportError(RuntimeError):
@@ -183,9 +199,20 @@ class PDFExportService:
         results: Sequence[SearchResult],
         options: Optional[PdfExportOptions] = None,
         selected_indices: Optional[Iterable[int]] = None,
+        *,
+        on_progress: ProgressCallback = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> str:
+        """
+        Build a catalogue PDF.
+
+        ``results`` must already be **unique tiles** (one row per product;
+        extra copies live on ``copy_paths``). ``max_results`` caps unique
+        tiles — never slot budget eaten by duplicate images.
+        """
         options = options or PdfExportOptions()
         output_path = Path(output_file).expanduser().resolve()
+        t0 = datetime.now()
 
         try:
             output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -195,6 +222,24 @@ class PDFExportService:
         filtered_results = self._filter_results(results, selected_indices, options.max_results)
         if not filtered_results:
             raise PdfExportError("No search results available to export.")
+
+        unique_tiles = len(filtered_results)
+        copy_paths_total = sum(
+            max(0, len(getattr(r, "copy_paths", None) or []) - 1)
+            for r in filtered_results
+        )
+        logger.info(
+            "Export catalogue start: unique_tiles=%s max_results=%s "
+            "extra_copy_paths=%s output=%s",
+            unique_tiles,
+            options.max_results,
+            copy_paths_total,
+            output_path,
+        )
+
+        self._raise_if_cancelled(cancel_event)
+        if on_progress is not None:
+            on_progress(0, max(1, unique_tiles + 2), "Preparing catalogue…")
 
         reference_id = datetime.now().strftime("CAT-%Y%m%d-%H%M%S")
         generated_at = datetime.now().strftime("%d %B %Y, %I:%M %p")
@@ -218,7 +263,12 @@ class PDFExportService:
         )
         story.append(PageBreak())
 
-        if options.include_search_image and query_image_path and Path(query_image_path).exists():
+        has_query = bool(
+            options.include_search_image
+            and query_image_path
+            and Path(query_image_path).exists()
+        )
+        if has_query:
             story.extend(
                 self._build_reference_page(
                     query_image_path,
@@ -229,21 +279,59 @@ class PDFExportService:
             )
             story.append(PageBreak())
         elif filtered_results:
+            # Description / multi-photo searches often have no single query
+            # image — cover + best-match intro still render correctly.
+            logger.info(
+                "Export: no single query image — using best-match intro page "
+                "(description or multi-photo search)."
+            )
             story.extend(self._build_best_match_only(filtered_results[0], options, content_width))
             story.append(Spacer(1, 6 * mm))
 
+        self._raise_if_cancelled(cancel_event)
         story.extend(
-            self._build_catalogue_section(filtered_results, options, content_width)
+            self._build_catalogue_section(
+                filtered_results,
+                options,
+                content_width,
+                on_progress=on_progress,
+                cancel_event=cancel_event,
+            )
         )
         story.append(PageBreak())
         story.extend(self._build_closing_page(options, reference_id, content_width))
+
+        self._raise_if_cancelled(cancel_event)
+        if on_progress is not None:
+            on_progress(unique_tiles + 1, unique_tiles + 2, "Writing PDF…")
 
         doc.build(
             story,
             onFirstPage=lambda c, d: self._decorate_page(c, d, options, reference_id),
             onLaterPages=lambda c, d: self._decorate_page(c, d, options, reference_id),
         )
+
+        elapsed = (datetime.now() - t0).total_seconds()
+        size_mb = output_path.stat().st_size / (1024 * 1024) if output_path.is_file() else 0.0
+        # Rough page estimate: cover + optional ref + ceil(cards/2) + closing
+        pages_est = 2 + (1 if has_query else 0) + max(1, (unique_tiles + 1) // 2)
+        logger.info(
+            "Export catalogue finish: unique_tiles=%s pages≈%s seconds=%.2f "
+            "size_mb=%.2f folder=%s",
+            unique_tiles,
+            pages_est,
+            elapsed,
+            size_mb,
+            output_path.parent,
+        )
+        if on_progress is not None:
+            on_progress(unique_tiles + 2, unique_tiles + 2, "Done")
         return str(output_path)
+
+    @staticmethod
+    def _raise_if_cancelled(cancel_event: Optional[threading.Event]) -> None:
+        if cancel_event is not None and cancel_event.is_set():
+            raise PdfExportError("Export cancelled.")
 
     def _filter_results(
         self,
@@ -251,12 +339,13 @@ class PDFExportService:
         selected_indices: Optional[Iterable[int]],
         max_results: int,
     ) -> list[SearchResult]:
+        """Apply selection then cap **unique tiles** (not expanded copies)."""
         if selected_indices is not None:
             index_set = {int(i) for i in selected_indices}
             filtered = [r for idx, r in enumerate(results) if idx in index_set]
         else:
             filtered = list(results)
-        return filtered[:max_results]
+        return filtered[: max(1, int(max_results))]
 
     # ── Cover ─────────────────────────────────────────────────────────────
 
@@ -479,6 +568,9 @@ class PDFExportService:
         results: Sequence[SearchResult],
         options: PdfExportOptions,
         width: float,
+        *,
+        on_progress: ProgressCallback = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> list:
         story: list = []
         story.append(Paragraph("Product Selection Sheet", self.styles["SectionHeading"]))
@@ -493,7 +585,12 @@ class PDFExportService:
 
         col_width = (width - 6 * mm) / 2
         cards: list = []
+        total = len(results)
         for index, result in enumerate(results, start=1):
+            self._raise_if_cancelled(cancel_event)
+            if on_progress is not None:
+                name = getattr(result.tile, "file_name", None) or f"tile {index}"
+                on_progress(index, total + 2, f"Embedding image {index}/{total}: {name}")
             cards.append(self._build_product_card(result, options, col_width, index))
 
         rows: list = []
@@ -532,15 +629,19 @@ class PDFExportService:
         else:
             image = Paragraph("No image available", self.styles["BodySmall"])
 
-        code = self._escape(getattr(tile, "product_code", None) or "N/A")
-        header = Paragraph(f"<b>{code}</b>", self.styles["ProductCode"])
+        code = self._product_header_label(tile)
+        header = Paragraph(f"<b>{self._escape(code)}</b>", self.styles["ProductCode"])
 
-        spec_lines = [
-            f"<b>Brand</b>&nbsp;&nbsp; {self._escape(getattr(tile, 'brand', None) or '—')}",
-            f"<b>Category</b>&nbsp;&nbsp; {self._escape(getattr(tile, 'category', None) or '—')}",
-            f"<b>Size</b>&nbsp;&nbsp; {self._escape(getattr(tile, 'size', None) or '—')}",
-            f"<b>Color</b>&nbsp;&nbsp; {self._escape(getattr(tile, 'color', None) or '—')}",
-        ]
+        spec_lines: list[str] = []
+        for label, raw in (
+            ("Brand", getattr(tile, "brand", None)),
+            ("Category", getattr(tile, "category", None)),
+            ("Size", getattr(tile, "size", None)),
+            ("Color", getattr(tile, "color", None)),
+        ):
+            if self._is_unknown(raw):
+                continue
+            spec_lines.append(f"<b>{label}</b>&nbsp;&nbsp; {self._escape(str(raw))}")
         if options.include_similarity:
             spec_lines.append(
                 f'<font color="#15803D"><b>Match: {result.similarity_score:.1f}%</b></font>'
@@ -549,17 +650,29 @@ class PDFExportService:
             spec_lines.append(
                 f'<font size="7" color="#64748B">{self._escape(tile.file_path)}</font>'
             )
+        if options.include_also_at:
+            also = self._also_at_paths(result)
+            if also:
+                listed = "<br/>".join(self._escape(p) for p in also)
+                spec_lines.append(
+                    f'<font size="7" color="#64748B"><b>Also at:</b><br/>{listed}</font>'
+                )
 
         rank_badge = Paragraph(
             f'<font color="#64748B">Rank #{rank}</font>',
             self.styles["MetaLabel"],
         )
 
+        body = (
+            Paragraph("<br/>".join(spec_lines), self.styles["MetaValue"])
+            if spec_lines
+            else Paragraph("", self.styles["MetaValue"])
+        )
         card = Table(
             [
                 [header],
                 [image],
-                [Paragraph("<br/>".join(spec_lines), self.styles["MetaValue"])],
+                [body],
                 [rank_badge],
             ],
             colWidths=[card_width],
@@ -724,13 +837,81 @@ class PDFExportService:
         return None
 
     def _make_rl_image(self, image_path: str, width: float, height: float) -> RLImage:
-        with Image.open(image_path) as img:
+        """
+        Embed a downscaled JPEG (max long edge ``_PDF_IMAGE_MAX_EDGE``).
+
+        Cached under the system temp dir so repeat exports of the same tile
+        stay cheap. Avoids freezing the UI on multi‑MB originals.
+        """
+        cached = self._cached_downscaled_jpeg(image_path)
+        with Image.open(cached) as img:
             img_w, img_h = img.size
-        ratio = min(width / img_w, height / img_h)
-        image = RLImage(image_path)
+        ratio = min(width / max(1, img_w), height / max(1, img_h))
+        image = RLImage(str(cached))
         image.drawWidth = img_w * ratio
         image.drawHeight = img_h * ratio
         return image
+
+    def _cached_downscaled_jpeg(self, image_path: str) -> Path:
+        src = Path(image_path)
+        cache_dir = Path(tempfile.gettempdir()) / "tilevision_pdf_img_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            stamp = f"{src.stat().st_mtime_ns}:{src.stat().st_size}:{_PDF_IMAGE_MAX_EDGE}"
+        except OSError:
+            stamp = f"{src}:{_PDF_IMAGE_MAX_EDGE}"
+        digest = hashlib.sha1(f"{src.resolve()}:{stamp}".encode("utf-8")).hexdigest()[:20]
+        dest = cache_dir / f"{digest}.jpg"
+        if dest.is_file() and dest.stat().st_size > 0:
+            return dest
+        with Image.open(src) as img:
+            rgb = img.convert("RGB")
+            w, h = rgb.size
+            long_edge = max(w, h)
+            if long_edge > _PDF_IMAGE_MAX_EDGE:
+                scale = _PDF_IMAGE_MAX_EDGE / float(long_edge)
+                rgb = rgb.resize(
+                    (max(1, int(w * scale)), max(1, int(h * scale))),
+                    Image.Resampling.LANCZOS,
+                )
+            rgb.save(dest, format="JPEG", quality=_PDF_JPEG_QUALITY, optimize=True)
+        return dest
+
+    @staticmethod
+    def _is_unknown(value: Optional[str]) -> bool:
+        if value is None:
+            return True
+        return str(value).strip().casefold() in _UNKNOWN_LABELS
+
+    @classmethod
+    def _product_header_label(cls, tile) -> str:
+        code = getattr(tile, "product_code", None)
+        if not cls._is_unknown(code):
+            return str(code).strip()
+        name = getattr(tile, "file_name", None) or ""
+        if name.strip():
+            return Path(name).stem or name
+        path = getattr(tile, "file_path", None) or ""
+        if path:
+            return Path(path).stem
+        return "Tile"
+
+    @staticmethod
+    def _also_at_paths(result: SearchResult) -> list[str]:
+        paths = list(getattr(result, "copy_paths", None) or [])
+        if len(paths) <= 1:
+            return []
+        primary = getattr(result.tile, "file_path", None)
+        extras = []
+        for p in paths:
+            if primary and Path(p).resolve() == Path(primary).resolve():
+                continue
+            extras.append(p)
+        # If primary wasn't in copy_paths[0], still skip the first entry when
+        # it matches the displayed tile path after expand-normalization.
+        if not extras and len(paths) > 1:
+            extras = paths[1:]
+        return extras
 
     @staticmethod
     def _escape(value: Optional[str]) -> str:

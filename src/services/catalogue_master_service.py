@@ -32,6 +32,8 @@ class CatalogueMaster:
     include_search_image: bool = True
     include_image_path: bool = False
     export_only_selected: bool = False
+    # List extra copy paths under each tile ("Also at: …"); default on.
+    include_also_at: bool = True
     watermark_text: str = ""
     max_results: int = 12
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -61,6 +63,7 @@ class CatalogueMaster:
             include_search_image=bool(data.get("include_search_image", True)),
             include_image_path=bool(data.get("include_image_path", False)),
             export_only_selected=bool(data.get("export_only_selected", False)),
+            include_also_at=bool(data.get("include_also_at", True)),
             watermark_text=str(data.get("watermark_text") or ""),
             max_results=max_results,
         )
