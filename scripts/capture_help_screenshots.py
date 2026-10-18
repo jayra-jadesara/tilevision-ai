@@ -22,47 +22,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 
-def _install_fake_ai_deps() -> None:
-    if "torch" not in sys.modules:
-        fake_torch = types.ModuleType("torch")
-
-        class _FakeCuda:
-            @staticmethod
-            def is_available() -> bool:
-                return False
-
-        fake_torch.cuda = _FakeCuda()
-        fake_torch.backends = types.SimpleNamespace(
-            mps=types.SimpleNamespace(is_available=lambda: False)
-        )
-        sys.modules["torch"] = fake_torch
-    if "open_clip" not in sys.modules:
-        sys.modules["open_clip"] = types.ModuleType("open_clip")
-    if "transformers" not in sys.modules:
-        try:
-            __import__("transformers")
-        except ImportError:
-            fake = types.ModuleType("transformers")
-            fake.AutoImageProcessor = object
-            fake.AutoModel = object
-            sys.modules["transformers"] = fake
-    # Lightweight stubs so IndexImagesUseCase import graph loads without GPU stack.
-    try:
-        __import__("skimage.feature")
-    except ImportError:
-        sk = types.ModuleType("skimage")
-        feat = types.ModuleType("skimage.feature")
-        feat.local_binary_pattern = lambda *a, **k: None
-        sk.feature = feat
-        sys.modules["skimage"] = sk
-        sys.modules["skimage.feature"] = feat
-    try:
-        __import__("cv2")
-    except ImportError:
-        sys.modules["cv2"] = types.ModuleType("cv2")
-
-
-_install_fake_ai_deps()
+# Real torch/transformers are available in CI / Cloud Agent images.
+# Do not inject fake torch modules — that breaks transformers' find_spec.
 
 from PySide6.QtCore import QRect, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
@@ -83,16 +44,25 @@ HELP_DIR = ROOT / "src" / "resources" / "help"
 ASSETS = Path("/tmp/tilevision_help_assets")
 TILES_DIR = ASSETS / "tiles"
 QUERY_DIR = ASSETS / "query"
-OUT_NAMES = [
-    "step1_choose_folder.png",
-    "step2_index_images.png",
-    "step3_upload_customer_image.png",
-    "step4_view_similar_tiles.png",
-    "step5_double_click_to_open.png",
+
+# Synthetic codes only — no real customer brands or product names.
+OUT_STEMS = [
+    "step01_add_folder_index",
+    "step02_update_vs_rebuild",
+    "step03_search_by_photo",
+    "step04_multi_photo",
+    "step05_crop_modes",
+    "step06_description_search",
+    "step07_read_results",
+    "step08_export_catalogue",
+    "step09_duplicates",
+    "step10_history_activity",
+    "step11_settings",
+    "step12_licence_support",
 ]
 
 # Realistic showroom-style Windows path for the Index page.
-FAKE_FOLDER_DISPLAY = r"E:\Showroom\Tile Catalog\Porcelain Collection"
+FAKE_FOLDER_DISPLAY = r"E:\Showroom\Tile Catalog\Collection A"
 
 
 class _FakeIndexUseCase:
@@ -144,12 +114,12 @@ def _prepare_assets() -> list[Path]:
     TILES_DIR.mkdir(parents=True, exist_ok=True)
     QUERY_DIR.mkdir(parents=True, exist_ok=True)
     specs = [
-        ((210, 195, 175), "KAR-2401 Beige"),
-        ((120, 130, 140), "KAR-3108 Grey"),
-        ((180, 95, 70), "RAK-8812 Terra"),
-        ((90, 110, 95), "SOM-5520 Sage"),
-        ((230, 225, 220), "ASI-1001 White"),
-        ((70, 75, 85), "NIT-4400 Charcoal"),
+        ((210, 195, 175), "TV-2401 Sand"),
+        ((120, 130, 140), "TV-3108 Slate"),
+        ((180, 95, 70), "TV-8812 Clay"),
+        ((90, 110, 95), "TV-5520 Moss"),
+        ((230, 225, 220), "TV-1001 Cloud"),
+        ((70, 75, 85), "TV-4400 Ink"),
     ]
     paths: list[Path] = []
     for i, (color, label) in enumerate(specs):
@@ -157,8 +127,8 @@ def _prepare_assets() -> list[Path]:
         _make_tile_texture(p, color, label, seed=1000 + i * 17)
         paths.append(p)
 
-    query = QUERY_DIR / "customer_whatsapp_photo.png"
-    _make_tile_texture(query, (205, 190, 170), "Customer photo", seed=42)
+    query = QUERY_DIR / "sample_query_photo.png"
+    _make_tile_texture(query, (205, 190, 170), "Sample query", seed=42)
     return paths
 
 
@@ -168,17 +138,19 @@ def _catalogue_service(tmp: Path) -> CatalogueMasterService:
     return CatalogueMasterService(repository=repo, license_customer_name="Demo Showroom")
 
 
-def _build_window(app: QApplication, tmp: Path, tile_paths: list[Path]) -> MainWindow:
+def _build_window(
+    app: QApplication, tmp: Path, tile_paths: list[Path], *, theme: str = "light"
+) -> MainWindow:
     settings = AppSettings(config_dir=tmp)
-    settings.theme = "light"
+    settings.theme = theme
     settings.setup_wizard_completed = True
 
     search_use_case = MagicMock()
     search_use_case.execute.return_value = []
     search_use_case.get_filter_options.return_value = {
-        "brand": ["Kajaria", "RAK", "Somany", "Asian Granito", "NITCO"],
+        "brand": ["Studio A", "Studio B", "Studio C"],
         "category": ["Floor", "Wall", "Outdoor"],
-        "color": ["Beige", "Grey", "White", "Terra"],
+        "color": ["Sand", "Slate", "Cloud", "Clay"],
         "size": ["600x600", "800x800", "300x600"],
     }
     search_use_case.get_index_health.return_value = types.SimpleNamespace(
@@ -274,7 +246,7 @@ def _setup_index_idle_with_folder(window: MainWindow) -> None:
     # set_folder requires a real dir — use tiles dir, then overwrite display path
     window._indexing_viewmodel._selected_folder = TILES_DIR
     iv._on_folder_selected(FAKE_FOLDER_DISPLAY)
-    iv._indexed_images_info_label.setText("Indexed Images: 1,248")
+    iv._indexed_images_info_label.setText("Indexed Images: 38")
     iv._status_info_label.setText("Status: Ready")
     iv._last_indexed_info_label.setText("Last Indexed: Today 10:42 AM")
     iv._current_file_label.setText("Ready — click Start Indexing to check for changes.")
@@ -288,30 +260,29 @@ def _setup_index_progress(window: MainWindow) -> None:
     window._indexing_viewmodel._state = IndexingState.RUNNING
     iv._on_folder_selected(FAKE_FOLDER_DISPLAY)
     iv._on_state_changed(IndexingState.RUNNING)
-    iv._on_progress_changed(486, 1248, 39, "KAR-3108_grey_600x600.jpg", "2m 15s")
-    iv._log_message(f"Scanning: Porcelain Collection...")
-    iv._log_message("Found 1,248 images.")
-    iv._log_message("Embedding KAR-2401_beige_600x600.jpg")
-    iv._log_message("Embedding KAR-3108_grey_600x600.jpg")
-    iv._new_value_label.setText("312")
-    iv._modified_value_label.setText("18")
+    iv._on_progress_changed(12, 38, 32, "TV-3108_slate_600x600.jpg", "2m 15s")
+    iv._log_message("Scanning: Collection A...")
+    iv._log_message("Found 38 images.")
+    iv._log_message("Embedding TV-2401_sand_600x600.jpg")
+    iv._log_message("Embedding TV-3108_slate_600x600.jpg")
+    iv._new_value_label.setText("12")
+    iv._modified_value_label.setText("3")
     iv._deleted_value_label.setText("0")
-    iv._skipped_value_label.setText("156")
+    iv._skipped_value_label.setText("8")
 
 
 def _make_results(tile_paths: list[Path]) -> list[SearchResult]:
     meta = [
-        ("KAR-2401", "Kajaria", "Floor", 96.4),
-        ("KAR-3108", "Kajaria", "Floor", 91.2),
-        ("RAK-8812", "RAK", "Wall", 87.5),
-        ("SOM-5520", "Somany", "Floor", 84.1),
-        ("ASI-1001", "Asian Granito", "Wall", 79.8),
-        ("NIT-4400", "NITCO", "Outdoor", 74.3),
+        ("TV-2401", "Studio A", "Floor", 96.4),
+        ("TV-3108", "Studio A", "Floor", 91.2),
+        ("TV-8812", "Studio B", "Wall", 87.5),
+        ("TV-5520", "Studio B", "Floor", 84.1),
+        ("TV-1001", "Studio C", "Wall", 79.8),
+        ("TV-4400", "Studio C", "Outdoor", 74.3),
     ]
     results = []
     for path, (code, brand, cat, score) in zip(tile_paths, meta):
-        # Real file for thumbnails; Windows-style path shown in the table.
-        display_path = rf"E:\Showroom\Tile Catalog\Porcelain Collection\{code}.jpg"
+        display_path = rf"E:\Showroom\Tile Catalog\Collection A\{code}.jpg"
         tile = TileImage(
             file_path=display_path,
             file_name=f"{code}.jpg",
@@ -319,56 +290,43 @@ def _make_results(tile_paths: list[Path]) -> list[SearchResult]:
             dimensions="600x600",
             brand=brand,
             category=cat,
-            color="Beige" if "beige" in path.name or "white" in path.name else "Grey",
+            color="Sand" if "sand" in path.name or "cloud" in path.name else "Slate",
             size="600x600",
             product_code=code,
             width=256,
             height=256,
         )
         results.append(
-            SearchResult(tile=tile, similarity_score=score, thumbnail_path=str(path))
+            SearchResult(
+                tile=tile,
+                similarity_score=score,
+                thumbnail_path=str(path),
+                copy_paths=[display_path, display_path.replace("Collection A", "Collection B")],
+                extra_copy_count=1,
+            )
         )
     return results
+
+
+def _filter_opts() -> dict:
+    return {
+        "brand": ["Studio A", "Studio B", "Studio C"],
+        "category": ["Floor", "Wall", "Outdoor"],
+        "color": ["Sand", "Slate", "Cloud", "Clay"],
+        "size": ["600x600", "800x800", "300x600"],
+    }
 
 
 def _setup_search_empty(window: MainWindow, app: QApplication) -> None:
     sv = window._search_view
     sv._on_clear_clicked()
-    window._search_viewmodel.filters_available.emit(
-        {
-            "brand": ["Kajaria", "RAK", "Somany", "Asian Granito", "NITCO"],
-            "category": ["Floor", "Wall", "Outdoor"],
-            "color": ["Beige", "Grey", "White", "Terra"],
-            "size": ["600x600", "800x800", "300x600"],
-        }
-    )
+    window._search_viewmodel.filters_available.emit(_filter_opts())
     sv._status_label.setText("Ready. Drag an image or click Browse to search.")
     _process(app, 40)
 
 
-def _setup_search_with_query(window: MainWindow, app: QApplication) -> None:
-    query = QUERY_DIR / "customer_whatsapp_photo.png"
-    sv = window._search_view
-    sv._current_query_image_path = str(query)
-    sv._drop_zone.show_preview(str(query))
-    sv._crop_button.setEnabled(True)
-    sv._auto_crop_button.setEnabled(True)
-    sv._precise_crop_button.setEnabled(True)
-    sv._clear_button.setEnabled(True)
-    sv._status_label.setText("Ready to search — or use Crop if the photo shows a room scene.")
-    window._search_viewmodel.filters_available.emit(
-        {
-            "brand": ["Kajaria", "RAK", "Somany"],
-            "category": ["Floor", "Wall"],
-            "color": ["Beige", "Grey"],
-            "size": ["600x600", "800x800"],
-        }
-    )
-    _process(app, 40)
-
-
 def _setup_search_results(window: MainWindow, app: QApplication, tile_paths: list[Path]) -> list[SearchResult]:
-    query = QUERY_DIR / "customer_whatsapp_photo.png"
+    query = QUERY_DIR / "sample_query_photo.png"
     sv = window._search_view
     results = _make_results(tile_paths)
     sv._current_query_image_path = str(query)
@@ -382,17 +340,108 @@ def _setup_search_results(window: MainWindow, app: QApplication, tile_paths: lis
     window._search_viewmodel.results_ready.emit(results)
     window._search_viewmodel.search_stats_ready.emit(len(results), 0.18)
     sv._status_label.setText(f"Found {len(results)} similar tiles.")
-    window._search_viewmodel.filters_available.emit(
-        {
-            "brand": ["Kajaria", "RAK", "Somany", "Asian Granito", "NITCO"],
-            "category": ["Floor", "Wall", "Outdoor"],
-            "color": ["Beige", "Grey", "White", "Terra"],
-            "size": ["600x600", "800x800", "300x600"],
-        }
-    )
-    # Wait for deferred thumbnail load
+    window._search_viewmodel.filters_available.emit(_filter_opts())
     _process(app, 200)
     return results
+
+
+def _capture_theme(app: QApplication, tile_paths: list[Path], theme: str) -> None:
+    out_dir = HELP_DIR / theme
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tmp = ASSETS / f"config_{theme}"
+    tmp.mkdir(parents=True, exist_ok=True)
+    window = _build_window(app, tmp, tile_paths, theme=theme)
+    window._on_theme_changed_request(theme)
+
+    def save(stem: str, *, ratio: float | None = 0.78) -> None:
+        _grab_content(window, out_dir / f"{stem}.png", app, max_height_ratio=ratio)
+
+    # 1 Index folder
+    window._navigate(0)
+    _setup_index_idle_with_folder(window)
+    save(OUT_STEMS[0], ratio=0.72)
+
+    # 2 Settings rebuild / update (settings page)
+    window._navigate(3)
+    save(OUT_STEMS[1], ratio=0.85)
+
+    # 3 Search by photo
+    window._navigate(1)
+    _setup_search_empty(window, app)
+    save(OUT_STEMS[2], ratio=0.70)
+
+    # 4 Multi-photo
+    window._navigate(1)
+    sv = window._search_view
+    if hasattr(sv, "_drop_zone") and hasattr(sv._drop_zone, "set_multi_photo_enabled"):
+        sv._drop_zone.set_multi_photo_enabled(True)
+    _setup_search_empty(window, app)
+    sv._status_label.setText("Multi-photo on — drop at least two tile photos.")
+    save(OUT_STEMS[3], ratio=0.70)
+
+    # 5 Crop modes with query loaded
+    window._navigate(1)
+    _setup_search_results(window, app, tile_paths)
+    sv._status_label.setText("Use Auto Crop & Search, Precise, or Manual crop.")
+    save(OUT_STEMS[4], ratio=0.75)
+
+    # 6 Description search
+    window._navigate(1)
+    _setup_search_empty(window, app)
+    if hasattr(sv, "_description_edit"):
+        sv._description_edit.setText("matte grey subway tile")
+    sv._status_label.setText(
+        "Description search — first use downloads a one-time model (~580 MB)."
+    )
+    save(OUT_STEMS[5], ratio=0.70)
+
+    # 7 Read results (+N copies)
+    window._navigate(1)
+    _setup_search_results(window, app, tile_paths)
+    save(OUT_STEMS[6], ratio=None)
+
+    # 8 Export (results with Export enabled)
+    window._navigate(1)
+    _setup_search_results(window, app, tile_paths)
+    sv._status_label.setText("Click Export Catalogue to build a dealer PDF.")
+    save(OUT_STEMS[7], ratio=0.80)
+
+    # 9 Duplicates — sidebar highlight only (modal elsewhere)
+    window._navigate(2)
+    save(OUT_STEMS[8], ratio=0.70)
+
+    # 10 History & Activity
+    window._navigate(7)
+    save(OUT_STEMS[9], ratio=0.75)
+
+    # 11 Settings
+    window._navigate(3)
+    save(OUT_STEMS[10], ratio=0.85)
+
+    # 12 Licence — Settings again (licence section) / catalog
+    window._navigate(2)
+    save(OUT_STEMS[11], ratio=0.70)
+
+    # Full Help page render for PR evidence
+    window._navigate(4)
+    help_view = window._help_view
+    help_view.set_theme(theme)
+    _process(app, 150)
+    artifacts = Path("/opt/cursor/artifacts/help_page_renders")
+    artifacts.mkdir(parents=True, exist_ok=True)
+    pix = help_view.grab()
+    if pix.width() < 1400:
+        # Force a wide offscreen size for the grab.
+        help_view.resize(1440, max(1200, pix.height()))
+        _process(app, 80)
+        pix = help_view.grab()
+    dest = artifacts / f"help_full_{theme}.png"
+    pix.save(str(dest), "PNG")
+    print(f"Wrote Help page render {dest} {pix.width()}x{pix.height()}", flush=True)
+
+    window.close()
+    window.deleteLater()
+    _process(app, 50)
 
 
 def main() -> int:
@@ -400,46 +449,21 @@ def main() -> int:
     app = QApplication.instance() or QApplication(sys.argv)
     tile_paths = _prepare_assets()
 
-    tmp = ASSETS / "config"
-    tmp.mkdir(parents=True, exist_ok=True)
-    window = _build_window(app, tmp, tile_paths)
-
-    # ── Step 1: Choose folder (Index page, idle with folder / Browse) ──
-    window._navigate(0)
-    _setup_index_idle_with_folder(window)
-    _grab_content(window, HELP_DIR / OUT_NAMES[0], app, max_height_ratio=0.72)
-
-    # ── Step 2: Indexing in progress ──
-    window._navigate(0)
-    _setup_index_progress(window)
-    _grab_content(window, HELP_DIR / OUT_NAMES[1], app, max_height_ratio=0.78)
-
-    # ── Step 3: Upload customer image (empty drop zone ready for drag/browse) ──
-    window._navigate(1)
-    _setup_search_empty(window, app)
-    _grab_content(window, HELP_DIR / OUT_NAMES[2], app, max_height_ratio=0.70)
-
-    # ── Step 4: View similar tiles ──
-    window._navigate(1)
-    _setup_search_results(window, app, tile_paths)
-    _grab_content(window, HELP_DIR / OUT_NAMES[3], app)
-
-    # ── Step 5: Row selected — double-click / right-click affordance ──
-    window._navigate(1)
-    _setup_search_results(window, app, tile_paths)
-    sv = window._search_view
-    sv._results_table.selectRow(0)
-    sv._results_table.setFocus()
-    sv._status_label.setText(
-        "Double-click a row to open the full photo. Right-click for more options."
-    )
-    _grab_content(window, HELP_DIR / OUT_NAMES[4], app)
+    for theme in ("light", "dark"):
+        print(f"\n=== Capturing theme={theme} ===", flush=True)
+        _capture_theme(app, tile_paths, theme)
 
     print("\nSummary:", flush=True)
-    for name in OUT_NAMES:
-        p = HELP_DIR / name
-        print(f"  {p.relative_to(ROOT)}  {p.stat().st_size:,} bytes", flush=True)
-    # Offscreen Qt teardown can hang; screenshots are already on disk.
+    for theme in ("light", "dark"):
+        for stem in OUT_STEMS:
+            p = HELP_DIR / theme / f"{stem}.png"
+            if p.is_file():
+                print(
+                    f"  {p.relative_to(ROOT)}  {p.stat().st_size:,} bytes",
+                    flush=True,
+                )
+            else:
+                print(f"  MISSING {p.relative_to(ROOT)}", flush=True)
     os._exit(0)
 
 
