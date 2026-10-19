@@ -199,6 +199,12 @@ class CatalogueProfilesPanel(QWidget):
         self._include_image_path = QCheckBox("Include image file path in PDF")
         export_form.addRow(self._include_image_path)
 
+        self._include_also_at = QCheckBox(
+            "List other catalogue copies under each tile (Also at: …)"
+        )
+        self._include_also_at.setChecked(True)
+        export_form.addRow(self._include_also_at)
+
         self._export_only_selected = QCheckBox("Export only selected search results")
         export_form.addRow(self._export_only_selected)
 
@@ -422,6 +428,7 @@ class CatalogueProfilesPanel(QWidget):
         self._pdf_folder.setText(master.default_pdf_folder)
         self._include_search_image.setChecked(master.include_search_image)
         self._include_image_path.setChecked(master.include_image_path)
+        self._include_also_at.setChecked(bool(getattr(master, "include_also_at", True)))
         self._export_only_selected.setChecked(master.export_only_selected)
         self._watermark.setText(master.watermark_text)
         self._max_results.setValue(master.max_results)
@@ -443,6 +450,7 @@ class CatalogueProfilesPanel(QWidget):
             field.clear()
         self._include_search_image.setChecked(True)
         self._include_image_path.setChecked(False)
+        self._include_also_at.setChecked(True)
         self._export_only_selected.setChecked(False)
         self._max_results.setValue(12)
         self._list.clearSelection()
@@ -461,6 +469,7 @@ class CatalogueProfilesPanel(QWidget):
             default_pdf_folder=self._pdf_folder.text().strip(),
             include_search_image=self._include_search_image.isChecked(),
             include_image_path=self._include_image_path.isChecked(),
+            include_also_at=self._include_also_at.isChecked(),
             export_only_selected=self._export_only_selected.isChecked(),
             watermark_text=self._watermark.text().strip(),
             max_results=self._max_results.value(),
