@@ -718,6 +718,12 @@ def build_application() -> int:
         _sync_tray_with_setting(True)
 
     main_window.show()
+
+    # Log every meaningful UI click/menu/tab to tilevision.log + Activity page.
+    from src.utils.ui_activity import install_ui_activity_logging
+
+    install_ui_activity_logging(app, activity_recorder=_record_activity)
+
     from src.ai.query_warmup import start_background_query_warmup
 
     start_background_query_warmup(feature_extractor, vector_index=vector_index)
