@@ -926,7 +926,19 @@ class SearchViewModel(QObject):
             name = Path(output_path).name
             self._activity_repo.record_activity(
                 "export",
-                f"Exported catalogue '{name}' — {result_count} tile(s)",
+                f"Exported catalogue '{name}' — {result_count} unique tile(s)",
             )
         except Exception as e:
             logger.error(f"Failed to record export activity: {e}")
+
+    def record_catalogue_export_failed(self, reason: str) -> None:
+        """Record a failed / cancelled catalogue export."""
+        if self._activity_repo is None:
+            return
+        try:
+            self._activity_repo.record_activity(
+                "export",
+                f"Export Catalogue failed — {reason}",
+            )
+        except Exception as e:
+            logger.error(f"Failed to record export failure activity: {e}")

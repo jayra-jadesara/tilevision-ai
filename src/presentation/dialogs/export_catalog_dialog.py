@@ -312,6 +312,7 @@ class ExportCatalogDialog(QDialog):
         if master_id and self._output_path:
             self._service.remember_pdf_folder(master_id, self._output_path)
 
+        include_also_at = bool(getattr(master, "include_also_at", True))
         return PdfExportOptions(
             company_name=master.company_name,
             company_email=master.email,
@@ -322,6 +323,7 @@ class ExportCatalogDialog(QDialog):
             include_search_image=master.include_search_image,
             include_image_path=master.include_image_path,
             include_selected_only=master.export_only_selected,
+            include_also_at=include_also_at,
             max_results=master.max_results,
             watermark_text=master.watermark_text.strip() or None,
         )
