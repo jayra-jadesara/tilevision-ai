@@ -38,6 +38,14 @@ _search_priority_lock = threading.Lock()
 _search_idle = threading.Event()
 _search_idle.set()
 
+# Index / rebuild busy: background query warm-up must not contend with the
+# first catalogue DINOv2 batch (customer log: warm-up 60–301 s overlapping
+# rebuild; first batch ~4.1 s/view vs ~1.6 s/view steady).
+_indexing_busy_count = 0
+_indexing_busy_lock = threading.Lock()
+_indexing_idle = threading.Event()
+_indexing_idle.set()
+
 # Background warmup: thread-local so only that thread skips the inference lock.
 _warmup_tls = threading.local()
 _warmup_in_progress = threading.Event()
@@ -250,6 +258,40 @@ def end_search_priority() -> None:
 def search_priority_active() -> bool:
     """True while at least one search has requested priority."""
     return not _search_idle.is_set()
+
+
+def begin_indexing_busy() -> None:
+    """Mark folder index / rebuild active — query warm-up should skip or abort."""
+    global _indexing_busy_count
+    with _indexing_busy_lock:
+        _indexing_busy_count += 1
+        _indexing_idle.clear()
+    logger.info("Indexing busy ON (active=%s)", _indexing_busy_count)
+
+
+def end_indexing_busy() -> None:
+    """Clear indexing-busy when the worker finishes (success/fail/cancel)."""
+    global _indexing_busy_count
+    with _indexing_busy_lock:
+        _indexing_busy_count = max(0, _indexing_busy_count - 1)
+        if _indexing_busy_count == 0:
+            _indexing_idle.set()
+    logger.info("Indexing busy OFF (active=%s)", _indexing_busy_count)
+
+
+def indexing_busy_active() -> bool:
+    """True while folder indexing or search-index rebuild is running."""
+    return not _indexing_idle.is_set()
+
+
+@contextmanager
+def indexing_busy_scope() -> Iterator[None]:
+    """Wrap IndexingWorker / RebuildIndexWorker ``run()`` bodies."""
+    begin_indexing_busy()
+    try:
+        yield
+    finally:
+        end_indexing_busy()
 
 
 def wait_while_search_priority(*, max_wait_s: float = 180.0) -> None:

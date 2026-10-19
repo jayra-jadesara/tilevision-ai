@@ -423,14 +423,36 @@ class FeatureExtractor:
         *,
         label: str,
         image_name: str,
-    ) -> None:
-        """Keep aux vectors that add retrieval coverage (not near-duplicates)."""
+    ) -> bool:
+        """
+        Keep aux vectors that add retrieval coverage (not near-duplicates).
+
+        Returns True when kept, False when dropped (always logs the decision
+        so aux waste is measurable in customer logs).
+        """
         sim_primary = self._cosine_sim(primary, candidate)
         if sim_primary >= self._AUX_PRIMARY_MAX_SIM:
-            return
+            logger.info(
+                "Index aux %s dropped for %s (cos_vs_primary=%.3f >= %.3f)",
+                label,
+                image_name,
+                sim_primary,
+                self._AUX_PRIMARY_MAX_SIM,
+            )
+            return False
         for existing in aux:
-            if self._cosine_sim(existing, candidate) >= self._AUX_PAIR_MAX_SIM:
-                return
+            pair = self._cosine_sim(existing, candidate)
+            if pair >= self._AUX_PAIR_MAX_SIM:
+                logger.info(
+                    "Index aux %s dropped for %s "
+                    "(pair_sim=%.3f >= %.3f, cos_vs_primary=%.3f)",
+                    label,
+                    image_name,
+                    pair,
+                    self._AUX_PAIR_MAX_SIM,
+                    sim_primary,
+                )
+                return False
         aux.append(candidate)
         logger.info(
             "Index aux %s vector for %s (cos_vs_primary=%.3f)",
@@ -438,6 +460,44 @@ class FeatureExtractor:
             image_name,
             sim_primary,
         )
+        return True
+
+    def _should_prefilter_skip_aux(
+        self,
+        *,
+        primary_pil,
+        crop_pil,
+        crop_box,
+        primary_size,
+        label: str,
+        image_name: str,
+    ) -> bool:
+        """Opt-in cheap skip before DINOv2 (see aux_crop_prefilter)."""
+        from src.ai.aux_crop_prefilter import (
+            aux_prefilter_enabled,
+            decide_aux_prefilter,
+        )
+
+        if not aux_prefilter_enabled():
+            return False
+        decision = decide_aux_prefilter(
+            primary_pil,
+            crop_pil,
+            crop_box=crop_box,
+            primary_size=primary_size,
+        )
+        if decision.skip:
+            logger.info(
+                "Index aux %s prefilter-skip for %s "
+                "(reason=%s thumb_cos=%.3f area_frac=%.3f) — DINOv2 not run",
+                label,
+                image_name,
+                decision.reason,
+                decision.thumb_cos,
+                decision.area_frac,
+            )
+            return True
+        return False
 
     def extract_index_vectors(
         self,
@@ -497,11 +557,25 @@ class FeatureExtractor:
                 features = self.extract(image_path, for_query=False)
 
             primary = np.asarray(features.embedding, dtype=np.float32).ravel()
+            primary_ref_pil = (
+                prep.primary.pil
+                if prep.primary is not None and prep.primary.pil is not None
+                else raw
+            )
 
             for view in views:
                 if view.view_type == IndexViewType.PRIMARY:
                     if panel_pil is not None:
                         # Former full-sheet primary → aux for sheet self-hit.
+                        if self._should_prefilter_skip_aux(
+                            primary_pil=primary_ref_pil,
+                            crop_pil=view.image,
+                            crop_box=view.crop_box,
+                            primary_size=raw.size,
+                            label="full_sheet",
+                            image_name=image_name,
+                        ):
+                            continue
                         emb = self._embed_index_view(
                             view.image,
                             original_size=raw.size,
@@ -516,6 +590,15 @@ class FeatureExtractor:
                     continue
                 if view.view_type == IndexViewType.PANEL and panel_pil is not None:
                     # Panel crop is already the primary — skip near-dup aux.
+                    continue
+                if self._should_prefilter_skip_aux(
+                    primary_pil=primary_ref_pil,
+                    crop_pil=view.image,
+                    crop_box=view.crop_box,
+                    primary_size=raw.size,
+                    label=view.view_type.value,
+                    image_name=image_name,
+                ):
                     continue
                 emb = self._embed_index_view(view.image, original_size=raw.size)
                 self._maybe_append_aux(
@@ -618,7 +701,9 @@ class FeatureExtractor:
 
         # Collect aux crops (letterboxed) across the batch, then one batched
         # DINOv2 pass — same multi-scale fusion as single-file indexing.
+        # Opt-in pixel prefilter can drop near-dup crops before DINOv2.
         aux_jobs: list[tuple[int, str, PreprocessedImage]] = []
+        prefilter_skipped = 0
         for i, (path, (prep, _err)) in enumerate(zip(image_paths, prep_results)):
             if prep is None:
                 continue
@@ -628,13 +713,29 @@ class FeatureExtractor:
             primary = emb_by_index.get(i)
             if primary is None:
                 continue
+            primary_ref_pil = (
+                prep.primary.pil
+                if prep.primary is not None and prep.primary.pil is not None
+                else raw
+            )
             for view in prep.views:
                 if view.view_type == IndexViewType.PRIMARY:
                     if panel_pil is not None:
+                        label = "full_sheet"
+                        if self._should_prefilter_skip_aux(
+                            primary_pil=primary_ref_pil,
+                            crop_pil=view.image,
+                            crop_box=view.crop_box,
+                            primary_size=raw.size,
+                            label=label,
+                            image_name=image_name,
+                        ):
+                            prefilter_skipped += 1
+                            continue
                         aux_jobs.append(
                             (
                                 i,
-                                "full_sheet",
+                                label,
                                 self._finalize_index_pil(
                                     view.image, original_size=raw.size
                                 ),
@@ -643,15 +744,32 @@ class FeatureExtractor:
                     continue
                 if view.view_type == IndexViewType.PANEL and panel_pil is not None:
                     continue
+                label = view.view_type.value
+                if self._should_prefilter_skip_aux(
+                    primary_pil=primary_ref_pil,
+                    crop_pil=view.image,
+                    crop_box=view.crop_box,
+                    primary_size=raw.size,
+                    label=label,
+                    image_name=image_name,
+                ):
+                    prefilter_skipped += 1
+                    continue
                 aux_jobs.append(
                     (
                         i,
-                        view.view_type.value,
+                        label,
                         self._finalize_index_pil(
                             view.image, original_size=raw.size
                         ),
                     )
                 )
+        if prefilter_skipped:
+            logger.info(
+                "Index aux prefilter skipped %s crop(s) before DINOv2 "
+                "(TILEVISION_AUX_PREFILTER on)",
+                prefilter_skipped,
+            )
 
         aux_by_index: dict[int, list[np.ndarray]] = {i: [] for i in range(len(image_paths))}
         if aux_jobs:
