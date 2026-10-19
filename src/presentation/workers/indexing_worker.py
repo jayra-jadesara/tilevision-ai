@@ -50,6 +50,8 @@ class IndexingWorker(QThread):
 
     def run(self) -> None:
         """Execute the indexing process in the background thread."""
+        from src.ai.inference_guard import indexing_busy_scope
+
         logger.info(f"Indexing QThread started for folder: {self._directory_path}")
         self._cancel_event.clear()
         self._pause_event.clear()
@@ -58,23 +60,24 @@ class IndexingWorker(QThread):
         def _qt_progress_callback(processed: int, total: int, filename: str, eta: float) -> None:
             self.progress_updated.emit(processed, total, filename, eta)
 
-        try:
-            result = self._use_case.scan_and_index_directory(
-                directory_path=self._directory_path,
-                progress_callback=_qt_progress_callback,
-                cancel_event=self._cancel_event,
-                pause_event=self._pause_event,
-            )
-            
-            logger.info(
-                f"Indexing QThread finished. New: {result.new_count}, Modified: {result.modified_count}, "
-                f"Deleted: {result.deleted_count}, Skipped: {result.skipped_count}, "
-                f"Completed: {result.is_completed}"
-            )
-            self.indexing_finished.emit(result)
-        except Exception as e:
-            logger.error(f"Unexpected error in indexing background worker thread: {e}")
-            self.indexing_error.emit(str(e))
+        with indexing_busy_scope():
+            try:
+                result = self._use_case.scan_and_index_directory(
+                    directory_path=self._directory_path,
+                    progress_callback=_qt_progress_callback,
+                    cancel_event=self._cancel_event,
+                    pause_event=self._pause_event,
+                )
+
+                logger.info(
+                    f"Indexing QThread finished. New: {result.new_count}, Modified: {result.modified_count}, "
+                    f"Deleted: {result.deleted_count}, Skipped: {result.skipped_count}, "
+                    f"Completed: {result.is_completed}"
+                )
+                self.indexing_finished.emit(result)
+            except Exception as e:
+                logger.error(f"Unexpected error in indexing background worker thread: {e}")
+                self.indexing_error.emit(str(e))
 
     def pause(self) -> None:
         """Cooperately pause the indexing thread."""

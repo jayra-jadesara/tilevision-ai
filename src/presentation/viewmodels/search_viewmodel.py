@@ -773,6 +773,39 @@ class SearchViewModel(QObject):
             "Please wait — results will appear here."
         )
 
+    def _stall_query_label(self) -> str:
+        """Human-readable query for stall/timeout logs (never bare ``None``)."""
+        if self._last_query_path:
+            return str(self._last_query_path)
+        desc = getattr(self, "_last_description_query", None)
+        if desc:
+            return str(desc)
+        kind = self._active_search_kind or "search"
+        return f"({kind})"
+
+    def prepare_for_shutdown(self, timeout_ms: int = 3000) -> None:
+        """Interrupt any in-flight search worker before DB seal on exit."""
+        self._timeout_timer.stop()
+        self._status_hint_timer.stop()
+        self._stall_timer.stop()
+        worker = self._worker
+        self._worker = None
+        if worker is None:
+            self._release_search_priority()
+            return
+        try:
+            worker.requestInterruption()
+        except Exception:
+            pass
+        if hasattr(worker, "isRunning") and worker.isRunning():
+            logger.info("Waiting for search worker to stop before DB seal…")
+            if not worker.wait(timeout_ms):
+                logger.warning(
+                    "Search worker still running after %sms — continuing seal.",
+                    timeout_ms,
+                )
+        self._release_search_priority()
+
     @Slot()
     def _on_search_stall(self) -> None:
         """
@@ -784,11 +817,12 @@ class SearchViewModel(QObject):
         """
         if self._state != SearchState.SEARCHING:
             return
+        query_label = self._stall_query_label()
         logger.error(
             "Search stalled (no heartbeat for %ss) kind=%s query=%s",
             _SEARCH_STALL_MS / 1000.0,
             self._active_search_kind,
-            self._last_query_path,
+            query_label,
         )
         self._timeout_timer.stop()
         self._status_hint_timer.stop()
@@ -832,7 +866,7 @@ class SearchViewModel(QObject):
         logger.error(
             "Search timed out after %ss for %s",
             self._search_timeout_ms / 1000.0,
-            self._last_query_path,
+            self._stall_query_label(),
         )
         self._status_hint_timer.stop()
         self._stall_timer.stop()

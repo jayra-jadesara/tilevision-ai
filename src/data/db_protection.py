@@ -108,14 +108,100 @@ def prepare_working_database(db_path: Path, password: str | None = None) -> None
     logger.debug("No existing database — a new encrypted catalogue DB will be created.")
 
 
-def seal_database(db_path: Path, password: str | None = None) -> None:
-    """Encrypt the working database and remove the plain file."""
+def _sidecar_paths(db_path: Path) -> tuple[Path, Path]:
+    """SQLite WAL / shared-memory sidecars next to the working DB."""
+    return Path(f"{db_path}-wal"), Path(f"{db_path}-shm")
+
+
+def remove_sqlite_sidecars(db_path: Path) -> None:
+    """Delete leftover ``-wal`` / ``-shm`` files after a successful seal."""
+    for side in _sidecar_paths(Path(db_path)):
+        try:
+            side.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning("Could not remove SQLite sidecar %s: %s", side.name, exc)
+
+
+def _unlink_with_retries(
+    path: Path,
+    *,
+    attempts: int = 5,
+    delay_s: float = 0.2,
+) -> None:
+    """
+    Remove ``path``, retrying briefly on Windows sharing violations.
+
+    Raises the last OSError if every attempt fails. Does not delete on
+    persistent lock — callers must leave the plain DB in place.
+    """
+    import time
+
+    last_exc: OSError | None = None
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except PermissionError as exc:
+            last_exc = exc
+            if attempt >= attempts:
+                break
+            logger.debug(
+                "Plain DB still locked (attempt %s/%s): %s",
+                attempt,
+                attempts,
+                exc,
+            )
+            time.sleep(delay_s)
+        except OSError as exc:
+            # Other OS errors (e.g. missing mid-retry) — surface immediately.
+            raise
+    assert last_exc is not None
+    raise last_exc
+
+
+def seal_database(
+    db_path: Path,
+    password: str | None = None,
+    *,
+    unlink_attempts: int = 5,
+    unlink_delay_s: float = 0.2,
+) -> None:
+    """
+    Encrypt the working database and remove the plain file (+ WAL/SHM).
+
+    Callers must close every SQLite connection (and checkpoint WAL) first.
+    On Windows, pooled connections left open cause WinError 32 and the
+    encrypt-at-rest promise silently fails — see shutdown path in app.py.
+
+    If the plain file cannot be removed after retries, the encrypted copy
+    is discarded and the plain DB is kept (never delete a locked DB).
+    """
     db_path = Path(db_path)
     if not db_path.exists():
+        remove_sqlite_sidecars(db_path)
         return
 
     enc_path = encrypted_db_path(db_path)
     key = derive_db_key(password or resolve_db_password())
     logger.info("Encrypting catalogue database at rest: %s", enc_path.name)
     encrypt_file(db_path, enc_path, key)
-    db_path.unlink(missing_ok=True)
+    try:
+        _unlink_with_retries(
+            db_path, attempts=unlink_attempts, delay_s=unlink_delay_s
+        )
+    except PermissionError as exc:
+        # Keep the working DB; drop a half-written .enc so next launch
+        # does not prefer a stale encrypted snapshot over live data.
+        try:
+            enc_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        logger.error(
+            "Catalogue DB left unencrypted (plain %s kept): still locked "
+            "after close — holder prevented delete (%s). Close all app "
+            "copies and quit cleanly so encryption can finish.",
+            db_path.name,
+            exc,
+        )
+        raise
+    remove_sqlite_sidecars(db_path)

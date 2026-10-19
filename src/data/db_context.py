@@ -230,10 +230,16 @@ class DatabaseContext:
         logger.info("Database schema is up to date.")
         
     def _open_connection(self) -> sqlite3.Connection:
+        # check_same_thread=False so close_all() on the main/shutdown thread
+        # can really close worker connections. Each thread still owns its own
+        # pooled connection (never shared); sessions serialise use via the
+        # thread-local borrow pattern below. With True, conn.close() from
+        # another thread raises ProgrammingError and was swallowed — leaving
+        # WAL handles open → WinError 32 on seal (customer log ×34).
         conn = sqlite3.connect(
             str(self._db_path),
             timeout=30.0,
-            check_same_thread=True,
+            check_same_thread=False,
         )
         conn.row_factory = sqlite3.Row
         for pragma in _CONNECTION_PRAGMAS:
@@ -258,22 +264,86 @@ class DatabaseContext:
                 )
                 try:
                     conn.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning(
+                        "Failed closing dead SQLite connection on thread %s: %s",
+                        threading.get_ident(),
+                        exc,
+                    )
+                with self._pool_lock:
+                    if conn in self._all_connections:
+                        self._all_connections.remove(conn)
         conn = self._open_connection()
         self._local.conn = conn
         return conn
 
-    def close_all(self) -> None:
-        """Close every pooled connection (call on app shutdown)."""
+    def wal_checkpoint_truncate(self) -> None:
+        """
+        Flush the WAL into the main DB file and truncate ``-wal``.
+
+        Must run while at least one connection is still open. Call this
+        before ``close_all()`` so ``seal_database`` encrypts a complete
+        catalogue and can delete ``-wal`` / ``-shm`` sidecars.
+        """
+        conn = self._thread_connection()
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+            conn.commit()
+            logger.info("SQLite WAL checkpoint (TRUNCATE) completed.")
+        except sqlite3.Error as exc:
+            logger.warning("WAL checkpoint before seal failed: %s", exc)
+
+    def pooled_connections(self) -> list[sqlite3.Connection]:
+        """Snapshot of pooled connections (for shutdown assertions / tests)."""
         with self._pool_lock:
-            for conn in self._all_connections:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+            return list(self._all_connections)
+
+    def close_all(self) -> None:
+        """
+        Close every pooled connection (call on app shutdown).
+
+        Must succeed for worker-thread connections too — see
+        ``check_same_thread=False`` on ``_open_connection``. Never swallows
+        close failures silently: counts closed vs failed and logs both.
+        """
+        with self._pool_lock:
+            to_close = list(self._all_connections)
             self._all_connections.clear()
+        closed = 0
+        failed = 0
+        for conn in to_close:
+            try:
+                conn.close()
+                closed += 1
+            except Exception as exc:
+                failed += 1
+                logger.error(
+                    "Failed to close pooled SQLite connection on shutdown: %s",
+                    exc,
+                )
         self._local.conn = None
+        if failed:
+            logger.error(
+                "SQLite pool close finished: closed=%s failed=%s — "
+                "catalogue seal may hit a file lock on Windows.",
+                closed,
+                failed,
+            )
+        else:
+            logger.info("All SQLite pooled connections closed (%s).", closed)
+
+    def prepare_for_seal(self) -> None:
+        """Checkpoint WAL then close every pooled connection before seal."""
+        import gc
+
+        try:
+            self.wal_checkpoint_truncate()
+        except Exception:
+            logger.exception("WAL checkpoint before seal raised unexpectedly")
+        self.close_all()
+        # Windows keeps the file locked until the Connection C objects are
+        # collected; force a GC so seal_database's unlink can succeed.
+        gc.collect()
 
     @contextmanager
     def session(self) -> Generator[sqlite3.Connection, None, None]:

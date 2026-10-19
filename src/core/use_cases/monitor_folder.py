@@ -152,7 +152,7 @@ class TileImageEventHandler(FileSystemEventHandler):
         if not self._is_supported(file_path):
             return
 
-        logger.info("Detected filesystem activity for: %s", file_path.name)
+        logger.debug("Detected filesystem activity for: %s", file_path.name)
 
         try:
             # Poll size stability: sample first, sleep between samples (not
@@ -182,14 +182,15 @@ class TileImageEventHandler(FileSystemEventHandler):
             return
 
         try:
-            logger.info("Auto-indexing changed file: %s", file_path.name)
+            # size+mtime skip happens inside index_changed_file (DEBUG only when
+            # unchanged). Log INFO only when a real embed/write happens.
             db_id = self._use_case.index_changed_file(file_path)
             if db_id is None:
                 logger.debug("Unchanged file skipped: %s", file_path.name)
                 self._notify(str(file_path), "skipped", True, "")
                 return
 
-            logger.info("Successfully auto-indexed file. ID: %s", db_id)
+            logger.info("Auto-indexed changed file: %s (id=%s)", file_path.name, db_id)
             self._notify(str(file_path), "indexed", True, "")
         except Exception as exc:
             logger.error("Background indexing failed for file %s: %s", file_path, exc)
@@ -237,9 +238,12 @@ class TileImageEventHandler(FileSystemEventHandler):
 
         Used when monitoring (re)starts so images added while the app was
         closed are indexed without waiting for a filesystem event.
+
+        Marks the path in-flight so watchdog echoes of the reconcile itself
+        are coalesced and discarded (avoids hashing/logging every file twice).
         """
         if self._paused.is_set():
-            logger.info(
+            logger.debug(
                 "Skipping reconcile while Search is active: %s",
                 Path(file_path_str).name,
             )
@@ -254,16 +258,30 @@ class TileImageEventHandler(FileSystemEventHandler):
             logger.debug("Reconcile skipped invalid image: %s", file_path.name)
             return
 
+        key = str(file_path)
+        with self._timer_lock:
+            # Cancel a pending debounce timer — reconcile owns this path now.
+            pending = self._pending_timers.pop(key, None)
+            if pending is not None:
+                pending.cancel()
+            self._inflight_paths.add(key)
+
         try:
-            logger.info("Reconcile auto-indexing: %s", file_path.name)
             db_id = self._use_case.index_changed_file(file_path)
             if db_id is None:
+                logger.debug("Reconcile skipped unchanged: %s", file_path.name)
                 self._notify(str(file_path), "skipped", True, "")
                 return
+            logger.info("Reconcile indexed: %s (id=%s)", file_path.name, db_id)
             self._notify(str(file_path), "indexed", True, "")
         except Exception as exc:
             logger.error("Reconcile indexing failed for %s: %s", file_path, exc)
             self._notify(str(file_path), "failed", False, str(exc))
+        finally:
+            with self._timer_lock:
+                self._inflight_paths.discard(key)
+                # Drop FS events that fired because reconcile touched the path.
+                self._reprocess_after.discard(key)
 
 
 class FolderMonitorController:
