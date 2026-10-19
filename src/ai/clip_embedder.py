@@ -149,30 +149,37 @@ class ClipEmbedder:
         try:
             from huggingface_hub import snapshot_download
 
-            snapshot_download(
-                repo_id=repo_id,
-                local_dir=str(out),
-                local_dir_use_symlinks=False,
-                allow_patterns=[
-                    "config.json",
-                    "preprocessor_config.json",
-                    "tokenizer*",
-                    "vocab.json",
-                    "merges.txt",
-                    "special_tokens_map.json",
-                    "model.safetensors",
-                    "pytorch_model.bin",
-                    "*.json",
-                ],
-                ignore_patterns=[
-                    "*.h5",
-                    "*.msgpack",
-                    "flax_model*",
-                    "tf_model*",
-                    ".git*",
-                    "*.md",
-                ],
-            )
+            try:
+                snapshot_download(
+                    repo_id=repo_id,
+                    local_dir=str(out),
+                    local_dir_use_symlinks=False,
+                    allow_patterns=[
+                        "config.json",
+                        "preprocessor_config.json",
+                        "tokenizer*",
+                        "vocab.json",
+                        "merges.txt",
+                        "special_tokens_map.json",
+                        "model.safetensors",
+                        "pytorch_model.bin",
+                        "*.json",
+                    ],
+                    ignore_patterns=[
+                        "*.h5",
+                        "*.msgpack",
+                        "flax_model*",
+                        "tf_model*",
+                        ".git*",
+                        "*.md",
+                    ],
+                )
+            except Exception as exc:
+                logger.error("CLIP weight download failed: %s", exc)
+                raise RuntimeError(
+                    "Could not download the description-search model. "
+                    "Check your internet connection and try again when online."
+                ) from exc
             weights = list(out.glob("*.safetensors")) + list(out.glob("*.bin"))
             if not weights:
                 from huggingface_hub import hf_hub_download
