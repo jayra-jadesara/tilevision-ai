@@ -744,6 +744,16 @@ def build_application() -> int:
         logger.info("Stopping folder monitor before shutdown...")
         folder_monitor.stop_monitoring()
 
+    # Stop workers that still hold pooled SQLite connections (WAL) before seal.
+    try:
+        indexing_viewmodel.prepare_for_shutdown()
+    except Exception:
+        logger.exception("Indexing shutdown wait failed")
+    try:
+        search_viewmodel.prepare_for_shutdown()
+    except Exception:
+        logger.exception("Search shutdown wait failed")
+
     from src.utils.update_installer import is_force_quit_for_update
 
     updating = False
@@ -757,6 +767,9 @@ def build_application() -> int:
     # AppData is not replaced by Inno; plaintext working DB is fine across upgrade.
     if not updating:
         try:
+            # Checkpoint + close_all BEFORE unlink — otherwise Windows WinError 32
+            # leaves tiles.db plain forever (see customer log: 34 seal failures).
+            db_context.prepare_for_seal()
             seal_database(db_context.db_path)
             logger.info("Catalogue database encrypted at rest.")
         except Exception as exc:

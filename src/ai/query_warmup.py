@@ -75,6 +75,7 @@ def run_query_path_warmup(
     Aborts remaining steps if a user search has claimed priority.
     """
     from src.ai.inference_guard import (
+        indexing_busy_active,
         restore_interactive_torch_threads,
         search_priority_active,
         warmup_compute_scope,
@@ -82,6 +83,13 @@ def run_query_path_warmup(
 
     if search_priority_active():
         logger.info("Query-path warm-up skipped — search already running")
+        return {}
+    if indexing_busy_active():
+        # Index/rebuild forwards already warm DINOv2; contending here slows
+        # the first catalogue batch (measured ~4 s/view vs ~1.6 s/view).
+        logger.info(
+            "Query-path warm-up skipped — indexing/rebuild already running"
+        )
         return {}
 
     shapes = shapes or warmup_shapes_from_env()
@@ -95,6 +103,11 @@ def run_query_path_warmup(
         if search_priority_active():
             logger.info("Query-path warm-up skipped — search already running")
             return {}
+        if indexing_busy_active():
+            logger.info(
+                "Query-path warm-up aborted — indexing/rebuild became active"
+            )
+            return {}
         warmup = getattr(feature_extractor, "warmup_query_inference", None)
         if callable(warmup):
             result = warmup(shapes=shapes)
@@ -104,6 +117,7 @@ def run_query_path_warmup(
         if (
             vector_index is not None
             and not search_priority_active()
+            and not indexing_busy_active()
             and hasattr(vector_index, "search_vectors")
             and hasattr(vector_index, "get_total_count")
         ):

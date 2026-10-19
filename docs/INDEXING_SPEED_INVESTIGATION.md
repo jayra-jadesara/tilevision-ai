@@ -1,104 +1,115 @@
-# Indexing speed investigation (PR A Item 2 — report only)
+# Indexing speed investigation
 
-**Default accuracy is unchanged.** No Fast mode setting ships in this PR.
-Numbers below mix **measured** evidence from the user’s Windows log
-(`bec564b7-13tilevision.log`, app 1.2.41, 4-thread Intel CPU, no GPU,
-38-tile catalogue) with **code-derived** costs. Anything not measured on
-this machine is marked **UNVERIFIED**.
+**Default accuracy is unchanged.** No Fast mode setting ships until a
+variant clears the ship gate on the customer laptop. Numbers below mix
+**measured** evidence from the user’s Windows logs with **code-derived**
+costs. Anything not measured on that machine is marked **UNVERIFIED**.
 
-## Baseline (measured from user log)
+## Baseline (measured — updated from 2026-10 rebuild log)
 
-| Metric | Value |
-| --- | --- |
-| Steady DINOv2 cost | ~11–11.5 s/image (batch of 12 ≈ 132–135 s embed) |
-| CLIP cost | ~0.2 s/image (2.2–2.8 s / batch of 12; first batch includes model load) |
-| Views per tile | ~7 DINOv2 forwards (multi-scale primary + aux), 518×518 (`TARGET_SIZE`) |
-| Tokens / view | 37×37 = 1369 |
-| ~s / view | ≈ 1.5 s on this CPU |
-| 38-tile full rebuild | ~11–14 min wall |
-| 1000-tile projection | ≈ 3+ hours at ~11.5 s/image |
+Full rebuild 14:31:59 → 14:38:14: **6 min 15 s for 38 files**
+(`reused embeddings for 15 identical files` → **23 distinct images**).
+Reuse is complete (23 forwards for 23 distinct); nothing left to dedupe
+across identical copies.
 
-Aux vectors matter for retrieval (`Parent sheet Top-1 via FAISS aux` in logs)
-and must not be deleted without a measured quality trade-off.
+DINOv2 time by pass (from `DINOv2 index batch:` lines):
 
-## Variant analysis
+| Pass | images | views | seconds |
+| --- | --- | --- | --- |
+| primary (4 batches) | 4+10+5+4 = 23 | 69 | 165 |
+| aux crops (4 batches) | 7+9+8+6 = 30 | 90 | 167 |
+| total DINOv2 | | 159 | **332 of 375 s (88 %)** |
 
-Threshold used for “keep retrieval quality”: **no drop in top-1 on the
-38-tile crop-query suite, and ≤ 1 pp drop in top-5** (stated for future
-measurement; not applied as a ship gate here).
+Steady cost ≈ **12.7 s per distinct image** (≈ 1.65 s/view × ~7.5 views).
+Customers without copies get no benefit from dedupe: 1000 distinct images
+≈ 3.5 h on this laptop.
 
-| Variant | Expected speed-up (CPU) | Cosine vs current | Retrieval quality (38-tile) | Status |
+Earlier log (app 1.2.41, same machine): ~11–11.5 s/image, 38-tile rebuild
+~11–14 min — consistent order of magnitude once reuse is accounted for.
+
+Aux vectors matter for retrieval (`Parent sheet Top-1 via FAISS aux` in
+logs) and must not be deleted without a measured quality trade-off.
+
+## B1 — Query warm-up vs first index batch (fixed in code)
+
+**Measured:** startup DINOv2 warm-up 14:31:54–14:32:51 (60.9 s) overlapped
+rebuild start 14:31:59. First batch ~26.4 s/file vs ~12 s steady
+(forward 49.4 s for 12 views = 4.1 s/view vs 1.6–1.7 s/view later). On
+2026-10-14 the same warm-up took **301 s** while CLIP downloaded.
+
+**Fix shipped:** `indexing_busy_scope` on `IndexingWorker` /
+`RebuildIndexWorker`; `run_query_path_warmup` skips/aborts when indexing
+is active (index forwards already warm the model).
+
+**First-batch s/view before vs after on the customer laptop:**
+**UNVERIFIED here** (no customer catalogue / DINOv2 weights in this CI
+image). Re-measure after installing this build.
+
+## B2 — Aux pass waste (logging shipped; prefilter opt-in)
+
+Log: 30 aux crops embedded, only 18 `Index aux … vector` lines →
+**12 crops (~67 s, ~20 % of all DINOv2 time)** computed and discarded by
+`cos_vs_primary ≥ 0.985` / pair ≥ 0.99.
+
+**Shipped:**
+1. Every dropped aux crop is logged (`Index aux {label} dropped … cos=…`).
+2. Cheap pixel prefilter (`src/ai/aux_crop_prefilter.py`) — thumbnail
+   cosine + area fraction — available behind
+   ``TILEVISION_AUX_PREFILTER=1`` only.
+3. **Not enabled by default.** Validation on the 23 distinct images
+   (false-skips = 0 vs the embedding drop rule) is **UNVERIFIED** in this
+   environment (no catalogue weights). Seconds saved per 23-image run:
+   **UNVERIFIED** until the filter is validated and turned on.
+
+## B3 — Bench harness (customer laptop)
+
+```text
+python dev_tools/bench_indexing_speed.py --catalogue <folder> --variants threads,int8
+```
+
+Loads weights from `model_weights/`, works on Windows paths, prints
+progress, writes CSV (`ms/view`, `ms/image`, cosine vs fp32, top-1/top-5
+proxy). Variants: torch threads 2/3/4, dynamic int8 Linear, aux-1-view /
+2-view stubs.
+
+### Ship gate for opt-in Fast
+
+A variant may ship as **opt-in Fast** only if, on the distinct-image
+catalogue:
+
+- top-1 identical vs Accurate fp32
+- top-5 within 1 pp
+- mean cosine ≥ 0.99
+
+**Default Accurate must not change.** No `CURRENT_FEATURE_VERSION` bump,
+no multi-process embedding.
+
+### Variant table (status)
+
+| Variant | Expected speed-up (CPU) | Cosine vs current | Retrieval | Status |
 | --- | --- | --- | --- | --- |
-| 1. Dynamic int8 quantization of DINOv2 Linear layers | ~1.3–2× wall (torch dynamo / ONNX Runtime typical) | UNVERIFIED | UNVERIFIED | Not shipped. Needs A/B on real catalogue. |
-| 2. Lower index/query size (392 / 336) — **must match** | ~(518/S)² token reduction → ~1.7× / ~2.4× theoretical FLOPs | UNVERIFIED (vectors incompatible with 518 index) | UNVERIFIED | Would require full rebuild; query+index must both change. |
-| 3. Skip aux when `cos_vs_primary > 0.95` (already computed) | Up to ~30–40% fewer forwards when aux is near-dup | N/A for skipped | UNVERIFIED — aux wins matter on marketing sheets | Code already gates near-dups; raising the threshold further is UNVERIFIED. |
-| 4. Fewer multi-scale views per image | Linear in view count (e.g. 7→3 ≈ ~2×) | UNVERIFIED | UNVERIFIED | Highest risk to crop/partial-tile recall. |
-
-### Notes
-
-- Variant 2 changes the embedding space: an existing 518 index cannot be
-  queried with 392/336 vectors. Opt-in Fast mode would need a separate
-  index or a guided rebuild.
-- Variant 1 (int8) preserves dimension and can be transparent if cosine
-  drift is tiny — **UNVERIFIED on this catalogue**.
-- This environment did not run a full 38-tile DINOv2 A/B in CI (too slow /
-  weights may be absent). Treat the table as a plan, not a ship decision.
-
-## Recommendation
-
-Keep **Accurate (default)** unchanged. If a future PR exposes
-“Indexing speed: Accurate / Fast”, gate Fast behind measured top-1/top-5
-on the real 38-tile crop suite plus a customer acceptance note that Fast
-requires rebuild. Do not change views or `TARGET_SIZE` in the default path.
+| Torch threads 2 / 3 / 4 | HT often hurts GEMM on 2P/4L — **UNVERIFIED** | N/A (same fp32) | N/A | Measure with harness; do not change default threads |
+| Dynamic int8 DINOv2 Linear | ~1.3–2× typical; Skylake-U has AVX2 **no VNNI** so gain may be small | **UNVERIFIED** | **UNVERIFIED** | Harness only; not shipped |
+| Aux crops 1 view (not 3) | ~aux DINOv2 ÷ 3 | **UNVERIFIED** | **UNVERIFIED** | Harness stub; not shipped |
+| 3 → 2 index views | Linear in view count | **UNVERIFIED** | **UNVERIFIED** | Harness stub; not shipped |
+| Aux pixel prefilter | Up to ~20 % DINOv2 if false-skips=0 | N/A for skipped | **UNVERIFIED** on 23 images | Code ready, **default OFF** |
+| Lower TARGET_SIZE 392/336 | Theoretical FLOPs | Incompatible with 518 index | Would need rebuild | Not shipped |
 
 ## Multi-process embedding (measured sandbox — do not ship)
 
-**Decision: do not add worker processes for DINOv2 indexing.**
-
-Measured in this cloud sandbox (2 vCPU, CPU-only PyTorch, ViT-sized matmul
-micro-benchmark and multi-process throughput experiment):
-
 | Finding | Value |
 | --- | --- |
-| ViT-sized matmul (single job) | ~200 ms/job |
-| Throughput, 4 worker processes | ~9.4 jobs/s |
-| Throughput, 10 worker processes | ~9.4 jobs/s (same ceiling) |
-| Ceiling | ~2 jobs/s per core → caps at physical core count |
-| Torch in one process | Already uses all cores via intra-op threads |
-| Extra process cost | Each worker loads another DINOv2-large (~1.2 GB RAM) |
-| Overlap vs DINOv2 | Preprocessing ~0.8 s vs DINOv2 ~128 s per batch of 12 images — overlapping decode saves nothing meaningful |
+| Ceiling | Caps at physical core count; torch already uses intra-op threads |
+| Extra process cost | Another DINOv2-large ~1.2 GB RAM per worker |
+| Decision | **Do not ship** multi-process embedding |
 
-Parallelism across files is already handled by batched forwards inside one
-process; spawning more Python processes only duplicates model weights and
-contends for the same CPUs.
+## Byte-identical file reuse (already on main via #99)
 
-## Byte-identical file reuse (PR C + cross-batch fix)
+Cross-batch `ContentEmbedCache` reuses embeddings for identical sha256
+across flush batches. Log: `reused embeddings for N identical files across batches`.
 
-When several pending FULL paths share the same `sha256_hash`, indexing embeds
-one representative and copies DINOv2 (primary + aux), CLIP, and handcrafted
-descriptors to the other SQLite/FAISS ids (paths and filename metadata stay
-distinct).
+## Recommendation
 
-**Cross-batch (required for nested copies):** `scan_and_index_directory`
-sorts files by path, so copies in `Tiles\`, `Tiles\New\`, `Tiles\New\New2\`
-often land in different flush batches (batch_size 12, first batch 4). A
-scan-/rebuild-wide `ContentEmbedCache` (LRU, max 2000 sha256 keys) reuses
-successful embeddings across batches and folders. Failed/timed-out
-representatives are never cached. Choice: rely on the cache (no reordering)
-so progress order stays stable. Log:
-`reused embeddings for N identical files across batches`.
-
-## GPU indexing path (code review)
-
-- **Device:** `DINOv2Embedder` selects CUDA or MPS via `detect_gpu_runtime()`
-  when `inference_device` is `auto`; `embedder.using_gpu` drives
-  `IndexingPerformanceConfig.from_settings(..., use_gpu=...)`.
-- **Flush batch size:** CPU default `index_batch_size` 12; when GPU is active,
-  `gpu_index_batch_size` 24 (see `tests/test_indexing_performance.py`).
-- **Views per forward:** `_INDEX_VIEW_FORWARD_CHUNK` defaults to **24** for all
-  devices (override: `TILEVISION_INDEX_VIEW_BATCH`). This is **not** scaled up
-  on GPU in code today — **UNVERIFIED** whether a larger GPU-only chunk would
-  help without OOM on customer hardware.
-
-Variant 1 (int8) and Variant 2 (smaller `TARGET_SIZE`) remain **opt-in /
-plan-only**; defaults unchanged.
+Keep **Accurate (default)** unchanged. Use the bench harness on the
+customer laptop to fill the UNVERIFIED cells. Only then expose
+“Indexing speed: Accurate / Fast” as an opt-in setting.
