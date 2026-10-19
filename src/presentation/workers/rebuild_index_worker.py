@@ -86,6 +86,8 @@ class RebuildIndexWorker(QThread):
         self._cancel_event.set()
 
     def run(self) -> None:
+        from src.ai.inference_guard import indexing_busy_scope
+
         summary = RebuildSummary(
             folders=len(self._folder_paths),
             force=self._force,
@@ -99,6 +101,10 @@ class RebuildIndexWorker(QThread):
 
         content_embed_cache = ContentEmbedCache()
 
+        with indexing_busy_scope():
+            self._run_rebuild(summary, processed_paths, content_embed_cache)
+
+    def _run_rebuild(self, summary, processed_paths, content_embed_cache) -> None:
         try:
             for folder_path in self._folder_paths:
                 if self._cancel_event.is_set():

@@ -309,8 +309,32 @@ class IndexingViewModel(QObject):
             self._worker.cancel()
             self._set_state(IndexingState.CANCELLING)
             self.status_message.emit("Cancelling indexing... Please wait.")
-        else:
-            logger.warning(f"Cancel called in invalid state: {self._state}")
+            return
+        # Finished/idle Cancel clicks are harmless (button should be disabled);
+        # do not warn — customer logs showed 10× of this noise.
+        logger.debug("Cancel ignored — indexing state is %s", self._state)
+
+    def prepare_for_shutdown(self, timeout_ms: int = 5000) -> None:
+        """
+        Cancel any active indexing worker and wait briefly so SQLite
+        connections on that thread are released before DB seal.
+        """
+        worker = self._worker
+        if worker is None:
+            return
+        if self._state in (IndexingState.RUNNING, IndexingState.PAUSED):
+            try:
+                self.cancel_indexing()
+            except Exception:
+                logger.exception("Shutdown cancel_indexing failed")
+        if worker.isRunning():
+            logger.info("Waiting for indexing worker to stop before DB seal…")
+            if not worker.wait(timeout_ms):
+                logger.warning(
+                    "Indexing worker still running after %sms — continuing seal.",
+                    timeout_ms,
+                )
+        self._worker = None
 
     # ── Private Slots (connected to worker signals) ───────────────────────────
 
