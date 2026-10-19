@@ -26,6 +26,10 @@ onnxruntime>=1.17.0
 
 # ─── PDF Export ───────────────────────────────────────────────────────────────
 reportlab>=4.2.2
+# Used by export-catalogue tests to rasterise generated PDFs (CI installs
+# requirements.txt + pytest; without this, test_export_catalogue_unique fails
+# with ModuleNotFoundError on all platforms).
+pypdfium2>=4.30.0
 
 # ─── Cryptography / Licensing ─────────────────────────────────────────────────
 # Pin below 49 — 49.x often falls back to source builds on some Mac CI images.

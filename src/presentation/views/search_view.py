@@ -1123,18 +1123,30 @@ class SearchView(QWidget):
         self._viewmodel.set_filter(field, applied)
 
     def _on_export_clicked(self) -> None:
-        import traceback
         try:
             from src.presentation.dialogs.export_catalog_dialog import ExportCatalogDialog
-            from src.services.pdf_export_service import PDFExportService
+            from src.presentation.workers.export_catalogue_worker import (
+                ExportCatalogueWorker,
+            )
         except Exception as exc:
-            traceback.print_exc()
-            raise
-            # message_box.critical(self, "Export Error", f"Missing export modules:\n{exc}")
-            # return
+            logger.exception("Export modules missing")
+            message_box.critical(
+                self,
+                "Export Error",
+                f"Export Catalogue is unavailable in this build:\n{exc}",
+            )
+            return
 
         if not self._current_results:
             message_box.information(self, "Export Catalogue", "No results to export yet.")
+            return
+
+        if getattr(self, "_export_worker", None) is not None and self._export_worker.isRunning():
+            message_box.information(
+                self,
+                "Export Catalogue",
+                "An export is already in progress.",
+            )
             return
 
         dialog = ExportCatalogDialog(
@@ -1154,34 +1166,104 @@ class SearchView(QWidget):
         selected_indices = None
 
         if options.include_selected_only:
-            selected_indices = sorted({index.row() for index in self._results_table.selectionModel().selectedRows()})
+            selected_indices = sorted(
+                {index.row() for index in self._results_table.selectionModel().selectedRows()}
+            )
             if not selected_indices:
-                message_box.information(self, "Export Catalogue", "Select one or more results first.")
+                message_box.information(
+                    self,
+                    "Export Catalogue",
+                    "Select one or more results first "
+                    "(Ctrl/Shift-click to select multiple rows).",
+                )
                 return
 
-        # Expand content-deduped rows so every catalogue copy is listed in the
-        # PDF (primary first, then other paths) — never silently drop copies.
-        export_results = self._expand_results_for_export(
+        # Unique tiles only — copies listed as "Also at" under each card.
+        export_results = self._unique_results_for_export(
             self._current_results, selected_indices
         )
-        service = PDFExportService()
-        try:
-            created = service.export_catalogue(
-                output_file=output_path,
-                query_image_path=self._current_query_image_path,
-                results=export_results,
-                options=options,
-                selected_indices=None,
-            )
-        except Exception as exc:
-            message_box.critical(self, "Export Failed", str(exc))
-            return
+        logger.info(
+            "Export Catalogue starting: results=%s unique_tiles=%s "
+            "query_image=%s output=%s",
+            len(self._current_results),
+            len(export_results),
+            self._current_query_image_path or "(none)",
+            output_path,
+        )
 
-        count = len(export_results)
-        if hasattr(self._viewmodel, "record_catalogue_export"):
-            self._viewmodel.record_catalogue_export(created, count)
-        message_box.information(self, "Export Complete", f"Catalogue saved to:\n{created}")
-        
+        from PySide6.QtWidgets import QProgressDialog
+
+        progress = QProgressDialog(
+            "Preparing catalogue…", "Cancel", 0, 100, self
+        )
+        progress.setWindowTitle("Export Catalogue")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        progress.show()
+
+        worker = ExportCatalogueWorker(
+            output_file=output_path,
+            query_image_path=self._current_query_image_path,
+            results=export_results,
+            options=options,
+            parent=self,
+        )
+        self._export_worker = worker
+        self._export_progress = progress
+        self._export_unique_count = len(export_results)
+
+        def _on_progress(done: int, total: int, label: str) -> None:
+            total = max(1, int(total))
+            progress.setMaximum(total)
+            progress.setValue(min(int(done), total))
+            progress.setLabelText(label or "Exporting…")
+
+        def _on_finished(created: str) -> None:
+            progress.close()
+            self._export_worker = None
+            logger.info(
+                "Export Catalogue finished: unique_tiles=%s path=%s",
+                self._export_unique_count,
+                created,
+            )
+            if hasattr(self._viewmodel, "record_catalogue_export"):
+                self._viewmodel.record_catalogue_export(
+                    created, self._export_unique_count
+                )
+            message_box.information(
+                self, "Export Complete", f"Catalogue saved to:\n{created}"
+            )
+
+        def _on_failed(message: str) -> None:
+            progress.close()
+            self._export_worker = None
+            logger.error("Export Catalogue failed: %s", message)
+            if hasattr(self._viewmodel, "record_catalogue_export_failed"):
+                self._viewmodel.record_catalogue_export_failed(message)
+            elif getattr(self._viewmodel, "_activity_repo", None) is not None:
+                try:
+                    self._viewmodel._activity_repo.record_activity(
+                        "export", f"Export Catalogue failed — {message}"
+                    )
+                except Exception:
+                    pass
+            if "cancel" in (message or "").lower():
+                message_box.information(self, "Export Cancelled", message)
+            else:
+                message_box.critical(self, "Export Failed", message)
+
+        def _on_cancel() -> None:
+            worker.cancel()
+            progress.setLabelText("Cancelling…")
+
+        progress.canceled.connect(_on_cancel)
+        worker.progress.connect(_on_progress)
+        worker.export_finished.connect(_on_finished)
+        worker.export_failed.connect(_on_failed)
+        worker.start()
+
+   
     @Slot(dict)
     def _on_filters_available(self, options: dict) -> None:
         """
@@ -1224,7 +1306,10 @@ class SearchView(QWidget):
         self._results_table.verticalHeader().setVisible(False)
         self._results_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._results_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self._results_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        # Ctrl/Shift multi-select for "Export only selected" catalogues.
+        self._results_table.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
         self._results_table.setIconSize(QSize(64, 64))
         self._results_table.verticalHeader().setDefaultSectionSize(68)
         self._results_table.setAlternatingRowColors(True)
@@ -2049,42 +2134,40 @@ class SearchView(QWidget):
                     break
 
     @staticmethod
-    def _expand_results_for_export(
+    def _unique_results_for_export(
         results: List[SearchResult],
         selected_indices: Optional[List[int]],
     ) -> List[SearchResult]:
         """
-        Flatten ``copy_paths`` into one SearchResult per file path.
+        One SearchResult per unique tile for PDF export.
 
-        Export lists every copy (does not silently drop duplicates). Selected
-        rows expand to all of that tile's known copies.
+        Extra catalogue copies stay on ``copy_paths`` and render as
+        "Also at: …" under the card — they must not consume ``max_results``
+        slots (repeating the same tile N times in a dealer PDF is wrong).
         """
-        from dataclasses import replace
-
         chosen = (
             [results[i] for i in selected_indices if 0 <= i < len(results)]
             if selected_indices is not None
             else list(results)
         )
-        expanded: List[SearchResult] = []
+        unique: List[SearchResult] = []
         for result in chosen:
             paths = list(getattr(result, "copy_paths", None) or [])
-            if not paths:
+            if not paths and getattr(result.tile, "file_path", None):
                 paths = [result.tile.file_path]
-            for i, path in enumerate(paths):
-                if i == 0:
-                    expanded.append(result)
-                    continue
-                tile = replace(result.tile, file_path=path, file_name=Path(path).name)
-                expanded.append(
-                    replace(
-                        result,
-                        tile=tile,
-                        copy_paths=[path],
-                        extra_copy_count=0,
-                    )
-                )
-        return expanded
+            if paths and (
+                not getattr(result, "copy_paths", None)
+                or list(result.copy_paths or []) != paths
+            ):
+                from dataclasses import replace
+
+                unique.append(replace(result, copy_paths=paths))
+            else:
+                unique.append(result)
+        return unique
+
+    # Back-compat alias for older tests / callers.
+    _expand_results_for_export = _unique_results_for_export
 
     def _copy_path_text(self, path: str) -> None:
         """Copy path silently — Copied feedback is the floating toast on the icon."""

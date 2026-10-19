@@ -1295,6 +1295,11 @@ class SQLiteCatalogueProfileRepository(ICatalogueProfileRepository):
             include_search_image=bool(row["include_search_image"]),
             include_image_path=bool(row["include_image_path"]),
             export_only_selected=bool(row["export_only_selected"]),
+            include_also_at=bool(
+                row["include_also_at"]
+                if "include_also_at" in row.keys()
+                else True
+            ),
             watermark_text=row["watermark_text"] or "",
             max_results=int(row["max_results"] or 12),
         )
@@ -1313,6 +1318,7 @@ class SQLiteCatalogueProfileRepository(ICatalogueProfileRepository):
             int(profile.include_search_image),
             int(profile.include_image_path),
             int(profile.export_only_selected),
+            int(getattr(profile, "include_also_at", True)),
             profile.watermark_text.strip(),
             max(1, min(100, int(profile.max_results))),
         )
@@ -1378,8 +1384,8 @@ class SQLiteCatalogueProfileRepository(ICatalogueProfileRepository):
                 id, license_customer_name, display_name, company_name, logo_path,
                 email, phone, website, address, default_pdf_folder,
                 include_search_image, include_image_path, export_only_selected,
-                watermark_text, max_results
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                include_also_at, watermark_text, max_results
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """
         try:
             with self._db.session() as conn:
@@ -1409,7 +1415,7 @@ class SQLiteCatalogueProfileRepository(ICatalogueProfileRepository):
                 email = ?, phone = ?, website = ?, address = ?,
                 default_pdf_folder = ?, include_search_image = ?,
                 include_image_path = ?, export_only_selected = ?,
-                watermark_text = ?, max_results = ?,
+                include_also_at = ?, watermark_text = ?, max_results = ?,
                 updated_at = CURRENT_TIMESTAMP
             WHERE license_customer_name = ? AND id = ?;
         """
