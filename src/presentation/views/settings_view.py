@@ -668,7 +668,7 @@ class SettingsView(QWidget):
             "maintenance. Full rebuild re-embeds everything and can take hours "
             "on large catalogues. Clear Cache removes thumbnails only "
             "(they regenerate automatically). Backup Database, Export Logs, "
-            "and Export Diagnostics are optional support tools."
+            "Copy Diagnostics, and Export Diagnostics are optional support tools."
         )
         note.setObjectName("SectionNote")
         note.setWordWrap(True)
@@ -705,6 +705,10 @@ class SettingsView(QWidget):
         self._clear_cache_button.setObjectName("SecondaryButton")
         self._clear_cache_button.clicked.connect(self._on_clear_cache)
 
+        self._copy_diagnostics_button = QPushButton("Copy Diagnostics")
+        self._copy_diagnostics_button.setObjectName("SecondaryButton")
+        self._copy_diagnostics_button.clicked.connect(self._on_copy_diagnostics)
+
         self._export_diagnostics_button = QPushButton("Export Diagnostics")
         self._export_diagnostics_button.setObjectName("SecondaryButton")
         self._export_diagnostics_button.clicked.connect(self._on_export_diagnostics)
@@ -728,6 +732,7 @@ class SettingsView(QWidget):
             self._rebuild_button,
             self._full_rebuild_button,
             self._clear_cache_button,
+            self._copy_diagnostics_button,
             self._export_diagnostics_button,
             self._rebuild_show_dialog_button,
             self._rebuild_bg_cancel_button,
@@ -739,14 +744,15 @@ class SettingsView(QWidget):
         grid.addWidget(self._rebuild_button, 1, 0)
         grid.addWidget(self._full_rebuild_button, 1, 1)
         grid.addWidget(self._clear_cache_button, 2, 0)
-        grid.addWidget(self._export_diagnostics_button, 2, 1)
+        grid.addWidget(self._copy_diagnostics_button, 2, 1)
+        grid.addWidget(self._export_diagnostics_button, 3, 0)
 
         self._check_updates_button = QPushButton("Check for Updates")
         self._check_updates_button.setObjectName("SecondaryButton")
         self._check_updates_button.setMinimumHeight(36)
         self._check_updates_button.clicked.connect(self._on_check_updates_clicked)
         self._check_updates_button.setEnabled(self._on_check_updates is not None)
-        grid.addWidget(self._check_updates_button, 3, 0, 1, 2)
+        grid.addWidget(self._check_updates_button, 4, 0, 1, 2)
 
         layout.addLayout(grid)
 
@@ -899,6 +905,30 @@ class SettingsView(QWidget):
         except OSError as e:
             message_box.critical(self, "Export Failed", f"Could not export logs:\n{e}")
             logger.error(f"Log export failed: {e}")
+
+    def _on_copy_diagnostics(self) -> None:
+        try:
+            from src.utils.diagnostics import format_copy_diagnostics_text
+
+            info = {}
+            if self._diagnostics_info_provider is not None:
+                info = dict(self._diagnostics_info_provider() or {})
+            text = format_copy_diagnostics_text(info)
+            QGuiApplication.clipboard().setText(text)
+            message_box.information(
+                self,
+                "Copied",
+                "Diagnostics copied to the clipboard. Paste them into your "
+                "reply after the hardware smoke test.",
+            )
+            self._record_activity("maintenance", "Diagnostics copied to clipboard")
+        except Exception as e:
+            message_box.critical(
+                self,
+                "Copy Failed",
+                f"Could not copy diagnostics:\n{e}",
+            )
+            logger.error("Copy diagnostics failed: %s", e)
 
     def _on_export_diagnostics(self) -> None:
         dest_str, _ = QFileDialog.getSaveFileName(

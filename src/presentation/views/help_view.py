@@ -127,7 +127,7 @@ _STEPS: List[_HelpStep] = [
         10,
         "History & Activity",
         "Open History for past searches and Activity for indexing, export, licence, and navigation events.",
-        "Export logs from Settings when support asks for diagnostics.",
+        "Export logs or Copy Diagnostics from Settings when support asks.",
         "step10_history_activity",
         (),
     ),
@@ -269,7 +269,8 @@ class HelpView(QWidget):
             "model on disk.\n"
             "• Rebuild taking a long time — prefer Update Search Index; Full rebuild "
             "re-embeds every image.\n"
-            "• Where are the logs? — Settings → Export logs (tilevision.log)."
+            "• Where are the logs? — Settings → Export logs (tilevision.log).\n"
+            "• Paste-back for support — Settings → Copy Diagnostics."
         )
         body.setObjectName("HelpTroubleBody")
         body.setWordWrap(True)
