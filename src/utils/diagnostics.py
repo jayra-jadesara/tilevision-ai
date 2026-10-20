@@ -178,3 +178,123 @@ def export_diagnostics_json(
     path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     logger.info("Diagnostics report exported to %s", path)
     return path
+
+
+_SEAL_SUCCESS_MARKERS = (
+    "Catalogue database encrypted at rest",
+    "Catalogue database encrypted at rest.",
+)
+# Keys that must never appear in clipboard / paste-back diagnostics text.
+_FORBIDDEN_DIAGNOSTIC_KEYS = frozenset(
+    {
+        "license_key",
+        "licence_key",
+        "password",
+        "passwd",
+        "secret",
+        "api_key",
+        "token",
+        "TILEVISION_DB_PASSWORD",
+    }
+)
+
+
+def _last_shutdown_sealed(log_path: Path) -> str:
+    """
+    Scan the tail of tilevision.log for the last seal-related shutdown line.
+
+    Returns ``yes`` / ``no`` / ``unknown`` (no log or no seal-related line).
+    """
+    if not log_path.is_file():
+        return "unknown"
+    try:
+        # Read last ~256 KiB — enough for several sessions without loading a
+        # multi-megabyte rotating log into memory.
+        data = log_path.read_bytes()
+        if len(data) > 256 * 1024:
+            data = data[-256 * 1024 :]
+        text = data.decode("utf-8", errors="replace")
+    except OSError:
+        return "unknown"
+
+    sealed: bool | None = None
+    for line in text.splitlines():
+        if any(m in line for m in _SEAL_SUCCESS_MARKERS):
+            sealed = True
+        elif "Failed to encrypt catalogue database on exit" in line:
+            sealed = False
+        elif "Catalogue DB left unencrypted" in line:
+            sealed = False
+        elif "Skipping DB seal" in line:
+            sealed = False
+    if sealed is None:
+        return "unknown"
+    return "yes" if sealed else "no"
+
+
+def _loose_tiles_db_beside_enc(database_path: str | None) -> str:
+    """
+    Whether a plain ``tiles.db`` sits next to ``tiles.db.enc``.
+
+    After a clean quit only ``.enc`` should remain. While the app is running
+    a working ``tiles.db`` is expected — the smoke checklist covers quit.
+    """
+    if not database_path:
+        return "unknown"
+    try:
+        # Settings store the working path (…/tiles.db); sealed file is …/tiles.db.enc
+        if database_path.endswith(".enc"):
+            enc = Path(database_path)
+            plain = Path(database_path[: -len(".enc")])
+        else:
+            plain = Path(database_path)
+            enc = Path(database_path + ".enc")
+        if not enc.exists():
+            return "no (.enc missing)" if plain.exists() else "unknown"
+        return "yes" if plain.exists() else "no"
+    except Exception:
+        return "unknown"
+
+
+def format_copy_diagnostics_text(info: dict[str, Any] | None = None) -> str:
+    """
+    Paste-friendly diagnostics for hardware smoke testing.
+
+    Always includes app version, OS, log path, last-shutdown seal status, and
+    whether a loose ``tiles.db`` exists beside ``tiles.db.enc``. Never includes
+    licence keys or passwords (allowlisted fields only).
+    """
+    raw = dict(info or {})
+    for bad in _FORBIDDEN_DIAGNOSTIC_KEYS:
+        raw.pop(bad, None)
+        # Also drop case-variants callers might pass.
+        for key in list(raw.keys()):
+            if str(key).casefold() == bad.casefold():
+                raw.pop(key, None)
+
+    report = collect_diagnostics_report(raw)
+    from src.utils.logger import get_log_file_path
+
+    log_path = get_log_file_path()
+    db_path = report.get("database_path") or raw.get("database") or raw.get("database_path")
+    lines = [
+        "=== TileVision Copy Diagnostics ===",
+        f"App version: {report.get('app_version', '?')}",
+        f"OS / platform: {report.get('platform', '?')}",
+        f"Log file: {log_path}",
+        f"Last shutdown sealed (\"Catalogue database encrypted at rest\"): "
+        f"{_last_shutdown_sealed(log_path)}",
+        f"Loose tiles.db beside tiles.db.enc: {_loose_tiles_db_beside_enc(db_path)}",
+        f"Database path: {db_path or '?'}",
+        f"Catalog size: {report.get('catalog_size', '?')}",
+        f"Inference device: {report.get('inference_device', '?')}",
+        f"Generated at: {report.get('generated_at', '?')}",
+    ]
+    text = "\n".join(lines) + "\n"
+    # Belt-and-suspenders: never let forbidden substrings from poisoned info
+    # leak if a future field is added carelessly.
+    for bad_key in _FORBIDDEN_DIAGNOSTIC_KEYS:
+        needle = str(raw.get(bad_key, "") or "")
+        if needle and needle in text:
+            text = text.replace(needle, "***")
+    return text
