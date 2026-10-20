@@ -5,7 +5,9 @@ Cursor / CI cannot run real installers — the owner (or QA) runs this after eac
 
 Unset `TILEVISION_DEV_MODE`. Prefer a machine without a leftover development catalogue (`~/.tilevision_ai` / `%USERPROFILE%\.tilevision_ai`).
 
-After the run: **Settings → Copy Diagnostics** and paste the clipboard text back to support.
+While the app is running a plain `tiles.db` is expected; only the state after
+quitting matters. **Copy Diagnostics** reports on the **previous** quit — so
+quit, check seal yourself, relaunch, then copy.
 
 ---
 
@@ -24,9 +26,10 @@ After the run: **Settings → Copy Diagnostics** and paste the clipboard text ba
 | 9 | Open **Help** — all **12 steps**; screenshots match the text (try light and dark). | ☐ |
 | 10 | **Duplicates** page — Open / Folder / Reveal / Delete buttons fully readable. | ☐ |
 | 11 | **Quit** the app. | ☐ |
-| 12 | Confirm **no loose `tiles.db`** next to `tiles.db.enc` under `%USERPROFILE%\.tilevision_ai\database\`. | ☐ |
+| 12 | Check yourself (File Explorer): **no loose `tiles.db`** next to `tiles.db.enc` under `%USERPROFILE%\.tilevision_ai\database\`. | ☐ |
 | 13 | Open `%USERPROFILE%\.tilevision_ai\logs\tilevision.log` — last quit has **“Catalogue database encrypted at rest”**. | ☐ |
-| 14 | **Settings → Copy Diagnostics** → paste into your reply. | ☐ |
+| 14 | **Relaunch** the app. | ☐ |
+| 15 | **Settings → Copy Diagnostics** → paste into your reply. | ☐ |
 
 Build / version: _______________  Tester: _______________  Date: _______________
 
@@ -47,9 +50,10 @@ Build / version: _______________  Tester: _______________  Date: _______________
 | 9 | **Help** — 12 steps; images match (light and dark). | ☐ |
 | 10 | **Duplicates** page buttons readable. | ☐ |
 | 11 | **Quit** the app. | ☐ |
-| 12 | Confirm **no loose `tiles.db`** next to `tiles.db.enc` under `~/.tilevision_ai/database/`. | ☐ |
+| 12 | Check yourself (Finder): **no loose `tiles.db`** next to `tiles.db.enc` under `~/.tilevision_ai/database/`. | ☐ |
 | 13 | Open `~/.tilevision_ai/logs/tilevision.log` — **“Catalogue database encrypted at rest”**. | ☐ |
-| 14 | **Settings → Copy Diagnostics** → paste into your reply. | ☐ |
+| 14 | **Relaunch** the app. | ☐ |
+| 15 | **Settings → Copy Diagnostics** → paste into your reply. | ☐ |
 
 Build / version: _______________  Tester: _______________  Date: _______________
 

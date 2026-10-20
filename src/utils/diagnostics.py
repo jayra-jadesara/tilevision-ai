@@ -199,14 +199,21 @@ _FORBIDDEN_DIAGNOSTIC_KEYS = frozenset(
 )
 
 
-def _last_shutdown_sealed(log_path: Path) -> str:
+_UNKNOWN_SEAL_MESSAGE = (
+    "unknown — quit the app once, relaunch, copy again"
+)
+
+
+def _previous_quit_sealed(log_path: Path) -> str:
     """
     Scan the tail of tilevision.log for the last seal-related shutdown line.
 
-    Returns ``yes`` / ``no`` / ``unknown`` (no log or no seal-related line).
+    Returns ``yes`` / ``no``, or ``_UNKNOWN_SEAL_MESSAGE`` when the log has
+    no seal-related line (Copy Diagnostics is run while the app is open and
+    reports on the *previous* quit).
     """
     if not log_path.is_file():
-        return "unknown"
+        return _UNKNOWN_SEAL_MESSAGE
     try:
         # Read last ~256 KiB — enough for several sessions without loading a
         # multi-megabyte rotating log into memory.
@@ -215,7 +222,7 @@ def _last_shutdown_sealed(log_path: Path) -> str:
             data = data[-256 * 1024 :]
         text = data.decode("utf-8", errors="replace")
     except OSError:
-        return "unknown"
+        return _UNKNOWN_SEAL_MESSAGE
 
     sealed: bool | None = None
     for line in text.splitlines():
@@ -228,29 +235,25 @@ def _last_shutdown_sealed(log_path: Path) -> str:
         elif "Skipping DB seal" in line:
             sealed = False
     if sealed is None:
-        return "unknown"
+        return _UNKNOWN_SEAL_MESSAGE
     return "yes" if sealed else "no"
 
 
-def _loose_tiles_db_beside_enc(database_path: str | None) -> str:
+def _tiles_db_present_now(database_path: str | None) -> str:
     """
-    Whether a plain ``tiles.db`` sits next to ``tiles.db.enc``.
+    Whether the working plain ``tiles.db`` exists right now.
 
-    After a clean quit only ``.enc`` should remain. While the app is running
-    a working ``tiles.db`` is expected — the smoke checklist covers quit.
+    While the app is open this is expected (decrypted working copy). After a
+    clean quit only ``tiles.db.enc`` remains — check that in File Explorer
+    before relaunching; this line must not imply a seal failure mid-session.
     """
     if not database_path:
         return "unknown"
     try:
-        # Settings store the working path (…/tiles.db); sealed file is …/tiles.db.enc
         if database_path.endswith(".enc"):
-            enc = Path(database_path)
             plain = Path(database_path[: -len(".enc")])
         else:
             plain = Path(database_path)
-            enc = Path(database_path + ".enc")
-        if not enc.exists():
-            return "no (.enc missing)" if plain.exists() else "unknown"
         return "yes" if plain.exists() else "no"
     except Exception:
         return "unknown"
@@ -260,9 +263,9 @@ def format_copy_diagnostics_text(info: dict[str, Any] | None = None) -> str:
     """
     Paste-friendly diagnostics for hardware smoke testing.
 
-    Always includes app version, OS, log path, last-shutdown seal status, and
-    whether a loose ``tiles.db`` exists beside ``tiles.db.enc``. Never includes
-    licence keys or passwords (allowlisted fields only).
+    Always includes app version, OS, log path, previous-quit seal status, and
+    whether ``tiles.db`` is present now (expected while the app is open).
+    Never includes licence keys or passwords (allowlisted fields only).
     """
     raw = dict(info or {})
     for bad in _FORBIDDEN_DIAGNOSTIC_KEYS:
@@ -277,14 +280,19 @@ def format_copy_diagnostics_text(info: dict[str, Any] | None = None) -> str:
 
     log_path = get_log_file_path()
     db_path = report.get("database_path") or raw.get("database") or raw.get("database_path")
+    seal_line = (
+        'Previous quit sealed the database (log line '
+        '"Catalogue database encrypted at rest"): '
+        f"{_previous_quit_sealed(log_path)}"
+    )
     lines = [
         "=== TileVision Copy Diagnostics ===",
         f"App version: {report.get('app_version', '?')}",
         f"OS / platform: {report.get('platform', '?')}",
         f"Log file: {log_path}",
-        f"Last shutdown sealed (\"Catalogue database encrypted at rest\"): "
-        f"{_last_shutdown_sealed(log_path)}",
-        f"Loose tiles.db beside tiles.db.enc: {_loose_tiles_db_beside_enc(db_path)}",
+        seal_line,
+        f"tiles.db present now (expected while the app is open): "
+        f"{_tiles_db_present_now(db_path)}",
         f"Database path: {db_path or '?'}",
         f"Catalog size: {report.get('catalog_size', '?')}",
         f"Inference device: {report.get('inference_device', '?')}",
