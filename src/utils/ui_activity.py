@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QLineEdit,
     QMenu,
+    QPlainTextEdit,
     QRadioButton,
     QStackedWidget,
     QTabBar,
@@ -38,6 +39,17 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QToolButton,
     QWidget,
+)
+
+# Bare modifier key presses (Ctrl alone → "Ctrl+Control") are not shortcuts.
+_MODIFIER_KEYS = frozenset(
+    {
+        Qt.Key.Key_Control,
+        Qt.Key.Key_Shift,
+        Qt.Key.Key_Alt,
+        Qt.Key.Key_Meta,
+        Qt.Key.Key_AltGr,
+    }
 )
 
 logger = logging.getLogger("tilevision.ui")
@@ -106,8 +118,14 @@ class UiActivityFilter(QObject):
             return
 
         if et == QEvent.Type.Show and isinstance(obj, QMenu):
-            title = (obj.title() or obj.objectName() or "menu").strip() or "menu"
-            self._emit_log(f"[UI] menu open '{title}' (QMenu) in {self._owner_name(obj)}")
+            # Transient context menus have no title — the chosen QAction is the
+            # single meaningful log line. Skip the empty "menu open" noise.
+            title = (obj.title() or "").strip()
+            if not title:
+                return
+            self._emit_log(
+                f"[UI] menu open '{title}' (QMenu) in {self._owner_name(obj)}"
+            )
             return
 
         if et == QEvent.Type.MouseButtonDblClick and isinstance(obj, QTableWidget):
@@ -117,6 +135,10 @@ class UiActivityFilter(QObject):
             return
 
         if et == QEvent.Type.ContextMenu and isinstance(obj, QWidget):
+            # CustomContextMenu widgets build a QMenu and fire QAction.triggered
+            # — logging both ContextMenu and the action doubles the Activity log.
+            if obj.contextMenuPolicy() == Qt.ContextMenuPolicy.CustomContextMenu:
+                return
             self._emit_log(
                 f"[UI] context-menu ({obj.__class__.__name__}) in {self._owner_name(obj)}"
             )
@@ -169,6 +191,12 @@ class UiActivityFilter(QObject):
             )
             hooked = True
         elif isinstance(obj, QTabBar):
+            # QTabWidget owns an internal QTabBar — hooking both doubles every
+            # tab switch ("QTabWidget" + "QTabBar" lines). Only hook standalone bars.
+            parent = obj.parent()
+            if isinstance(parent, QTabWidget):
+                self._hooked_ids.add(oid)
+                return
             obj.currentChanged.connect(
                 lambda idx, w=weakref.ref(obj): self._on_tab_bar_changed(w, idx)
             )
@@ -201,6 +229,9 @@ class UiActivityFilter(QObject):
             for child in obj.findChildren(QStackedWidget):
                 self._maybe_hook_signals(child)
             for child in obj.findChildren(QTabBar):
+                # Skip bars owned by a QTabWidget (already hooked above).
+                if isinstance(child.parent(), QTabWidget):
+                    continue
                 self._maybe_hook_signals(child)
 
     def _on_action_triggered(self, checked: bool = False) -> None:  # noqa: ARG002
@@ -282,13 +313,16 @@ class UiActivityFilter(QObject):
         self._maybe_record_click(label, "QAction")
 
     def _log_shortcut(self, obj: QObject, event: QEvent) -> None:
-        # Never log text from sensitive line edits.
-        if isinstance(obj, QLineEdit) and self._is_sensitive_widget(obj):
+        # Never log text from sensitive fields (licence QPlainTextEdit, passwords).
+        if isinstance(obj, (QLineEdit, QPlainTextEdit)) and self._is_sensitive_widget(obj):
             return
         try:
             key = event.key()  # type: ignore[attr-defined]
             mods = event.modifiers()  # type: ignore[attr-defined]
         except Exception:
+            return
+        # Ignore bare modifier presses (Ctrl alone → "Ctrl+Control").
+        if key in _MODIFIER_KEYS:
             return
         # Only log chord shortcuts (Ctrl/Alt/Meta), not typing.
         if not (
