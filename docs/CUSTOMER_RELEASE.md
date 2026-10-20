@@ -71,6 +71,9 @@ Customer-facing “What's new” text is **one file**:
 
 ## Smoke test (clean Windows and clean Mac)
 
+Printable checklist (including Duplicates buttons + Copy Diagnostics):
+**[`docs/SMOKE_TEST.md`](SMOKE_TEST.md)**.
+
 Unset `TILEVISION_DEV_MODE`. Use a machine that does not already have a
 development catalogue.
 
