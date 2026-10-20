@@ -8,6 +8,7 @@ Supports incremental indexing, perceptual hashing, SHA-256 matching, and coopera
 
 import copy
 import logging
+import os
 import re
 import threading
 import time
@@ -49,6 +50,29 @@ from src.utils.image_utils import (
 )
 
 logger = logging.getLogger("tilevision.core.use_cases.index_images")
+
+# Overall cap on waiting for an in-flight query warm-up before indexing
+# continues anyway (hung warm-up must not block forever; Cancel still wins).
+# Override with TILEVISION_WARMUP_WAIT_MAX_S (seconds, float/int).
+DEFAULT_WARMUP_WAIT_MAX_S = 600.0
+_WARMUP_WAIT_MAX_ENV = "TILEVISION_WARMUP_WAIT_MAX_S"
+
+
+def warmup_wait_max_s() -> float:
+    """Return the warm-up wait budget (seconds); pause time does not count."""
+    raw = os.environ.get(_WARMUP_WAIT_MAX_ENV, "").strip()
+    if raw:
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            logger.warning(
+                "Ignoring invalid %s=%r; using default %.0fs",
+                _WARMUP_WAIT_MAX_ENV,
+                raw,
+                DEFAULT_WARMUP_WAIT_MAX_S,
+            )
+    return float(DEFAULT_WARMUP_WAIT_MAX_S)
+
 
 _SIZE_PATTERN = re.compile(r"(\d{2,4})\s*[xX×]\s*(\d{2,4})")
 _COLOR_TOKENS = frozenset({
@@ -313,11 +337,17 @@ class IndexImagesUseCase:
         cancel_event: Optional[threading.Event] = None,
         pause_event: Optional[threading.Event] = None,
         total_files: int = 0,
+        max_wait_s: Optional[float] = None,
     ) -> float:
         """
         If background query warm-up still holds the model, wait for it
         (same load) instead of running DINOv2 in parallel. Shows
         "Preparing model…" and respects cancel/pause during the wait.
+
+        An overall limit (default ``DEFAULT_WARMUP_WAIT_MAX_S``, overridable
+        via ``TILEVISION_WARMUP_WAIT_MAX_S`` or ``max_wait_s``) stops a hung
+        warm-up from blocking indexing forever — on timeout we log a WARNING
+        and continue. Pause time does **not** count toward the limit.
         """
         self._warmup_wait_s = 0.0
         if not warmup_in_progress():
@@ -328,7 +358,9 @@ class IndexImagesUseCase:
             except Exception:
                 logger.debug("progress_callback failed during warm-up wait", exc_info=True)
 
+        limit_s = float(warmup_wait_max_s() if max_wait_s is None else max_wait_s)
         waited = 0.0
+        timed_out = False
         poll_s = 0.2
         while warmup_in_progress():
             if cancel_event is not None and cancel_event.is_set():
@@ -343,16 +375,36 @@ class IndexImagesUseCase:
                     if cancel_event is not None and cancel_event.is_set():
                         break
                     time.sleep(poll_s)
+                # Pause time does not count toward the overall limit.
                 continue
+            if waited >= limit_s:
+                timed_out = True
+                break
+            slice_budget = min(poll_s, max(0.01, limit_s - waited))
             slice_wait = wait_while_warmup_in_progress(
-                max_wait_s=poll_s,
+                max_wait_s=slice_budget,
                 poll_s=poll_s,
             )
             waited += slice_wait
             if slice_wait < poll_s * 0.5 and not warmup_in_progress():
                 break
 
-        if waited > 0:
+        if timed_out:
+            logger.warning(
+                "Indexing warm-up wait timed out after %.3fs "
+                "(limit=%.0fs); continuing indexing while warm-up may still run",
+                waited,
+                limit_s,
+            )
+            if progress_callback is not None:
+                try:
+                    progress_callback(0, total_files, "Scanning catalogue…", -1.0)
+                except Exception:
+                    logger.debug(
+                        "progress_callback failed after warm-up timeout",
+                        exc_info=True,
+                    )
+        elif waited > 0:
             logger.info(
                 "Indexing waited %.3fs for background query warm-up",
                 waited,
