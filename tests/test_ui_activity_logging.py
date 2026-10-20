@@ -130,16 +130,72 @@ def test_action_triggered_logs(qapp, ui_filter, caplog):
 
 def test_tab_change_logs(qapp, ui_filter, caplog):
     from PySide6.QtWidgets import QTabWidget, QWidget
-    from PySide6.QtCore import QEvent
 
     tabs = QTabWidget()
     tabs.addTab(QWidget(), "General")
     tabs.addTab(QWidget(), "Export Profiles")
     ui_filter._maybe_hook_signals(tabs)
+    # Also walk children the way Show/ChildAdded would — must not double-hook
+    # the internal QTabBar.
+    for child in tabs.findChildren(QWidget):
+        ui_filter._maybe_hook_signals(child)
 
     with caplog.at_level(logging.INFO, logger="tilevision.ui"):
         tabs.setCurrentIndex(1)
-    assert any("Export Profiles" in m and "tab" in m for m in _ui_messages(caplog))
+    tab_msgs = [m for m in _ui_messages(caplog) if "tab '" in m and "Export Profiles" in m]
+    assert len(tab_msgs) == 1, tab_msgs
+    assert "QTabWidget" in tab_msgs[0]
+
+
+def test_bare_modifier_not_logged(qapp, ui_filter, caplog):
+    """Ctrl alone must not emit 'Ctrl+Control' (or any shortcut line)."""
+    from PySide6.QtWidgets import QWidget
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
+
+    w = QWidget()
+    with caplog.at_level(logging.INFO, logger="tilevision.ui"):
+        for key in (
+            Qt.Key.Key_Control,
+            Qt.Key.Key_Alt,
+            Qt.Key.Key_Meta,
+            Qt.Key.Key_Shift,
+        ):
+            mods = Qt.KeyboardModifier.NoModifier
+            if key == Qt.Key.Key_Control:
+                mods = Qt.KeyboardModifier.ControlModifier
+            elif key == Qt.Key.Key_Alt:
+                mods = Qt.KeyboardModifier.AltModifier
+            elif key == Qt.Key.Key_Meta:
+                mods = Qt.KeyboardModifier.MetaModifier
+            elif key == Qt.Key.Key_Shift:
+                mods = Qt.KeyboardModifier.ShiftModifier
+            ev = QKeyEvent(QEvent.Type.KeyPress, key, mods, "")
+            ui_filter.eventFilter(w, ev)
+    assert not any("shortcut" in m for m in _ui_messages(caplog))
+
+
+def test_custom_context_menu_logs_action_once(qapp, ui_filter, caplog):
+    """CustomContextMenu + QAction → one action line (no context-menu / menu open)."""
+    from PySide6.QtGui import QAction
+    from PySide6.QtWidgets import QMenu, QWidget
+    from PySide6.QtCore import QEvent, Qt
+
+    w = QWidget()
+    w.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+    menu = QMenu(w)  # untitled → transient
+    action = QAction("Copy Path", menu)
+    menu.addAction(action)
+    ui_filter._maybe_hook_signals(menu)
+
+    with caplog.at_level(logging.INFO, logger="tilevision.ui"):
+        ui_filter.eventFilter(w, QEvent(QEvent.Type.ContextMenu))
+        ui_filter.eventFilter(menu, QEvent(QEvent.Type.Show))
+        action.trigger()
+    msgs = _ui_messages(caplog)
+    assert len([m for m in msgs if "Copy Path" in m]) == 1
+    assert not any("context-menu" in m for m in msgs)
+    assert not any("menu open" in m for m in msgs)
 
 
 def test_combo_activated_logs(qapp, ui_filter, caplog):
@@ -170,13 +226,15 @@ def test_dialog_open_close_logs(qapp, ui_filter, caplog):
 
 
 def test_context_menu_logs(qapp, ui_filter, caplog):
+    """Default context-menu policy still logs the ContextMenu event once."""
     from PySide6.QtWidgets import QWidget
-    from PySide6.QtCore import QEvent
+    from PySide6.QtCore import QEvent, Qt
 
     w = QWidget()
+    w.setContextMenuPolicy(Qt.ContextMenuPolicy.DefaultContextMenu)
     with caplog.at_level(logging.INFO, logger="tilevision.ui"):
         ui_filter.eventFilter(w, QEvent(QEvent.Type.ContextMenu))
-    assert any("context-menu" in m for m in _ui_messages(caplog))
+    assert len([m for m in _ui_messages(caplog) if "context-menu" in m]) == 1
 
 
 def test_shortcut_logs(qapp, ui_filter, caplog):
@@ -347,3 +405,143 @@ def test_mainwindow_nav_clicks_log(qapp, caplog, tmp_path, catalogue_master_serv
 
     window.close()
     window.deleteLater()
+
+
+def _make_main_window(tmp_path, catalogue_master_service, recorded=None):
+    from src.config.settings import AppSettings
+    from src.core.use_cases.find_duplicates import FindDuplicatesUseCase
+    from src.presentation.viewmodels.indexing_viewmodel import IndexingViewModel
+    from src.presentation.viewmodels.search_viewmodel import SearchViewModel
+    from src.presentation.views.main_window import (
+        DashboardDataProviders,
+        HistoryActivityProviders,
+        MainWindow,
+    )
+
+    class _FakeIndexUseCase:
+        def get_persisted_folder_state(self):
+            return None
+
+    settings = AppSettings(config_dir=tmp_path)
+    settings.theme = "dark"
+    settings.setup_wizard_completed = True
+    repo = MagicMock()
+    repo.get_all.return_value = []
+    rec = recorded if recorded is not None else []
+    return MainWindow(
+        indexing_viewmodel=IndexingViewModel(use_case=_FakeIndexUseCase()),
+        search_viewmodel=SearchViewModel(use_case=MagicMock(), default_top_k=10),
+        find_duplicates_use_case=FindDuplicatesUseCase(repo),
+        settings=settings,
+        catalog_count_provider=lambda: 0,
+        catalogue_master_service=catalogue_master_service,
+        dashboard_providers=DashboardDataProviders(
+            indexed_folder_count=lambda: 0,
+            database_size=lambda: 0,
+            faiss_size=lambda: 0,
+            last_search=lambda: None,
+            recent_activity=lambda: [],
+            recent_searches=lambda: [],
+        ),
+        history_activity_providers=HistoryActivityProviders(
+            activity_recorder=lambda t, m: rec.append((t, m)),
+        ),
+        license_details={
+            "license_type": "1-Year",
+            "customer_name": "Test",
+            "is_trial": False,
+        },
+        on_check_updates=lambda: None,
+    )
+
+
+def test_mainwindow_tab_context_shortcut_each_one_ui_line(
+    qapp, caplog, tmp_path, catalogue_master_service
+):
+    """One Settings tab change, one context-menu action, one shortcut → one line each."""
+    pytest.importorskip("PySide6.QtTest")
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QAction, QKeyEvent
+    from PySide6.QtWidgets import QApplication, QMenu
+
+    from src.utils.ui_activity import install_ui_activity_logging
+
+    window = _make_main_window(tmp_path, catalogue_master_service)
+    window.show()
+    QApplication.processEvents()
+    install_ui_activity_logging(QApplication.instance())
+
+    # --- Settings tab change ---
+    window._navigate(3)  # Settings
+    QApplication.processEvents()
+    tabs = window._settings_view._tabs
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="tilevision.ui"):
+        tabs.setCurrentIndex(1)
+        QApplication.processEvents()
+    tab_lines = [m for m in _ui_messages(caplog) if m.startswith("[UI] tab ")]
+    assert len(tab_lines) == 1, tab_lines
+
+    # --- Context menu action on Search results (CustomContextMenu path) ---
+    window._navigate(1)
+    QApplication.processEvents()
+    table = window._search_view._results_table
+    menu = QMenu(table)
+    action = QAction("Copy Path", menu)
+    menu.addAction(action)
+    # Hook the way install_ui_activity_logging would when the menu shows.
+    filt = install_ui_activity_logging(QApplication.instance())
+    filt._maybe_hook_signals(menu)
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="tilevision.ui"):
+        filt.eventFilter(table, QEvent(QEvent.Type.ContextMenu))
+        filt.eventFilter(menu, QEvent(QEvent.Type.Show))
+        action.trigger()
+        QApplication.processEvents()
+    action_lines = [m for m in _ui_messages(caplog) if "Copy Path" in m]
+    assert len(action_lines) == 1, _ui_messages(caplog)
+    assert not any("context-menu" in m for m in _ui_messages(caplog))
+    assert not any("menu open" in m for m in _ui_messages(caplog))
+
+    # --- One real shortcut ---
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="tilevision.ui"):
+        ev = QKeyEvent(
+            QEvent.Type.KeyPress,
+            Qt.Key.Key_F,
+            Qt.KeyboardModifier.ControlModifier,
+            "f",
+        )
+        filt.eventFilter(window, ev)
+        QApplication.processEvents()
+    shortcut_lines = [m for m in _ui_messages(caplog) if "shortcut" in m]
+    assert len(shortcut_lines) == 1, shortcut_lines
+    assert "Ctrl+Control" not in shortcut_lines[0]
+
+    window.close()
+    window.deleteLater()
+
+
+def test_licence_plain_text_edit_masked_in_shortcut(qapp, ui_filter, caplog):
+    """Licence QPlainTextEdit (real LicenseKeyEdit) must not leak key material."""
+    from PySide6.QtWidgets import QPlainTextEdit
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
+
+    edit = QPlainTextEdit()
+    edit.setObjectName("LicenseKeyEdit")
+    secret = "TV-LICENCE-KEY-PLAIN-99999"
+    edit.setPlainText(secret)
+
+    with caplog.at_level(logging.INFO, logger="tilevision.ui"):
+        ev = QKeyEvent(
+            QEvent.Type.KeyPress,
+            Qt.Key.Key_A,
+            Qt.KeyboardModifier.ControlModifier,
+            "a",
+        )
+        ui_filter.eventFilter(edit, ev)
+    joined = "\n".join(r.message for r in caplog.records)
+    assert secret not in joined
+    assert "TV-LICENCE" not in joined
+    assert not any("shortcut" in m for m in _ui_messages(caplog))

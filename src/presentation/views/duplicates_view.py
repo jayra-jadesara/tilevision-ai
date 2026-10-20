@@ -49,11 +49,17 @@ class _DuplicateGroupWidget(QFrame):
     tile_deleted = Signal()
 
     def __init__(
-        self, group: List[TileImage], is_exact: bool, use_case: FindDuplicatesUseCase, parent=None
+        self,
+        group: List[TileImage],
+        is_exact: bool,
+        use_case: FindDuplicatesUseCase,
+        parent=None,
+        theme: str = "dark",
     ) -> None:
         super().__init__(parent)
         self._use_case = use_case
         self._is_exact = is_exact
+        self._theme = theme
         self._tiles = list(group)
         self.setObjectName("DuplicateGroupFrame")
 
@@ -67,7 +73,6 @@ class _DuplicateGroupWidget(QFrame):
 
         self._row_layout = QHBoxLayout()
         self._row_layout.setSpacing(10)
-        self._reference_hash = self._tiles[0].perceptual_hash if self._tiles else None
 
         for tile in self._tiles:
             self._row_layout.addWidget(self._build_tile_card(tile))
@@ -77,73 +82,117 @@ class _DuplicateGroupWidget(QFrame):
     def _compute_duplicate_percent(self, tile: TileImage) -> float:
         if self._is_exact:
             return 100.0
-        if not self._reference_hash or not tile.perceptual_hash:
+        if not tile.perceptual_hash:
             return 0.0
-        return self._use_case.similarity_percent(self._reference_hash, tile.perceptual_hash)
+        # Compare to other members — never to self (that always yields 100%
+        # and made Help screenshots label unrelated near-tiles "Near · 100%").
+        others = [t for t in self._tiles if t is not tile and t.perceptual_hash]
+        if not others:
+            return 0.0
+        return max(
+            self._use_case.similarity_percent(tile.perceptual_hash, other.perceptual_hash)
+            for other in others
+        )
+
+    @staticmethod
+    def _size_button_to_text(btn: QPushButton) -> None:
+        """Grow the button from its label — never clip under DPI scaling."""
+        # Horizontal padding mirrors QSS (6px each side) used below.
+        padding = 12
+        text_w = btn.fontMetrics().horizontalAdvance(btn.text())
+        hint = btn.sizeHint()
+        btn.setMinimumWidth(max(hint.width(), text_w + padding))
+        btn.adjustSize()
 
     def _build_tile_card(self, tile: TileImage) -> QWidget:
+        from src.utils.reveal_file import reveal_action_label
+
         card = QFrame()
         card.setObjectName("TileCard")
         card_layout = QVBoxLayout(card)
         card_layout.setSpacing(4)
+        card_layout.setContentsMargins(6, 6, 6, 6)
 
         thumb_label = QLabel()
         pixmap = QPixmap(tile.file_path)
         if not pixmap.isNull():
             thumb_label.setPixmap(
                 pixmap.scaled(
-                    100, 100, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+                    100,
+                    100,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
                 )
             )
         thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        thumb_label.setFixedSize(100, 100)
+        thumb_label.setMinimumSize(100, 100)
         card_layout.addWidget(thumb_label)
 
         # Duplicate % + Exact/Near badge (Task B)
         pct = self._compute_duplicate_percent(tile)
         badge_text = f"{'Exact' if self._is_exact else 'Near'} · {pct:.0f}%"
         badge_label = QLabel(badge_text)
-        badge_label.setObjectName("DuplicateBadgeExact" if self._is_exact else "DuplicateBadgeNear")
+        badge_label.setObjectName(
+            "DuplicateBadgeExact" if self._is_exact else "DuplicateBadgeNear"
+        )
         badge_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         card_layout.addWidget(badge_label)
 
         name_label = QLabel(tile.file_name)
         name_label.setObjectName("TileCardName")
         name_label.setWordWrap(True)
-        name_label.setFixedWidth(100)
         name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         card_layout.addWidget(name_label)
 
-        button_row = QHBoxLayout()
+        # Plain-text actions (no emoji) — sized from content so labels never
+        # clip at 100%/125% scaling or in a narrow window. 2×2 grid keeps the
+        # card usable when four labels would overflow a single row.
+        button_grid_top = QHBoxLayout()
+        button_grid_top.setSpacing(4)
+        button_grid_bot = QHBoxLayout()
+        button_grid_bot.setSpacing(4)
+
         open_button = QPushButton("Open")
+        open_button.setObjectName("DuplicateOpenButton")
         open_button.setToolTip("Open Image")
-        open_button.setFixedWidth(28)
         open_button.clicked.connect(lambda: self._open_image(tile))
-        button_row.addWidget(open_button)
+        self._size_button_to_text(open_button)
+        button_grid_top.addWidget(open_button)
 
-        folder_button = QPushButton("📂")
+        folder_button = QPushButton("Folder")
+        folder_button.setObjectName("DuplicateFolderButton")
         folder_button.setToolTip("Open Containing Folder")
-        folder_button.setFixedWidth(28)
         folder_button.clicked.connect(lambda: self._open_folder(tile))
-        button_row.addWidget(folder_button)
+        self._size_button_to_text(folder_button)
+        button_grid_top.addWidget(folder_button)
 
-        reveal_button = QPushButton("📍")
-        from src.utils.reveal_file import reveal_action_label
-
-        reveal_button.setToolTip(reveal_action_label().lstrip("📍 ").strip())
-        reveal_button.setFixedWidth(28)
+        reveal_tip = reveal_action_label().lstrip("📍 ").strip()
+        # Short visible label; full platform wording stays in the tooltip.
+        reveal_button = QPushButton("Reveal")
+        reveal_button.setObjectName("DuplicateRevealButton")
+        reveal_button.setToolTip(reveal_tip)
         reveal_button.clicked.connect(lambda: self._reveal_file(tile))
-        button_row.addWidget(reveal_button)
+        self._size_button_to_text(reveal_button)
+        button_grid_bot.addWidget(reveal_button)
 
         delete_button = QPushButton("Delete")
         delete_button.setObjectName("DeleteButton")
         delete_button.setToolTip("Delete this duplicate")
-        delete_button.setFixedWidth(28)
         delete_button.clicked.connect(lambda: self._on_delete_clicked(tile, card))
-        button_row.addWidget(delete_button)
+        self._size_button_to_text(delete_button)
+        button_grid_bot.addWidget(delete_button)
 
-        card_layout.addLayout(button_row)
+        card_layout.addLayout(button_grid_top)
+        card_layout.addLayout(button_grid_bot)
 
+        # Card width tracks the wider of the two button rows.
+        row_w = max(
+            open_button.minimumWidth() + folder_button.minimumWidth() + 4,
+            reveal_button.minimumWidth() + delete_button.minimumWidth() + 4,
+            100,
+        )
+        card.setMinimumWidth(row_w + 12)
+        name_label.setMinimumWidth(row_w)
         return card
 
     def _on_delete_clicked(self, tile: TileImage, card: QWidget) -> None:
@@ -305,11 +354,15 @@ class DuplicatesView(QDialog):
                 pass
 
         for group in exact_groups:
-            widget = _DuplicateGroupWidget(group, is_exact=True, use_case=self._use_case)
+            widget = _DuplicateGroupWidget(
+                group, is_exact=True, use_case=self._use_case, theme=self._theme
+            )
             widget.tile_deleted.connect(self._on_tile_deleted)
             self._results_layout.insertWidget(self._results_layout.count() - 1, widget)
         for group in near_groups:
-            widget = _DuplicateGroupWidget(group, is_exact=False, use_case=self._use_case)
+            widget = _DuplicateGroupWidget(
+                group, is_exact=False, use_case=self._use_case, theme=self._theme
+            )
             widget.tile_deleted.connect(self._on_tile_deleted)
             self._results_layout.insertWidget(self._results_layout.count() - 1, widget)
 
@@ -351,8 +404,26 @@ class DuplicatesView(QDialog):
                 background-color: {p['warning_bg']}; color: {p['warning_text']}; border-radius: 4px;
                 font-size: 10px; font-weight: 600; padding: 2px;
             }}
-            #DeleteButton {{ background-color: {p['danger_bg']}; }}
+            #TileCard QPushButton {{
+                background-color: {p['bg_panel']};
+                color: {p['text_secondary']};
+                border: 1px solid {p['border_strong']};
+                border-radius: 5px;
+                padding: 4px 6px;
+                font-size: 11px;
+            }}
+            #TileCard QPushButton:hover {{
+                background-color: {p['button_hover']};
+                border-color: {p['accent_soft']};
+            }}
+            #DeleteButton {{
+                background-color: {p['danger_bg']};
+                border-color: {p['danger_hover']};
+            }}
             #DeleteButton:hover {{ background-color: {p['danger_hover']}; }}
+            #ScanButton {{
+                padding: 6px 14px;
+            }}
             QRadioButton {{ font-size: 12px; }}
             """
         )
