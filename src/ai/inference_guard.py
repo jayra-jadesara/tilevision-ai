@@ -314,6 +314,33 @@ def wait_while_search_priority(*, max_wait_s: float = 180.0) -> None:
         )
 
 
+def wait_while_warmup_in_progress(
+    *,
+    max_wait_s: float = 600.0,
+    poll_s: float = 0.2,
+) -> float:
+    """
+    Indexing calls this before the first DINOv2 batch when background query
+    warm-up is still in ``warmup_compute_scope`` (same model load).
+
+    Polls until warm-up clears or ``max_wait_s`` elapses. Returns seconds waited.
+    Does not take the inference lock — warm-up must stay lock-free for search.
+    """
+    if not _warmup_in_progress.is_set():
+        return 0.0
+    t0 = time.monotonic()
+    deadline = t0 + float(max_wait_s)
+    while _warmup_in_progress.is_set() and time.monotonic() < deadline:
+        time.sleep(float(poll_s))
+    waited = time.monotonic() - t0
+    if _warmup_in_progress.is_set():
+        logger.warning(
+            "Indexing resume: background warm-up still in progress after %.0fs",
+            max_wait_s,
+        )
+    return waited
+
+
 @contextmanager
 def synchronized_inference(
     *,

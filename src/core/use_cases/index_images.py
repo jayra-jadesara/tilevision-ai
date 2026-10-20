@@ -32,7 +32,11 @@ from src.ai.tile_color_detect import resolve_index_color
 from src.core.use_cases.index_work_classify import IndexWorkKind, classify_index_work
 from src.data.repository_interface import IImageRepository, IIndexedFolderRepository
 from src.ai.feature_extractor import FeatureExtractor
-from src.ai.inference_guard import wait_while_search_priority
+from src.ai.inference_guard import (
+    wait_while_search_priority,
+    wait_while_warmup_in_progress,
+    warmup_in_progress,
+)
 from src.ai.vector_index import FaissIndexManager
 from src.utils.pipeline_timing import PipelineTimer
 from src.utils.image_utils import (
@@ -298,6 +302,63 @@ class IndexImagesUseCase:
 
         # Ensure thumbnail directory exists
         self._thumbnail_dir.mkdir(parents=True, exist_ok=True)
+        # Seconds spent waiting for an in-flight query warm-up (per scan /
+        # single-file call). Used for first-batch sec/view logging.
+        self._warmup_wait_s: float = 0.0
+
+    def _wait_for_inflight_warmup(
+        self,
+        *,
+        progress_callback: Optional[Callable[[int, int, str, float], None]] = None,
+        cancel_event: Optional[threading.Event] = None,
+        pause_event: Optional[threading.Event] = None,
+        total_files: int = 0,
+    ) -> float:
+        """
+        If background query warm-up still holds the model, wait for it
+        (same load) instead of running DINOv2 in parallel. Shows
+        "Preparing model…" and respects cancel/pause during the wait.
+        """
+        self._warmup_wait_s = 0.0
+        if not warmup_in_progress():
+            return 0.0
+        if progress_callback is not None:
+            try:
+                progress_callback(0, total_files, "Preparing model…", -1.0)
+            except Exception:
+                logger.debug("progress_callback failed during warm-up wait", exc_info=True)
+
+        waited = 0.0
+        poll_s = 0.2
+        while warmup_in_progress():
+            if cancel_event is not None and cancel_event.is_set():
+                logger.info(
+                    "Indexing cancel during warm-up wait (waited %.3fs)",
+                    waited,
+                )
+                break
+            if pause_event is not None and pause_event.is_set():
+                logger.info("Indexing paused during warm-up wait")
+                while pause_event.is_set():
+                    if cancel_event is not None and cancel_event.is_set():
+                        break
+                    time.sleep(poll_s)
+                continue
+            slice_wait = wait_while_warmup_in_progress(
+                max_wait_s=poll_s,
+                poll_s=poll_s,
+            )
+            waited += slice_wait
+            if slice_wait < poll_s * 0.5 and not warmup_in_progress():
+                break
+
+        if waited > 0:
+            logger.info(
+                "Indexing waited %.3fs for background query warm-up",
+                waited,
+            )
+        self._warmup_wait_s = waited
+        return waited
 
     def _embed_clip_vector(self, image_path: Path) -> Optional[List[float]]:
         """Return a CLIP vector for ``image_path``, or None when CLIP is unavailable."""
@@ -370,6 +431,7 @@ class IndexImagesUseCase:
             RuntimeError: If embedding extraction or FAISS storage fails.
         """
         wait_while_search_priority()
+        self._wait_for_inflight_warmup(total_files=1)
         resolved_path = file_path.resolve()
         timer = PipelineTimer("INDEX TIMING")
 
@@ -1164,6 +1226,20 @@ class IndexImagesUseCase:
                     typical,
                     ",".join(f"{s:.3f}" for s in batch_timings_log[-8:]),
                 )
+                if is_first_batch and done > 0:
+                    # Index path fuses 3 views per image by default; report
+                    # first-batch sec/view so warm-up wait effect is visible.
+                    batch_wall = time.perf_counter() - flush_t0
+                    views_est = max(1, done * 3)
+                    logger.info(
+                        "First index batch: warmup_wait_s=%.3f batch_wall_s=%.3f "
+                        "first_batch_sec_per_view=%.3f images=%d views_est=%d",
+                        float(getattr(self, "_warmup_wait_s", 0.0) or 0.0),
+                        batch_wall,
+                        batch_wall / views_est,
+                        done,
+                        views_est,
+                    )
                 for item in items:
                     cross_run_seen.add(str(item.path.resolve()))
                     if clip_ids_present is not None and item.db_id is None:
@@ -1244,6 +1320,23 @@ class IndexImagesUseCase:
                 total_files,
                 "Scanning catalogue…",
                 -1.0,
+            )
+
+        # Wait for in-flight background query warm-up before the first DINOv2
+        # batch (same model load) — avoid CPU contention that inflated
+        # first-batch sec/view. Cancel still works during the wait.
+        self._wait_for_inflight_warmup(
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+            pause_event=pause_event,
+            total_files=total_files,
+        )
+        if cancel_event and cancel_event.is_set():
+            logger.warning("Indexing canceled while preparing model. Stopping...")
+            return ScanResult(
+                total_files_scanned=total_files,
+                is_completed=False,
+                elapsed_seconds=time.perf_counter() - start_time,
             )
 
         for file_path in all_files:
