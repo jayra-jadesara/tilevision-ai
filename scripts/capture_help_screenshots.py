@@ -456,31 +456,77 @@ def _capture_theme(app: QApplication, tile_paths: list[Path], theme: str) -> Non
     sv._status_label.setText("Click Export Catalogue to build a dealer PDF.")
     save(OUT_STEMS[7], ratio=0.80)
 
-    # 9 Duplicates — real modal with a sample exact-duplicate group
+    # 9 Duplicates — exact pair (identical bytes) + near pair (real lower %).
+    # Previous fixture labelled two different textures "Exact · 100%"; fix that.
     dup_uc = window._find_duplicates_use_case or FindDuplicatesUseCase(MagicMock())
     dup = DuplicatesView(use_case=dup_uc, parent=window, theme=theme)
-    # Same visual twice (exact duplicate) — different folder paths on disk.
-    src_tile = tile_paths[0]
-    tiles_for_dup: list[TileImage] = []
+
+    exact_src = tile_paths[0]
+    exact_copies_dir = ASSETS / "dup_exact"
+    exact_copies_dir.mkdir(parents=True, exist_ok=True)
+    exact_tiles: list[TileImage] = []
+    exact_hash = "abcd" * 4
     for i, folder in enumerate(("Collection A", "Collection B")):
-        display = Path(f"/Showroom/{folder}") / src_tile.name
-        tiles_for_dup.append(
+        # Byte-identical copies under different folders so thumbnails match.
+        dest = exact_copies_dir / f"{folder.replace(' ', '_').lower()}_{exact_src.name}"
+        dest.write_bytes(exact_src.read_bytes())
+        exact_tiles.append(
             TileImage(
-                file_path=str(src_tile),  # real path so thumbnail loads
-                file_name=f"{folder.replace(' ', '_').lower()}_{src_tile.name}",
-                file_size=src_tile.stat().st_size,
+                file_path=str(dest),
+                file_name=dest.name,
+                file_size=dest.stat().st_size,
                 dimensions="600x600",
                 brand="Studio A",
                 category="Floor",
                 product_code="TV-2401",
                 width=256,
                 height=256,
-                perceptual_hash="abcd" * 4,
+                perceptual_hash=exact_hash,
                 id=i + 1,
             )
         )
+
+    # Near-duplicates: same base texture with a slight tint difference + hashes
+    # ~4 bits apart → ~94%. Must look genuinely near (not unrelated colours).
+    near_dir = ASSETS / "dup_near"
+    near_dir.mkdir(parents=True, exist_ok=True)
+    near_a = near_dir / "tv-3108_showroom.png"
+    near_b = near_dir / "tv-3108_archive.png"
+    _make_tile_texture(near_a, (120, 130, 140), "TV-3108 Slate", seed=2001)
+    _make_tile_texture(near_b, (128, 136, 148), "TV-3108 Slate", seed=2001)
+    near_hash_a = "0000000000000000"
+    near_hash_b = "000000000000000F"  # Hamming distance 4 → 93.75%
+    near_tiles = [
+        TileImage(
+            file_path=str(near_a),
+            file_name=near_a.name,
+            file_size=near_a.stat().st_size,
+            dimensions="600x600",
+            brand="Studio B",
+            category="Wall",
+            product_code="TV-3108",
+            width=256,
+            height=256,
+            perceptual_hash=near_hash_a,
+            id=10,
+        ),
+        TileImage(
+            file_path=str(near_b),
+            file_name=near_b.name,
+            file_size=near_b.stat().st_size,
+            dimensions="600x600",
+            brand="Studio B",
+            category="Wall",
+            product_code="TV-3108",
+            width=256,
+            height=256,
+            perceptual_hash=near_hash_b,
+            id=11,
+        ),
+    ]
+
     dup.resize(1100, 720)
-    dup._on_scan_completed([tiles_for_dup], [])
+    dup._on_scan_completed([exact_tiles], [near_tiles])
     _grab_widget(dup, out_dir / f"{OUT_STEMS[8]}.png", app)
     dup.close()
     dup.deleteLater()
