@@ -491,6 +491,7 @@ def test_mainwindow_tab_context_shortcut_each_one_ui_line(
     menu.addAction(action)
     # Hook the way install_ui_activity_logging would when the menu shows.
     filt = install_ui_activity_logging(QApplication.instance())
+    filt._maybe_hook_signals(action)  # direct QAction hook (macOS-safe)
     filt._maybe_hook_signals(menu)
     caplog.clear()
     with caplog.at_level(logging.INFO, logger="tilevision.ui"):

@@ -165,3 +165,111 @@ def test_indexing_cancel_during_warmup_wait(env):
     assert any("Preparing model…" in n for n in progress_names)
     assert embed_calls["n"] == 0
     _ = calls_before  # silence lint if unused
+
+
+def test_warmup_wait_times_out_and_continues(env, caplog, monkeypatch):
+    """Hung warm-up hits the (tiny) overall limit, warns, and indexing continues."""
+    from src.core.use_cases import index_images as index_mod
+
+    monkeypatch.setattr(index_mod, "DEFAULT_WARMUP_WAIT_MAX_S", 0.35)
+    monkeypatch.delenv("TILEVISION_WARMUP_WAIT_MAX_S", raising=False)
+
+    release = threading.Event()
+    warmup_started = threading.Event()
+
+    def _never_finishes():
+        with warmup_compute_scope(torch_threads=1):
+            warmup_started.set()
+            release.wait(timeout=30.0)
+
+    t = threading.Thread(target=_never_finishes, daemon=True)
+    t.start()
+    assert warmup_started.wait(timeout=2.0)
+
+    progress_names: list[str] = []
+
+    def progress_cb(processed, total, name, eta):
+        progress_names.append(name)
+
+    t0 = time.perf_counter()
+    with caplog.at_level(logging.WARNING, logger="tilevision.core.use_cases.index_images"):
+        result = env["use_case"].scan_and_index_directory(
+            env["images_dir"],
+            progress_callback=progress_cb,
+            force=True,
+        )
+    elapsed = time.perf_counter() - t0
+
+    release.set()
+    t.join(timeout=3.0)
+
+    assert result.is_completed is True
+    assert elapsed < 5.0, f"should not wait forever; took {elapsed:.1f}s"
+    assert any("Preparing model…" in n for n in progress_names)
+    # Progress returns to normal after timeout.
+    assert any("Scanning catalogue…" in n for n in progress_names)
+    assert any(
+        "warm-up wait timed out" in r.message.lower()
+        or "warmup wait timed out" in r.message.lower()
+        or "warm-up wait timed out" in r.message
+        for r in caplog.records
+    )
+    warn = next(
+        r.message for r in caplog.records if "timed out" in r.message.lower()
+    )
+    assert "0." in warn or "limit=" in warn
+
+
+def test_warmup_wait_pause_does_not_count_toward_limit(env, monkeypatch):
+    """Time spent paused must not burn the warm-up wait budget."""
+    from src.core.use_cases import index_images as index_mod
+
+    monkeypatch.setattr(index_mod, "DEFAULT_WARMUP_WAIT_MAX_S", 0.5)
+    monkeypatch.delenv("TILEVISION_WARMUP_WAIT_MAX_S", raising=False)
+
+    release = threading.Event()
+    warmup_started = threading.Event()
+
+    def _slow_warmup():
+        with warmup_compute_scope(torch_threads=1):
+            warmup_started.set()
+            release.wait(timeout=10.0)
+
+    t = threading.Thread(target=_slow_warmup, daemon=True)
+    t.start()
+    assert warmup_started.wait(timeout=2.0)
+
+    pause = threading.Event()
+    pause.set()
+
+    def _unpause_and_finish():
+        # Hold pause longer than the limit; then clear pause and finish warm-up
+        # quickly so a successful wait (not timeout) is observed.
+        time.sleep(0.8)
+        pause.clear()
+        time.sleep(0.15)
+        release.set()
+
+    threading.Thread(target=_unpause_and_finish, daemon=True).start()
+
+    waited = env["use_case"]._wait_for_inflight_warmup(
+        pause_event=pause,
+        total_files=3,
+        max_wait_s=0.5,
+    )
+    t.join(timeout=3.0)
+    # Warm-up finished under the limit because pause did not count.
+    assert waited < 0.5
+    assert not warmup_in_progress()
+
+
+def test_warmup_wait_max_env_override(monkeypatch):
+    from src.core.use_cases.index_images import (
+        DEFAULT_WARMUP_WAIT_MAX_S,
+        warmup_wait_max_s,
+    )
+
+    monkeypatch.setenv("TILEVISION_WARMUP_WAIT_MAX_S", "12.5")
+    assert warmup_wait_max_s() == 12.5
+    monkeypatch.delenv("TILEVISION_WARMUP_WAIT_MAX_S", raising=False)
+    assert warmup_wait_max_s() == DEFAULT_WARMUP_WAIT_MAX_S

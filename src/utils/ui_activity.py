@@ -183,7 +183,11 @@ class UiActivityFilter(QObject):
 
         hooked = False
         if isinstance(obj, QAction):
-            obj.triggered.connect(self._on_action_triggered)
+            # Capture the action in the slot — self.sender() is unreliable on
+            # some macOS / PySide6 builds (empty UI log for menu actions).
+            obj.triggered.connect(
+                lambda checked=False, a=weakref.ref(obj): self._on_action_triggered_ref(a)
+            )
             hooked = True
         elif isinstance(obj, QTabWidget):
             obj.currentChanged.connect(
@@ -220,7 +224,11 @@ class UiActivityFilter(QObject):
             for child in obj.findChildren(QAction):
                 cid = id(child)
                 if cid not in self._hooked_ids:
-                    child.triggered.connect(self._on_action_triggered)
+                    child.triggered.connect(
+                        lambda checked=False, a=weakref.ref(child): self._on_action_triggered_ref(
+                            a
+                        )
+                    )
                     self._hooked_ids.add(cid)
             for child in obj.findChildren(QTabWidget):
                 self._maybe_hook_signals(child)
@@ -234,7 +242,13 @@ class UiActivityFilter(QObject):
                     continue
                 self._maybe_hook_signals(child)
 
+    def _on_action_triggered_ref(self, action_ref: weakref.ref) -> None:
+        action = action_ref()
+        if isinstance(action, QAction):
+            self._log_action(action)
+
     def _on_action_triggered(self, checked: bool = False) -> None:  # noqa: ARG002
+        """Fallback when a slot was connected without an action capture."""
         action = self.sender()
         if isinstance(action, QAction):
             self._log_action(action)
